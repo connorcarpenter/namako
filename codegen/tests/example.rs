@@ -110,8 +110,8 @@ fn test_then_assert_outcome(_w: MyWorldRef, word: String) -> AssertOutcome<()> {
     }
 }
 
-#[tokio::main]
-async fn main() {
+#[tokio::test]
+async fn example_world_runs_expected_steps() {
     let features = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/features");
 
     let writer = MyWorld::namako()

@@ -31,7 +31,7 @@ impl<'a> WorldRef<'a> {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One out-of-span event, once. A repeating ticker raced the 1s steps:
     // a step that started late under load caught a second tick and broke
     // the expected output.
@@ -58,23 +58,26 @@ async fn main() {
         )
         .run_and_exit("tests/features/tracing");
 
-    AssertUnwindSafe(res).catch_unwind().await.unwrap();
+    if let Err(payload) = AssertUnwindSafe(res).catch_unwind().await {
+        std::panic::resume_unwind(payload);
+    }
 
     // Required to strip out non-deterministic parts of output, so we could
     // compare them well.
     let non_deterministic = Regex::new(
         " ([^\"\\n\\s]*)[/\\\\]([A-z1-9-_]*)\\.(feature|rs)(:\\d+:\\d+)?\
              |\\s?\n",
-    )
-    .unwrap();
+    )?;
 
     assert_eq!(
         non_deterministic.replace_all(String::from_utf8_lossy(&out).as_ref(), ""),
         non_deterministic.replace_all(
-            &fs::read_to_string("tests/features/tracing/correct.stdout").unwrap(),
+            &fs::read_to_string("tests/features/tracing/correct.stdout")?,
             "",
         ),
     );
+
+    Ok(())
 }
 
 #[given("step {int}")]

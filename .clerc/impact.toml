@@ -7,7 +7,7 @@
 # fan-out from those roots, including when a dependency change reaches a package.
 [suite]
 id = "namako"
-checks = ["bench:namako-benches:namako", "bench:namako-benches:parsing", "host:namako_cli:update_git", "lint:clippy", "lint:clippy:engine_features", "lint:fmt", "test:namako_cli:namako", "test:namako_codegen:example", "test:namako_codegen:namako_codegen", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:namako_engine", "test:namako_engine:output", "test:namako_engine:result", "test:namako_engine:tracing"]
+checks = ["bench:namako-benches:namako", "bench:namako-benches:parsing", "host:namako_cli:update_git", "lint:clippy", "lint:clippy:engine_features", "lint:fmt", "test:namako_cli:namako", "test:namako_codegen:example", "test:namako_codegen:namako_codegen", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:evidence", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:namako_engine", "test:namako_engine:output", "test:namako_engine:result", "test:namako_engine:tracing"]
 always_run = ["lint:fmt", "lint:clippy", "lint:clippy:engine_features"]
 floor = ["lint:fmt", "lint:clippy", "lint:clippy:engine_features"]
 
@@ -75,6 +75,10 @@ to = "test:namako_engine:result"
 from = "engine/"
 to = "test:namako_engine:tracing"
 
+[[edge]]
+from = "engine/"
+to = "test:namako_engine:evidence"
+
 [[package]]
 name = "namako_codegen"
 paths = ["codegen/"]
@@ -133,7 +137,7 @@ checks = ["test:namako_cli:namako", "test:namako_codegen:namako_codegen", "test:
 
 [[rung]]
 level = 2
-checks = ["test:namako_codegen:example", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:output", "test:namako_engine:result"]
+checks = ["test:namako_codegen:example", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:evidence", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:output", "test:namako_engine:result"]
 
 [[rung]]
 level = 3
@@ -178,6 +182,10 @@ argv = ["cargo", "test", "--locked", "-p", "namako_engine", "--test", "tracing",
 [[leg]]
 checks = ["host:namako_cli:update_git"]
 argv = ["cargo", "test", "--locked", "-p", "namako_cli", "--bin", "namako", "update::tests::", "--no-fail-fast", "--", "--test-threads=2", "--skip", "update::tests::dir_without_git_is_unknown", "--skip", "update::tests::warn_decision_fires_only_on_stale", "--skip", "update::tests::target_dir_binary_has_no_install_root", "--skip", "update::tests::installed_binary_derives_root"]
+
+[[leg]]
+checks = ["test:namako_engine:evidence"]
+argv = ["cargo", "test", "--locked", "-p", "namako_engine", "--test", "evidence", "--features", "npap", "--no-fail-fast"]
 
 [[off_path]]
 class = "benchmark"
