@@ -1,4 +1,5 @@
 # namako
+The merge queue alone writes `main`; enqueue a green head with nydus task merge-queue.
 
 Specs: `docs/EVIDENCE.md` (run-evidence judge), `docs/IMPACT.md` (test selection), `README.md` (CLI verbs and layout).
 
