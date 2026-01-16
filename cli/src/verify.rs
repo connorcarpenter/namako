@@ -16,7 +16,7 @@ use walkdir::WalkDir;
 use namako::engine::ResolutionEngine;
 use namako::npap::{
     Certification, CertificationIdentity, RunReport, SemanticStepRegistry,
-    HASH_CONTRACT_VERSION,
+    ScenarioStatus, HASH_CONTRACT_VERSION,
 };
 
 /// Arguments for the verify command.
@@ -42,27 +42,38 @@ pub struct VerifyArgs {
     #[arg(short, long, default_value = "false")]
     pub verbose: bool,
 }
-
-/// Verification result
-#[derive(Debug)]
-pub enum VerifyResult {
-    /// Verification passed - all hashes match
-    Passed,
-    /// Verification failed with specific mismatches
-    Failed(Vec<String>),
-}
-
 /// Run the verify command.
 pub fn run(args: VerifyArgs) -> Result<()> {
     if args.verbose {
         eprintln!("Namako verify: starting...");
     }
 
+    // Collect all failure categories (don't short-circuit)
+    let mut scenario_failures = Vec::new();
+    let mut identity_mismatches = Vec::new();
+
     // Step 1: Read the run report
     let run_report_json = std::fs::read_to_string(&args.run_report)
         .with_context(|| format!("Failed to read run report: {}", args.run_report.display()))?;
     let run_report: RunReport = serde_json::from_str(&run_report_json)
         .context("Failed to parse run report JSON")?;
+
+    // Step 1.5: Check that all scenarios passed in the run report
+    for scenario in &run_report.scenarios {
+        if scenario.status != ScenarioStatus::Passed {
+            let mut failure_msg = format!("FAILED: {}", scenario.scenario_key);
+            for (i, step) in scenario.steps.iter().enumerate() {
+                if step.status != namako::npap::StepStatus::Passed {
+                    if let Some(ref msg) = step.error_message {
+                        failure_msg.push_str(&format!("\n    Step {}: {}", i + 1, msg));
+                    } else {
+                        failure_msg.push_str(&format!("\n    Step {}: FAILED (no message)", i + 1));
+                    }
+                }
+            }
+            scenario_failures.push(failure_msg);
+        }
+    }
 
     // Step 2: Read the certification baseline
     let cert_json = std::fs::read_to_string(&args.certification)
@@ -80,11 +91,9 @@ pub fn run(args: VerifyArgs) -> Result<()> {
     }
 
     // Step 4: Compare run_report headers against recomputed identity
-    let mut mismatches = Vec::new();
-
     // Check hash_contract_version
     if run_report.header.hash_contract_version != HASH_CONTRACT_VERSION {
-        mismatches.push(format!(
+        identity_mismatches.push(format!(
             "hash_contract_version mismatch: run_report has '{}', expected '{}'",
             run_report.header.hash_contract_version, HASH_CONTRACT_VERSION
         ));
@@ -92,7 +101,7 @@ pub fn run(args: VerifyArgs) -> Result<()> {
 
     // Check feature_fingerprint_hash
     if run_report.header.feature_fingerprint_hash != recomputed.feature_fingerprint_hash {
-        mismatches.push(format!(
+        identity_mismatches.push(format!(
             "STALE OR DRIFTED ARTIFACT: feature_fingerprint_hash mismatch\n\
              Run report: {}\n\
              Current:    {}",
@@ -102,7 +111,7 @@ pub fn run(args: VerifyArgs) -> Result<()> {
 
     // Check step_registry_hash
     if run_report.header.step_registry_hash != recomputed.step_registry_hash {
-        mismatches.push(format!(
+        identity_mismatches.push(format!(
             "STALE OR DRIFTED ARTIFACT: step_registry_hash mismatch\n\
              Run report: {}\n\
              Current:    {}",
@@ -112,7 +121,7 @@ pub fn run(args: VerifyArgs) -> Result<()> {
 
     // Check resolved_plan_hash
     if run_report.header.resolved_plan_hash != recomputed.resolved_plan_hash {
-        mismatches.push(format!(
+        identity_mismatches.push(format!(
             "STALE OR DRIFTED ARTIFACT: resolved_plan_hash mismatch\n\
              Run report: {}\n\
              Current:    {}",
@@ -122,14 +131,14 @@ pub fn run(args: VerifyArgs) -> Result<()> {
 
     // Step 5: Compare against certification baseline
     if certification.identity.hash_contract_version != recomputed.hash_contract_version {
-        mismatches.push(format!(
+        identity_mismatches.push(format!(
             "hash_contract_version mismatch with baseline: '{}' vs '{}'",
             certification.identity.hash_contract_version, recomputed.hash_contract_version
         ));
     }
 
     if certification.identity.feature_fingerprint_hash != recomputed.feature_fingerprint_hash {
-        mismatches.push(format!(
+        identity_mismatches.push(format!(
             "BASELINE DRIFT: feature_fingerprint_hash\n\
              Baseline: {}\n\
              Current:  {}",
@@ -138,7 +147,7 @@ pub fn run(args: VerifyArgs) -> Result<()> {
     }
 
     if certification.identity.step_registry_hash != recomputed.step_registry_hash {
-        mismatches.push(format!(
+        identity_mismatches.push(format!(
             "BASELINE DRIFT: step_registry_hash\n\
              Baseline: {}\n\
              Current:  {}",
@@ -147,7 +156,7 @@ pub fn run(args: VerifyArgs) -> Result<()> {
     }
 
     if certification.identity.resolved_plan_hash != recomputed.resolved_plan_hash {
-        mismatches.push(format!(
+        identity_mismatches.push(format!(
             "BASELINE DRIFT: resolved_plan_hash\n\
              Baseline: {}\n\
              Current:  {}",
@@ -155,17 +164,30 @@ pub fn run(args: VerifyArgs) -> Result<()> {
         ));
     }
 
-    // Step 6: Report result
-    if mismatches.is_empty() {
-        eprintln!("✓ Verification passed. All hashes match current sources and baseline.");
-        Ok(())
-    } else {
-        eprintln!("✗ Verification FAILED with {} mismatch(es):", mismatches.len());
-        for (i, mismatch) in mismatches.iter().enumerate() {
-            eprintln!("\n{}. {}", i + 1, mismatch);
+    // Step 6: Report all failures (scenarios AND identity)
+    let has_failures = !scenario_failures.is_empty() || !identity_mismatches.is_empty();
+
+    if has_failures {
+        if !scenario_failures.is_empty() {
+            eprintln!("✗ SCENARIO FAILURES ({}):", scenario_failures.len());
+            for failure in &scenario_failures {
+                eprintln!("\n  {}", failure);
+            }
         }
-        bail!("Verification failed");
+
+        if !identity_mismatches.is_empty() {
+            eprintln!("\n✗ IDENTITY MISMATCHES ({}):", identity_mismatches.len());
+            for (i, mismatch) in identity_mismatches.iter().enumerate() {
+                eprintln!("\n  {}. {}", i + 1, mismatch);
+            }
+        }
+
+        let total = scenario_failures.len() + identity_mismatches.len();
+        bail!("Verification failed with {} issue(s)", total);
     }
+
+    eprintln!("✓ Verification passed. All hashes match current sources and baseline.");
+    Ok(())
 }
 
 /// Recompute certification identity from current sources.

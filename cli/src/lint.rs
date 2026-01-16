@@ -97,7 +97,7 @@ pub fn run(args: LintArgs) -> Result<()> {
     if !result.errors.is_empty() {
         eprintln!("✗ Lint failed with {} error(s):", result.errors.len());
         for (i, err) in result.errors.iter().enumerate() {
-            eprintln!("  {}. {:?}", i + 1, err);
+            eprintln!("\n  {}. {}", i + 1, err);
         }
         bail!("Resolution failed");
     }
