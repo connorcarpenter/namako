@@ -15,6 +15,36 @@ pub use regex::Regex;
 
 use crate::{Step, World, step};
 
+// =============================================================================
+// NPAP v1 Metadata
+// =============================================================================
+
+/// NPAP v1 binding metadata collected at compile time.
+///
+/// This struct contains all the information needed for the semantic step
+/// registry per GOLD_PLAN.md §6.2.1.
+#[derive(Debug, Clone, Copy)]
+pub struct NpapBindingMetadata {
+    /// Binding ID computed from (kind + expression) per §4.2.1.
+    pub binding_id: &'static str,
+    /// The cucumber expression string.
+    pub expression: &'static str,
+    /// Step kind: "Given", "When", or "Then".
+    pub kind: &'static str,
+    /// Implementation hash for drift detection per §6.2.2.
+    pub impl_hash: &'static str,
+    /// Number of capture parameters per §4.4.2.
+    pub captures_arity: u32,
+    /// Whether binding accepts a DocString per §4.4.3.
+    pub accepts_docstring: bool,
+    /// Whether binding accepts a DataTable per §4.4.4.
+    pub accepts_datatable: bool,
+}
+
+// =============================================================================
+// World Inventory
+// =============================================================================
+
 /// [`World`] extension allowing to register steps in [`inventory`].
 pub trait WorldInventory: World {
     /// Struct [`submit`]ted in a [`given`] macro.
@@ -45,6 +75,9 @@ pub type LazyRegex = fn() -> Regex;
 pub trait StepConstructor<W> {
     /// Returns an inner [`Step`] with the corresponding [`Regex`].
     fn inner(&self) -> (step::Location, LazyRegex, Step<W>);
+
+    /// Returns NPAP v1 binding metadata for semantic registry export.
+    fn npap_metadata(&self) -> NpapBindingMetadata;
 }
 
 /// Custom parameter of a [Cucumber Expression].

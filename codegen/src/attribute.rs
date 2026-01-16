@@ -107,6 +107,20 @@ impl Step {
         let unwrapping = (!self.returns_unit())
             .then(|| quote! { .unwrap_or_else(|e| panic!("{}", e)) });
 
+        // NPAP v1: Compute binding_id and impl_hash at compile time
+        let kind = inflections::case::to_pascal_case(self.attr_name);
+        let expression = match &self.attr_arg {
+            AttributeArgument::Expression(lit) => lit.value(),
+        };
+        let binding_id = crate::npap::generate_binding_id(&kind, &expression);
+        let impl_hash = crate::npap::generate_impl_hash(&func.block);
+
+        // NPAP v1: Extract signature information
+        let signature_info = self.extract_signature_info()?;
+        let captures_arity = signature_info.captures_arity;
+        let accepts_docstring = signature_info.accepts_docstring;
+        let accepts_datatable = signature_info.accepts_datatable;
+
         Ok(quote! {
             #func
 
@@ -124,6 +138,14 @@ impl Step {
                         line: ::std::line!(),
                         column: ::std::column!(),
                     },
+                    // NPAP v1 metadata
+                    binding_id: #binding_id,
+                    expression: #expression,
+                    kind: #kind,
+                    impl_hash: #impl_hash,
+                    captures_arity: #captures_arity,
+                    accepts_docstring: #accepts_docstring,
+                    accepts_datatable: #accepts_datatable,
                     regex: || {
                         #allow_trivial_regex_attr
                         static LAZY: ::std::sync::LazyLock<
@@ -142,6 +164,47 @@ impl Step {
                     },
                 }
             });
+        })
+    }
+
+    /// Extracts NPAP v1 signature information from the function.
+    ///
+    /// Per GOLD_PLAN §4.4:
+    /// - `captures_arity`: count of capture parameters (after `&mut World`)
+    /// - `accepts_docstring`: true if function has `Option<String>` parameter
+    /// - `accepts_datatable`: true if function has `Option<Vec<Vec<String>>>` parameter
+    fn extract_signature_info(&self) -> syn::Result<SignatureInfo> {
+        let mut captures_arity: u32 = 0;
+        let mut accepts_docstring = false;
+        let mut accepts_datatable = false;
+
+        // Skip the first argument (&mut World)
+        for arg in self.func.sig.inputs.iter().skip(1) {
+            // Skip step context argument if present
+            if let Some(step_name) = &self.arg_name_of_step_context {
+                if let Ok((ident, _)) = parse_fn_arg(arg) {
+                    if ident == step_name {
+                        continue;
+                    }
+                }
+            }
+
+            if let Ok((_, ty)) = parse_fn_arg(arg) {
+                if is_docstring_type(ty) {
+                    accepts_docstring = true;
+                } else if is_datatable_type(ty) {
+                    accepts_datatable = true;
+                } else {
+                    // It's a capture parameter
+                    captures_arity += 1;
+                }
+            }
+        }
+
+        Ok(SignatureInfo {
+            captures_arity,
+            accepts_docstring,
+            accepts_datatable,
         })
     }
 
@@ -829,4 +892,77 @@ fn parse_world_from_args(sig: &syn::Signature) -> syn::Result<&syn::TypePath> {
         })
 }
 
+// =============================================================================
+// NPAP v1 Signature Analysis
+// =============================================================================
 
+/// NPAP v1 signature information extracted from a step function.
+struct SignatureInfo {
+    /// Number of capture parameters (excluding World, Step context, DocString, DataTable).
+    captures_arity: u32,
+    /// Whether the function accepts a DocString parameter.
+    accepts_docstring: bool,
+    /// Whether the function accepts a DataTable parameter.
+    accepts_datatable: bool,
+}
+
+/// Checks if a type represents a DocString parameter.
+///
+/// Per GOLD_PLAN §4.4.3, DocString is typically `Option<String>` or a wrapper type.
+fn is_docstring_type(ty: &syn::Type) -> bool {
+    // Check for Option<String>
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Option" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(syn::GenericArgument::Type(syn::Type::Path(inner))) =
+                        args.args.first()
+                    {
+                        if let Some(inner_seg) = inner.path.segments.last() {
+                            // Option<String> or Option<DocString>
+                            return inner_seg.ident == "String"
+                                || inner_seg.ident == "DocString";
+                        }
+                    }
+                }
+            }
+            // Direct DocString type
+            if segment.ident == "DocString" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Checks if a type represents a DataTable parameter.
+///
+/// Per GOLD_PLAN §4.4.4, DataTable is typically `Option<Vec<Vec<String>>>` or a wrapper.
+fn is_datatable_type(ty: &syn::Type) -> bool {
+    // Check for Option<Vec<Vec<String>>> or DataTable wrapper
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Option" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(syn::GenericArgument::Type(syn::Type::Path(inner))) =
+                        args.args.first()
+                    {
+                        if let Some(inner_seg) = inner.path.segments.last() {
+                            // Check for Vec<Vec<String>> or DataTable
+                            if inner_seg.ident == "Vec" || inner_seg.ident == "DataTable" {
+                                // For simplicity, if it's Option<Vec<...>> after DocString detection,
+                                // assume it's a DataTable candidate
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            // Direct DataTable type
+            if segment.ident == "DataTable" {
+                return true;
+            }
+        }
+    }
+    false
+}

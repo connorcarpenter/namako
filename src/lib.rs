@@ -165,6 +165,10 @@ pub mod writer;
 
 #[cfg(feature = "macros")]
 pub mod codegen;
+#[cfg(feature = "npap")]
+pub mod engine;
+#[cfg(feature = "npap")]
+pub mod npap;
 #[cfg(feature = "tracing")]
 pub mod tracing;
 

@@ -34,6 +34,8 @@ macros = [
 timestamps = []
 # Enables integraion with `tracing` crate.
 tracing = ["dep:crossbeam-utils", "dep:tracing", "dep:tracing-subscriber"]
+# Enables NPAP hashing and canonical encoding for Namako v1 pipeline.
+npap = ["dep:blake3", "dep:unicode-normalization", "dep:serde", "dep:serde_json"]
 
 [dependencies]
 clap = { version = "4.3.2", features = ["derive", "env", "wrap_help"] }
@@ -52,13 +54,17 @@ regex = "1.9"
 sealed = "0.6"
 smart-default = "0.7.1"
 
+# "npap" feature dependencies (hashing/canonical encoding for NPAP protocol).
+blake3 = { version = "1.5", optional = true }
+unicode-normalization = { version = "0.1", optional = true }
+
 # "macros" feature dependencies.
 anyhow = { version = "1.0.58", optional = true }
 namako-codegen = { version = "=0.1.0", path = "./codegen", optional = true }
 cucumber-expressions = { version = "0.5", features = ["into-regex"], optional = true }
 inventory = { version = "0.3", optional = true }
 
-# "libtest" features dependencies.
+# "libtest" and "npap" features dependencies.
 serde = { version = "1.0.157", features = ["derive"], optional = true }
 serde_json = { version = "1.0.18", optional = true }
 
@@ -83,4 +89,4 @@ required-features = ["tracing"]
 harness = false
 
 [workspace]
-members = ["codegen"]
+members = ["codegen", "cli"]

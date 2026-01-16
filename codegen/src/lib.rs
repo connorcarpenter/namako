@@ -150,6 +150,7 @@
 )]
 
 mod attribute;
+mod npap;
 mod parameter;
 mod world;
 

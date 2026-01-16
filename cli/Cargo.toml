@@ -1,0 +1,45 @@
+[package]
+name = "namako-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["Connor Carpenter <connor.carpenter@gmail.com>"]
+description = "CLI for Namako v1 NPAP commands"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourname/specops"
+readme = "../README.md"
+keywords = ["cli", "testing", "bdd", "cucumber", "gherkin"]
+categories = ["development-tools::testing"]
+
+[[bin]]
+name = "namako"
+path = "src/main.rs"
+
+[dependencies]
+# Core namako library with NPAP types, engine, and hashing
+namako = { path = "..", features = ["npap"] }
+
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# File discovery
+walkdir = "2.5"
+
+# Gherkin parsing
+gherkin = "0.15"
+
+# JSON serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+
+# Timestamps
+chrono = "0.4"
+
+# Process execution for adapter invocation
+[target.'cfg(unix)'.dependencies]
+# Unix-specific process handling if needed
+
+[dev-dependencies]
+tempfile = "3.2"
