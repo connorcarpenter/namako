@@ -143,8 +143,8 @@ The NPAP adapter binary for Naia.
 
 | Artifact | Location |
 |----------|----------|
-| `.feature` files | `specs/features/**/*.feature` (Naia repo) |
-| Baseline certification | `specs/certification.json` (Naia repo) |
+| `.feature` files | `test/specs/features/**/*.feature` (Naia repo) |
+| Baseline certification | `test/specs/certification.json` (Naia repo) |
 | Artifacts directory | `target/namako_artifacts/` (Naia repo, or as configured) |
 
 ---
@@ -629,7 +629,7 @@ Where:
 
 **Example:**
 ```
-specs/features/connection/handshake.feature:L42
+test/specs/features/connection/handshake.feature:L42
 ```
 
 **Scenario Outline Extension:**
@@ -646,7 +646,7 @@ Where:
 
 **Example:**
 ```
-specs/features/auth/login.feature:L15:E0:R2
+test/specs/features/auth/login.feature:L15:E0:R2
 ```
 (Scenario Outline at line 15, first Examples block, third data row)
 
