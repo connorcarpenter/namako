@@ -299,15 +299,21 @@ impl ResolutionEngine {
         errors: &mut Vec<ResolutionError>,
         _warnings: &mut Vec<String>,
     ) {
-        // Track the last "real" keyword for And/But resolution
-        let mut last_keyword = "Given";
+        // Resolve feature-level background steps once (they get prepended to each scenario)
+        let feature_background_steps = self.resolve_background_steps(
+            feature.background.as_ref(),
+            path,
+            errors,
+        );
 
         for scenario in &feature.scenarios {
             // Derive scenario key (line is usize, convert to u32)
             let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
             let scenario_key = derive_scenario_key(path, line_u32);
 
-            let mut resolved_steps = Vec::new();
+            // Start with background steps, then scenario steps
+            let mut resolved_steps = feature_background_steps.clone();
+            let mut last_keyword = if resolved_steps.is_empty() { "Given" } else { "Given" };
 
             for step in &scenario.steps {
                 // Track effective kind for And/But
@@ -329,11 +335,20 @@ impl ResolutionEngine {
 
         // Handle rules (nested scenarios)
         for rule in &feature.rules {
+            // Rules can have their own background (in addition to feature background)
+            let rule_background_steps = self.resolve_background_steps(
+                rule.background.as_ref(),
+                path,
+                errors,
+            );
+
             for scenario in &rule.scenarios {
                 let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
                 let scenario_key = derive_scenario_key(path, line_u32);
 
-                let mut resolved_steps = Vec::new();
+                // Feature background first, then rule background, then scenario steps
+                let mut resolved_steps = feature_background_steps.clone();
+                resolved_steps.extend(rule_background_steps.clone());
                 let mut last_keyword = "Given";
 
                 for step in &scenario.steps {
@@ -353,6 +368,29 @@ impl ResolutionEngine {
                 });
             }
         }
+    }
+
+    /// Resolves background steps if present.
+    fn resolve_background_steps(
+        &self,
+        background: Option<&gherkin::Background>,
+        path: &str,
+        errors: &mut Vec<ResolutionError>,
+    ) -> Vec<PlannedStep> {
+        let mut resolved_steps = Vec::new();
+
+        if let Some(bg) = background {
+            let mut last_keyword = "Given";
+            for step in &bg.steps {
+                let effective_kind = resolve_effective_kind(&step.keyword, &mut last_keyword);
+                match self.resolve_step(step, path, &effective_kind) {
+                    Ok(planned) => resolved_steps.push(planned),
+                    Err(e) => errors.push(e),
+                }
+            }
+        }
+
+        resolved_steps
     }
 
     /// Resolves a single step to a binding.
