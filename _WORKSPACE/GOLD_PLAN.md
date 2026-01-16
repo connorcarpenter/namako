@@ -1,4 +1,4 @@
-# NAMAKO_PLAN_FINAL.md
+# GOLD_PLAN.md
 
 ## The Authoritative Specification System for Naia — KISS MVP (v1) + Armor Plating Roadmap (v2+)
 
@@ -1271,7 +1271,7 @@ Each SDK MUST provide:
 
 1. **Ergonomic Step Registration**
    - Functions/decorators/annotations consistent with: one keyword (Given/When/Then) + one string expression
-   - Example (Python): `@given("a user named {string}")` 
+   - Example (Python): `@given("a user named {string}")`
    - Example (JS/TS): `Given("a user named {string}", async (world, name) => { ... })`
 
 2. **Deterministic Binding ID Generation**
