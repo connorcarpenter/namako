@@ -95,7 +95,7 @@ impl Step {
         let func = &self.func;
         let func_name = &func.sig.ident;
 
-        let world = parse_world_from_args(&self.func.sig)?;
+        let world = parse_world_from_args(&self.func.sig, self.attr_name)?;
         let step_type = self.step_type();
         let (func_args, addon_parsing) =
             self.fn_arguments_and_additional_parsing()?;
@@ -120,6 +120,12 @@ impl Step {
         let captures_arity = signature_info.captures_arity;
         let accepts_docstring = signature_info.accepts_docstring;
         let accepts_datatable = signature_info.accepts_datatable;
+
+        let world_arg = if self.attr_name == "then" {
+            quote! { &*__namako_world }
+        } else {
+            quote! { __namako_world }
+        };
 
         Ok(quote! {
             #func
@@ -156,7 +162,7 @@ impl Step {
                     func: |__namako_world, __namako_ctx| {
                         let f = async move {
                             #addon_parsing
-                            let _ = #func_name(__namako_world, #func_args)
+                            let _ = #func_name(#world_arg, #func_args)
                                 #awaiting
                                 #unwrapping;
                         };
@@ -858,7 +864,7 @@ fn find_first_slice(sig: &syn::Signature) -> Option<&syn::TypePath> {
 }
 
 /// Parses `namako::World` from arguments of the function signature.
-fn parse_world_from_args(sig: &syn::Signature) -> syn::Result<&syn::TypePath> {
+fn parse_world_from_args(sig: &syn::Signature, attr_name: &str) -> syn::Result<&syn::TypePath> {
     sig.inputs
         .first()
         .ok_or_else(|| sig.ident.span())
@@ -873,22 +879,31 @@ fn parse_world_from_args(sig: &syn::Signature) -> syn::Result<&syn::TypePath> {
                 Err(typed_arg.span())
             }
         })
-        .and_then(|world_ref| match world_ref.mutability {
-            Some(_) => Ok(world_ref),
-            None => Err(world_ref.span()),
+        .and_then(|world_ref| {
+            let is_mut = world_ref.mutability.is_some();
+            if attr_name == "then" {
+                if is_mut {
+                    return Err(world_ref.span());
+                }
+            } else if !is_mut {
+                return Err(world_ref.span());
+            }
+            Ok(world_ref)
         })
-        .and_then(|world_mut_ref| {
-            if let syn::Type::Path(p) = world_mut_ref.elem.as_ref() {
+        .and_then(|world_ref| {
+            if let syn::Type::Path(p) = world_ref.elem.as_ref() {
                 Ok(p)
             } else {
-                Err(world_mut_ref.span())
+                Err(world_ref.span())
             }
         })
         .map_err(|span| {
-            syn::Error::new(
-                span,
-                "first function argument expected to be `&mut World`",
-            )
+            let msg = if attr_name == "then" {
+                "first function argument expected to be `&World` (immutable) for `Then` steps"
+            } else {
+                "first function argument expected to be `&mut World` (mutable)"
+            };
+            syn::Error::new(span, msg)
         })
 }
 
