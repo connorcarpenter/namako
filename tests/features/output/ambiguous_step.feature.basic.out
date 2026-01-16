@@ -1,0 +1,8 @@
+Feature: ambiguous
+  Scenario: ambiguous
+   ✘  Given foo is 0 ambiguous
+      Step failed:
+      Defined: tests/features/output/ambiguous_step.feature:3:5
+      Step match is ambiguous: Possible matches:
+      ^foo is ((?:-?\d+)|(?:\d+)) ambiguous$ --> tests/output.rs:10:1
+      ^foo is ((?:-?\d+)|(?:\d+)) ambiguous$ --> tests/output.rs:18:1

@@ -1,0 +1,36 @@
+[package]
+name = "namako-codegen"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+readme = "README.md"
+exclude = ["/tests/"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cucumber-expressions = { version = "0.5", features = ["into-regex"] }
+inflections = "1.1"
+itertools = "0.14"
+proc-macro2 = "1.0.28"
+quote = "1.0.9"
+syn = { version = "2.0", features = ["derive", "extra-traits", "full"] }
+synthez = "0.4"
+
+[dev-dependencies]
+namako = { path = "..", features = ["libtest", "macros"] }
+derive_more = { version = "2.0", features = ["deref", "from_str"] }
+futures = "0.3.17"
+tempfile = "3.2"
+tokio = { version = "1.12", features = ["macros", "rt-multi-thread", "time"] }
+
+[[test]]
+name = "example"
+path = "tests/example.rs"
+harness = false
+
+[[test]]
+name = "two_worlds"
+path = "tests/two_worlds.rs"
+harness = false

@@ -1,0 +1,10 @@
+/.idea/
+/.vscode/
+/*.iml
+.DS_Store
+
+/target/
+/Cargo.lock
+**/*.rs.bk
+
+/*.cast.json

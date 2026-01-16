@@ -1,0 +1,120 @@
+
+
+//! Passing events to multiple terminating [`Writer`]s simultaneously.
+
+use std::cmp;
+
+use futures::future;
+
+use crate::{Event, World, Writer, cli, event, parser, writer};
+
+/// Wrapper for passing events to multiple terminating [`Writer`]s
+/// simultaneously.
+///
+/// # Blanket implementations
+///
+/// [`ArbitraryWriter`] and [`StatsWriter`] are implemented only in case both
+/// `left` and `right` [`Writer`]s implement them. In case one of them doesn't
+/// implement the required traits, use
+/// [`WriterExt::discard_arbitrary_writes()`][1] and
+/// [`WriterExt::discard_stats_writes()`][2] methods to provide the one with
+/// no-op implementations.
+///
+/// [`ArbitraryWriter`]: writer::Arbitrary
+/// [`StatsWriter`]: writer::Stats
+/// [1]: crate::WriterExt::discard_arbitrary_writes
+/// [2]: crate::WriterExt::discard_stats_writes
+#[derive(Clone, Copy, Debug)]
+pub struct Tee<L, R> {
+    /// Left [`Writer`].
+    left: L,
+
+    /// Right [`Writer`].
+    right: R,
+}
+
+impl<L, R> Tee<L, R> {
+    /// Creates a new [`Tee`] [`Writer`], which passes events both to the `left`
+    /// and `right` [`Writer`]s simultaneously.
+    #[must_use]
+    pub const fn new(left: L, right: R) -> Self {
+        Self { left, right }
+    }
+}
+
+impl<W, L, R> Writer<W> for Tee<L, R>
+where
+    W: World,
+    L: Writer<W>,
+    R: Writer<W>,
+{
+    type Cli = cli::Compose<L::Cli, R::Cli>;
+
+    async fn handle_event(
+        &mut self,
+        event: parser::Result<Event<event::Namako<W>>>,
+        cli: &Self::Cli,
+    ) {
+        future::join(
+            self.left.handle_event(event.clone(), &cli.left),
+            self.right.handle_event(event, &cli.right),
+        )
+        .await;
+    }
+}
+
+#[warn(clippy::missing_trait_methods)]
+impl<W, L, R, Val> writer::Arbitrary<W, Val> for Tee<L, R>
+where
+    W: World,
+    L: writer::Arbitrary<W, Val>,
+    R: writer::Arbitrary<W, Val>,
+    Val: Clone,
+{
+    async fn write(&mut self, val: Val) {
+        future::join(self.left.write(val.clone()), self.right.write(val)).await;
+    }
+}
+
+impl<W, L, R> writer::Stats<W> for Tee<L, R>
+where
+    L: writer::Stats<W>,
+    R: writer::Stats<W>,
+    Self: Writer<W>,
+{
+    fn passed_steps(&self) -> usize {
+        // Either one of them is zero, or both numbers are the same.
+        cmp::max(self.left.passed_steps(), self.right.passed_steps())
+    }
+
+    fn skipped_steps(&self) -> usize {
+        // Either one of them is zero, or both numbers are the same.
+        cmp::max(self.left.skipped_steps(), self.right.skipped_steps())
+    }
+
+    fn failed_steps(&self) -> usize {
+        // Either one of them is zero, or both numbers are the same.
+        cmp::max(self.left.failed_steps(), self.right.failed_steps())
+    }
+
+    fn parsing_errors(&self) -> usize {
+        // Either one of them is zero, or both numbers are the same.
+        cmp::max(self.left.parsing_errors(), self.right.parsing_errors())
+    }
+}
+
+#[warn(clippy::missing_trait_methods)]
+impl<L, R> writer::Normalized for Tee<L, R>
+where
+    L: writer::Normalized,
+    R: writer::Normalized,
+{
+}
+
+#[warn(clippy::missing_trait_methods)]
+impl<L, R> writer::NonTransforming for Tee<L, R>
+where
+    L: writer::NonTransforming,
+    R: writer::NonTransforming,
+{
+}
