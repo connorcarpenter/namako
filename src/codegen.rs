@@ -24,10 +24,132 @@ use crate::{Step, World, step};
 /// This trait is used by the codegen to determine which World type a step
 /// function belongs to, based on the context type in its first argument.
 ///
-/// Users should implement this on their `TestWorldMut` and `TestWorldRef` types.
+/// Users MUST implement this on their context wrapper types (e.g., `TestWorldMut`,
+/// `TestWorldRef`). Direct use of `&mut World` is not supported.
+///
+/// # Example
+///
+/// ```ignore
+/// pub struct TestWorldMut<'a> {
+///     world: &'a mut TestWorld,
+/// }
+///
+/// impl StepContext for TestWorldMut<'_> {
+///     type World = TestWorld;
+/// }
+/// ```
 pub trait StepContext {
     /// The World type that this context is derived from.
     type World: World;
+}
+
+// =============================================================================
+// Then Step Assertion Support
+// =============================================================================
+
+/// Result of a Then-step assertion.
+///
+/// Worlds use this to control assertion semantics:
+/// - Simple worlds: run once, `Pending` = error
+/// - Polling worlds: retry on `Pending` until `Passed` or timeout
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssertOutcome<T = ()> {
+    /// Assertion passed with a value.
+    Passed(T),
+    /// Not yet satisfied — World may retry.
+    Pending,
+    /// Permanently failed with an error message.
+    Failed(String),
+}
+
+impl<T> AssertOutcome<T> {
+    /// Returns `true` if the outcome is `Passed`.
+    #[inline]
+    pub fn is_passed(&self) -> bool {
+        matches!(self, Self::Passed(_))
+    }
+
+    /// Returns `true` if the outcome is `Pending`.
+    #[inline]
+    pub fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending)
+    }
+
+    /// Convenience constructor for `Passed(())`.
+    #[inline]
+    pub fn passed() -> AssertOutcome<()> {
+        AssertOutcome::Passed(())
+    }
+
+    /// Convenience constructor for `Pending`.
+    #[inline]
+    pub fn pending() -> Self {
+        Self::Pending
+    }
+
+    /// Convenience constructor for `Failed`.
+    #[inline]
+    pub fn failed(msg: impl Into<String>) -> Self {
+        Self::Failed(msg.into())
+    }
+}
+
+/// Trait for Worlds that support Then-step assertions.
+///
+/// The World controls execution semantics:
+/// - **Simple worlds**: Run assertion once; `Pending` is an error.
+/// - **Polling worlds**: Retry on `Pending` until `Passed` or timeout.
+///
+/// The macro-generated code calls `assert_then()` for Then steps,
+/// delegating all execution control to the World.
+///
+/// # Example
+///
+/// ```ignore
+/// impl Assertable for TestWorld {
+///     type Ctx<'a> = TestWorldRef<'a>;
+///
+///     fn assert_then<T, F>(&mut self, mut f: F) -> T
+///     where
+///         F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T>,
+///     {
+///         // Polling implementation with catch_unwind
+///         for _ in 0..100 {
+///             let ctx = TestWorldRef::new(self);
+///             match std::panic::catch_unwind(|| f(&ctx)) {
+///                 Ok(AssertOutcome::Passed(v)) => return v,
+///                 Ok(AssertOutcome::Pending) | Err(_) => {
+///                     self.tick(); // advance simulation
+///                     continue;
+///                 }
+///                 Ok(AssertOutcome::Failed(msg)) => panic!("{}", msg),
+///             }
+///         }
+///         panic!("assertion timed out");
+///     }
+/// }
+/// ```
+pub trait Assertable: World {
+    /// Context type provided to Then assertions.
+    ///
+    /// This should be a read-only context wrapper type that implements `StepContext`.
+    type Ctx<'a>: StepContext<World = Self>
+    where
+        Self: 'a;
+
+    /// Execute a Then-step assertion.
+    ///
+    /// The closure `f` is called with a context reference. It may:
+    /// - Return `Passed(T)` if the assertion succeeded
+    /// - Return `Pending` if the condition is not yet met
+    /// - Return `Failed(msg)` if the assertion permanently failed
+    /// - Panic, which the World may treat as `Pending` (for polling)
+    ///
+    /// The World implementation decides how to handle these outcomes
+    /// and controls retry/polling semantics.
+    fn assert_then<T, F>(&mut self, f: F) -> T
+    where
+        F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T>;
 }
 
 // =============================================================================
@@ -154,6 +276,11 @@ pub const fn str_eq(l: &str, r: &str) -> bool {
 /// #
 /// impl namako::World for World {
 ///     type Error = anyhow::Error;
+///     type MutCtx<'a> = &'a mut Self;
+///     type RefCtx<'a> = &'a Self;
+///
+///     fn ctx_mut(&mut self) -> Self::MutCtx<'_> { self }
+///     fn ctx_ref(&mut self) -> Self::RefCtx<'_> { self }
 ///
 ///     async fn new() -> Result<Self, Self::Error> {
 ///         use namako::codegen::{
@@ -219,6 +346,11 @@ where
 /// #
 /// impl namako::World for World {
 ///     type Error = anyhow::Error;
+///     type MutCtx<'a> = &'a mut Self;
+///     type RefCtx<'a> = &'a Self;
+///
+///     fn ctx_mut(&mut self) -> Self::MutCtx<'_> { self }
+///     fn ctx_ref(&mut self) -> Self::RefCtx<'_> { self }
 ///
 ///     async fn new() -> Result<Self, Self::Error> {
 ///         use namako::codegen::{

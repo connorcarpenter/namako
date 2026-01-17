@@ -182,14 +182,19 @@ macro_rules! step_attribute {
         /// ```
         /// # use std::{convert::Infallible};
         /// #
-        /// use namako::{World, given, when};
+        /// use namako::{World, given, when, codegen::StepContext};
         ///
         /// #[derive(Debug, Default, World)]
-        /// struct MyWorld;
+        /// #[world(mut_ctx = Ctx<'a>, ref_ctx = Ctx<'a>)]
+        /// pub struct MyWorld;
+        ///
+        /// pub struct Ctx<'a>(&'a mut MyWorld);
+        /// impl<'a> Ctx<'a> { fn new(w: &'a mut MyWorld) -> Self { Self(w) } }
+        /// impl<'a> StepContext for Ctx<'a> { type World = MyWorld; }
         ///
         /// #[given("{word} is {int}")]
         /// #[when("{word} is {int}")]
-        /// fn test(w: &mut MyWorld, param: String, num: i32) {
+        /// fn test(w: Ctx, param: String, num: i32) {
         ///     assert_eq!(param, "foo");
         ///     assert_eq!(num, 0);
         /// }
@@ -209,8 +214,8 @@ macro_rules! step_attribute {
         ///
         /// # Function arguments
         ///
-        /// - First argument has to be mutable reference to the [`World`]
-        ///   deriver.
+        /// - First argument has to be a context wrapper type implementing
+        ///   [`codegen::StepContext`].
         /// - Other argument's types have to implement [`FromStr`] or it has to
         ///   be a slice where the element type also implements [`FromStr`].
         /// - To use [`gherkin::Step`], name the argument as `step`,
@@ -219,14 +224,19 @@ macro_rules! step_attribute {
         /// ```rust
         /// # use std::convert::Infallible;
         /// #
-        /// # use namako::{gherkin::Step, given, World};
+        /// # use namako::{gherkin::Step, given, World, codegen::StepContext};
         /// #
         /// # #[derive(Debug, Default, World)]
-        /// # struct MyWorld;
+        /// # #[world(mut_ctx = Ctx<'a>, ref_ctx = Ctx<'a>)]
+        /// # pub struct MyWorld;
+        /// #
+        /// # pub struct Ctx<'a>(&'a mut MyWorld);
+        /// # impl<'a> Ctx<'a> { fn new(w: &'a mut MyWorld) -> Self { Self(w) } }
+        /// # impl<'a> StepContext for Ctx<'a> { type World = MyWorld; }
         /// #
         /// #[given("{word} is not {word}")]
         /// fn test_step(
-        ///     w: &mut MyWorld,
+        ///     w: Ctx,
         ///     #[step] s: &Step,
         ///     matches: &[String],
         /// ) {
@@ -311,15 +321,20 @@ pub fn world(input: TokenStream) -> TokenStream {
 /// ```rust
 /// # use std::{convert::Infallible};
 /// #
-/// use namako::{Parameter, World, given, when};
+/// use namako::{Parameter, World, given, when, codegen::StepContext};
 /// use derive_more::{Deref, FromStr};
 ///
 /// #[derive(Debug, Default, World)]
-/// struct MyWorld;
+/// #[world(mut_ctx = Ctx<'a>, ref_ctx = Ctx<'a>)]
+/// pub struct MyWorld;
+///
+/// pub struct Ctx<'a>(&'a mut MyWorld);
+/// impl<'a> Ctx<'a> { fn new(w: &'a mut MyWorld) -> Self { Self(w) } }
+/// impl<'a> StepContext for Ctx<'a> { type World = MyWorld; }
 ///
 /// #[given("{word} is {u64}")]
 /// #[when("{word} is {u64}")]
-/// fn test(w: &mut MyWorld, param: String, num: CustomU64) {
+/// fn test(w: Ctx, param: String, num: CustomU64) {
 ///     assert_eq!(param, "foo");
 ///     assert_eq!(*num, 0);
 /// }

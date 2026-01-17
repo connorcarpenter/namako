@@ -1,17 +1,73 @@
 use std::{fmt, io};
 
 use namako::{
+    codegen::{AssertOutcome, Assertable, StepContext},
     StatsWriter, World as _, WriterExt as _, given, then, when, writer,
 };
 
+// =============================================================================
+// Context Wrapper Types (required for context-first ABI)
+// =============================================================================
+
+/// Mutable context wrapper for Given/When steps.
+struct WorldMut<'a>(&'a mut World);
+
+/// Immutable context wrapper for Then steps.
+#[derive(Clone, Copy)]
+struct WorldRef<'a>(&'a World);
+
+impl<'a> WorldMut<'a> {
+    fn new(world: &'a mut World) -> Self {
+        Self(world)
+    }
+}
+
+impl<'a> WorldRef<'a> {
+    fn new(world: &'a World) -> Self {
+        Self(world)
+    }
+}
+
+impl<'a> StepContext for WorldMut<'a> {
+    type World = World;
+}
+
+impl<'a> StepContext for WorldRef<'a> {
+    type World = World;
+}
+
+impl Assertable for World {
+    type Ctx<'a> = WorldRef<'a> where Self: 'a;
+
+    fn assert_then<T, F>(&mut self, mut f: F) -> T
+    where
+        F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T>,
+    {
+        let ctx = WorldRef(self);
+        match f(&ctx) {
+            AssertOutcome::Passed(v) => v,
+            AssertOutcome::Pending => {
+                panic!("Then step returned Pending, but this World does not support polling")
+            }
+            AssertOutcome::Failed(msg) => {
+                panic!("Then step failed: {msg}")
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Step Functions
+// =============================================================================
+
 #[given("{int} < 10")]
 #[when("{int} < 10")]
-fn step(_: &mut World, num: usize) {
+fn step(_: WorldMut, num: usize) {
     assert!(num < 10, "not filtered");
 }
 
 #[then("{int} < 10")]
-fn then_step(_: &World, num: usize) {
+fn then_step(_: WorldRef, num: usize) {
     assert!(num < 10, "not filtered");
 }
 
@@ -45,6 +101,7 @@ async fn by_examples() {
 }
 
 #[derive(Clone, Copy, Debug, Default, namako::World)]
+#[world(mut_ctx = WorldMut<'a>, ref_ctx = WorldRef<'a>)]
 struct World;
 
 /// Deterministic output of [`writer::Basic`].

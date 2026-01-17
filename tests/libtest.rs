@@ -1,19 +1,50 @@
-use std::{fs, io::Read as _};
+use std::{cell::Cell, fs, io::Read as _};
 
-use namako::{World as _, WriterExt as _, cli, given, then, when, writer};
+use namako::{
+    World as _, WriterExt as _, cli,
+    codegen::{AssertOutcome, Assertable, StepContext},
+    given, then, when, writer,
+};
 use regex::Regex;
 use tempfile::NamedTempFile;
 
+// Context wrapper types
+struct WorldMut<'a>(&'a mut World);
+
+#[derive(Clone, Copy)]
+struct WorldRef<'a>(&'a World);
+
+impl<'a> WorldMut<'a> { fn new(world: &'a mut World) -> Self { Self(world) } }
+impl<'a> WorldRef<'a> { fn new(world: &'a World) -> Self { Self(world) } }
+impl<'a> StepContext for WorldMut<'a> { type World = World; }
+impl<'a> StepContext for WorldRef<'a> { type World = World; }
+
+impl Assertable for World {
+    type Ctx<'a> = WorldRef<'a> where Self: 'a;
+    fn assert_then<T, F>(&mut self, mut f: F) -> T
+    where F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T> {
+        match f(&WorldRef(self)) {
+            AssertOutcome::Passed(v) => v,
+            AssertOutcome::Pending => panic!("Pending not supported"),
+            AssertOutcome::Failed(msg) => panic!("{msg}"),
+        }
+    }
+}
+
 #[given("{int} sec(s)")]
 #[when("{int} sec(s)")]
-fn step(world: &mut World) {
-    world.0 += 1;
-    assert!(world.0 < 4, "Too much!");
+fn step(world: WorldMut) {
+    let new_val = world.0.0.get() + 1;
+    world.0.0.set(new_val);
+    assert!(new_val < 4, "Too much!");
 }
 
 #[then("{int} sec(s)")]
-fn then_step(world: &World) {
-    assert!(world.0 < 4, "Too much!");
+fn then_step(world: WorldRef) {
+    // Then step also increments to match original test behavior
+    let new_val = world.0.0.get() + 1;
+    world.0.0.set(new_val);
+    assert!(new_val < 4, "Too much!");
 }
 
 #[tokio::test]
@@ -89,5 +120,12 @@ async fn output_report_time() {
     );
 }
 
-#[derive(Clone, Copy, Debug, Default, namako::World)]
-struct World(usize);
+#[derive(Clone, Default, namako::World)]
+#[world(mut_ctx = WorldMut<'a>, ref_ctx = WorldRef<'a>)]
+struct World(Cell<usize>);
+
+impl std::fmt::Debug for World {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("World").field(&self.0.get()).finish()
+    }
+}

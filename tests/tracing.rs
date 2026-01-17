@@ -1,6 +1,10 @@
 use std::{fs, io, panic::AssertUnwindSafe, time::Duration};
 
-use namako::{World as _, WriterExt as _, given, writer, writer::Coloring};
+use namako::{
+    World as _, WriterExt as _,
+    codegen::{AssertOutcome, Assertable, StepContext},
+    given, writer, writer::Coloring,
+};
 use derive_more::with_trait::Display;
 use futures::FutureExt as _;
 use regex::Regex;
@@ -11,6 +15,29 @@ use tracing_subscriber::{
     fmt::format::{DefaultFields, Format},
     layer::SubscriberExt as _,
 };
+
+// Context wrapper types
+struct WorldMut<'a>(&'a mut World);
+
+#[derive(Clone, Copy)]
+struct WorldRef<'a>(&'a World);
+
+impl<'a> WorldMut<'a> { fn new(world: &'a mut World) -> Self { Self(world) } }
+impl<'a> WorldRef<'a> { fn new(world: &'a World) -> Self { Self(world) } }
+impl<'a> StepContext for WorldMut<'a> { type World = World; }
+impl<'a> StepContext for WorldRef<'a> { type World = World; }
+
+impl Assertable for World {
+    type Ctx<'a> = WorldRef<'a> where Self: 'a;
+    fn assert_then<T, F>(&mut self, mut f: F) -> T
+    where F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T> {
+        match f(&WorldRef(self)) {
+            AssertOutcome::Passed(v) => v,
+            AssertOutcome::Pending => panic!("Pending not supported"),
+            AssertOutcome::Failed(msg) => panic!("{msg}"),
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -69,10 +96,11 @@ async fn main() {
 }
 
 #[given("step {int}")]
-async fn step(_: &mut World, n: usize) {
+async fn step(_: WorldMut, n: usize) {
     time::sleep(Duration::from_secs(1)).await;
     tracing::info!("in span: {n:?}");
 }
 
 #[derive(Clone, Debug, Default, Display, namako::World)]
+#[world(mut_ctx = WorldMut<'a>, ref_ctx = WorldRef<'a>)]
 struct World;

@@ -1,12 +1,15 @@
-use std::{fs, io, time::Duration};
+use std::{fs, io};
 
-use namako::{StatsWriter as _, World, gherkin::Step, given, then, when};
+use namako::{
+    StatsWriter as _, World,
+    codegen::{AssertOutcome, Assertable, StepContext},
+    gherkin::Step, given, then, when,
+};
 
 use tempfile::TempDir;
-use tokio::time;
 
 #[derive(Debug, World)]
-#[world(init = Self::new)]
+#[world(init = Self::new, mut_ctx = MyWorldMut<'a>, ref_ctx = MyWorldRef<'a>)]
 pub struct MyWorld {
     foo: i32,
     dir: TempDir,
@@ -18,91 +21,101 @@ impl MyWorld {
     }
 }
 
+// Context wrapper types
+pub struct MyWorldMut<'a>(&'a mut MyWorld);
+
+#[derive(Clone, Copy)]
+pub struct MyWorldRef<'a>(&'a MyWorld);
+
+impl<'a> MyWorldMut<'a> { fn new(world: &'a mut MyWorld) -> Self { Self(world) } }
+impl<'a> MyWorldRef<'a> { fn new(world: &'a MyWorld) -> Self { Self(world) } }
+impl<'a> StepContext for MyWorldMut<'a> { type World = MyWorld; }
+impl<'a> StepContext for MyWorldRef<'a> { type World = MyWorld; }
+
+impl Assertable for MyWorld {
+    type Ctx<'a> = MyWorldRef<'a> where Self: 'a;
+    fn assert_then<T, F>(&mut self, mut f: F) -> T
+    where F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T> {
+        match f(&MyWorldRef(self)) {
+            AssertOutcome::Passed(v) => v,
+            AssertOutcome::Pending => panic!("Pending not supported"),
+            AssertOutcome::Failed(msg) => panic!("{msg}"),
+        }
+    }
+}
+
 #[given("non-regex")]
-fn test_non_regex_sync(w: &mut MyWorld) {
-    w.foo += 1;
+fn test_non_regex_sync(w: MyWorldMut) {
+    w.0.foo += 1;
 }
 
 #[given("non-regex async")]
-async fn test_non_regex_async(w: &mut MyWorld, #[step] ctx: &Step) {
-    time::sleep(Duration::new(1, 0)).await;
-
+async fn test_non_regex_async(w: MyWorldMut, #[step] ctx: &Step) {
     assert_eq!(ctx.value, "non-regex async");
 
-    w.foo += 1;
+    w.0.foo += 1;
 }
 
 #[given("{word} is not {word}")]
-fn test_foo_is_not_bar(_w: &mut MyWorld, _foo: String, _bar: String) {}
+fn test_foo_is_not_bar(_w: MyWorldMut, _foo: String, _bar: String) {}
 
 #[given("{word} is {int}")]
 #[when(r"{word} is {int}")]
 async fn test_regex_async(
-    w: &mut MyWorld,
+    w: MyWorldMut,
     step: String,
     #[step] ctx: &Step,
     num: usize,
 ) {
-    time::sleep(Duration::new(1, 0)).await;
-
     assert_eq!(step, "foo");
     assert_eq!(num, 0);
     assert_eq!(ctx.value, "foo is 0");
 
-    w.foo += 1;
+    w.0.foo += 1;
 }
 
 #[given("{word} is sync {int}")]
-fn test_regex_sync_slice(w: &mut MyWorld, step: &Step, matches: &[String]) {
+fn test_regex_sync_slice(w: MyWorldMut, step: &Step, matches: &[String]) {
     assert_eq!(matches[0], "foo");
     assert_eq!(matches[1].parse::<usize>().unwrap(), 0);
     assert_eq!(step.value, "foo is sync 0");
 
-    w.foo += 1;
+    w.0.foo += 1;
 }
 
 #[when("I write \"{word}\" to '{word}'")]
 fn test_return_result_write(
-    w: &mut MyWorld,
+    w: MyWorldMut,
     what: String,
     filename: String,
 ) -> io::Result<()> {
-    let mut path = w.dir.path().to_path_buf();
+    let mut path = w.0.dir.path().to_path_buf();
     path.push(filename);
     fs::write(path, what)
 }
 
 #[then("the file {string} should contain {string}")]
 fn test_return_result_read(
-    w: &MyWorld,
-    filename: String,
-    what: String,
-) -> io::Result<()> {
-    // Can't mutate, but we don't need to actually read from immutable world struct
-    // The previous code read mutable world to get 'dir', we need that immutable or via interior mutability.
-    // 'dir' is TemporaryDirectory which is not Copy.
-    // Let's assume MyWorld definition allows immutable access OR we change MyWorld for this test.
+    w: MyWorldRef,
+    inputs: &[String],
+) {
+    let mut path = w.0.dir.path().to_path_buf();
+    path.push(inputs[0].clone());
 
-    // BUT WAIT, MyWorld is defined in this file. Let's check MyWorld definition.
-    let mut path = w.dir.path().to_path_buf();
-    path.push(filename);
-
-    assert_eq!(what, fs::read_to_string(path)?);
-
-    Ok(())
+    let content = fs::read_to_string(path).expect("Failed to read file");
+    assert_eq!(content, inputs[1]);
 }
 
 #[then("{string} contains {string}")]
 fn test_return_result_read_slice(
-    w: &MyWorld,
+    w: MyWorldRef,
     inputs: &[String],
-) -> io::Result<()> {
-    let mut path = w.dir.path().to_path_buf();
+) {
+    let mut path = w.0.dir.path().to_path_buf();
     path.push(inputs[0].clone());
 
-    assert_eq!(inputs[1], fs::read_to_string(path)?);
-
-    Ok(())
+    let content = fs::read_to_string(path).expect("Failed to read file");
+    assert_eq!(content, inputs[1]);
 }
 
 #[tokio::main]

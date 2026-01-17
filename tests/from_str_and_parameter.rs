@@ -1,6 +1,33 @@
 use std::{convert::Infallible, str::FromStr};
 
-use namako::{Parameter, StatsWriter as _, World, given};
+use namako::{
+    Parameter, StatsWriter as _, World,
+    codegen::{AssertOutcome, Assertable, StepContext},
+    given,
+};
+
+// Context wrapper types
+struct WMut<'a>(&'a mut W);
+
+#[derive(Clone, Copy)]
+struct WRef<'a>(&'a W);
+
+impl<'a> WMut<'a> { fn new(world: &'a mut W) -> Self { Self(world) } }
+impl<'a> WRef<'a> { fn new(world: &'a W) -> Self { Self(world) } }
+impl<'a> StepContext for WMut<'a> { type World = W; }
+impl<'a> StepContext for WRef<'a> { type World = W; }
+
+impl Assertable for W {
+    type Ctx<'a> = WRef<'a> where Self: 'a;
+    fn assert_then<T, F>(&mut self, mut f: F) -> T
+    where F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T> {
+        match f(&WRef(self)) {
+            AssertOutcome::Passed(v) => v,
+            AssertOutcome::Pending => panic!("Pending not supported"),
+            AssertOutcome::Failed(msg) => panic!("{msg}"),
+        }
+    }
+}
 
 #[derive(Debug, Parameter, PartialEq)]
 #[param(name = "param", regex = "'([^']*)'|(\\d+)")]
@@ -20,17 +47,18 @@ impl FromStr for Param {
 
 #[given("regex: int: {param}")]
 #[given("expr: int: {param}")]
-fn assert_int(_: &mut W, v: Param) {
+fn assert_int(_: WMut, v: Param) {
     assert_eq!(v, Param::Int(42));
 }
 
 #[given("regex: quoted: {param}")]
 #[given("expr: quoted: {param}")]
-fn assert_quoted(_: &mut W, v: Param) {
+fn assert_quoted(_: WMut, v: Param) {
     assert_eq!(v, Param::Quoted("inner".to_owned()));
 }
 
 #[derive(Clone, Copy, Debug, Default, World)]
+#[world(mut_ctx = WMut<'a>, ref_ctx = WRef<'a>)]
 struct W;
 
 #[tokio::test]

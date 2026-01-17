@@ -1,15 +1,43 @@
-use namako::{World as _, runner, then, writer::summarize::Stats};
+use namako::{
+    World as _,
+    codegen::{AssertOutcome, Assertable, StepContext},
+    runner, then, writer::summarize::Stats,
+};
+
+// Context wrapper types
+struct WorldMut<'a>(&'a mut World);
+
+#[derive(Clone, Copy)]
+struct WorldRef<'a>(&'a World);
+
+impl<'a> WorldMut<'a> { fn new(world: &'a mut World) -> Self { Self(world) } }
+impl<'a> WorldRef<'a> { fn new(world: &'a World) -> Self { Self(world) } }
+impl<'a> StepContext for WorldMut<'a> { type World = World; }
+impl<'a> StepContext for WorldRef<'a> { type World = World; }
+
+impl Assertable for World {
+    type Ctx<'a> = WorldRef<'a> where Self: 'a;
+    fn assert_then<T, F>(&mut self, mut f: F) -> T
+    where F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T> {
+        match f(&WorldRef(self)) {
+            AssertOutcome::Passed(v) => v,
+            AssertOutcome::Pending => panic!("Pending not supported"),
+            AssertOutcome::Failed(msg) => panic!("{msg}"),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, namako::World)]
+#[world(mut_ctx = WorldMut<'a>, ref_ctx = WorldRef<'a>)]
 struct World;
 
 #[then("step panics")]
-fn step_panics(_: &World) {
+fn step_panics(_: WorldRef) {
     panic!("this is a panic message");
 }
 
 #[then("nothing happens")]
-fn nothing_happens(_: &World) {
+fn nothing_happens(_: WorldRef) {
     // noop
 }
 
