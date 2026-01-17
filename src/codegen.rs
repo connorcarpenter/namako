@@ -16,6 +16,21 @@ pub use regex::Regex;
 use crate::{Step, World, step};
 
 // =============================================================================
+// Context-First ABI Support
+// =============================================================================
+
+/// Trait implemented by step context types to link back to their World.
+///
+/// This trait is used by the codegen to determine which World type a step
+/// function belongs to, based on the context type in its first argument.
+///
+/// Users should implement this on their `TestWorldMut` and `TestWorldRef` types.
+pub trait StepContext {
+    /// The World type that this context is derived from.
+    type World: World;
+}
+
+// =============================================================================
 // NPAP v1 Metadata
 // =============================================================================
 

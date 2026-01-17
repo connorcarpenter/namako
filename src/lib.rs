@@ -226,8 +226,33 @@ pub trait World: Sized + 'static {
     /// Error of creating a new [`World`] instance.
     type Error: Display;
 
+    /// Mutable context type for Given/When steps.
+    ///
+    /// This context provides mutable access to test state and MUST only
+    /// expose mutation operations (no assertions/expects).
+    type MutCtx<'a> where Self: 'a;
+
+    /// Context type for Then steps (read/assertion API).
+    ///
+    /// This context provides read/assertion access and MUST only expose
+    /// assertion/expect operations (no mutation API exposed to step authors).
+    type RefCtx<'a> where Self: 'a;
+
     /// Creates a new [`World`] instance.
     fn new() -> impl Future<Output = Result<Self, Self::Error>>;
+
+    /// Creates a mutable context for Given/When steps.
+    ///
+    /// The returned context provides mutable access and MUST only expose
+    /// mutation operations. This enforces capability separation at compile time.
+    fn ctx_mut(&mut self) -> Self::MutCtx<'_>;
+
+    /// Creates a read-only context for Then steps.
+    ///
+    /// The returned context provides read/assertion access and MUST only expose
+    /// assertion/expect operations (no mutation API). Note: takes `&mut self`
+    /// because expect operations may need to tick/advance simulation internally.
+    fn ctx_ref(&mut self) -> Self::RefCtx<'_>;
 
     #[cfg(feature = "macros")]
     /// Returns runner for tests with auto-wired steps marked by [`given`],

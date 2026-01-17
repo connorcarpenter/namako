@@ -87,11 +87,39 @@ impl Step {
     }
 
     /// Expands generated code of this [`Step`] definition.
-    fn expand(self) -> syn::Result<TokenStream> {
+    fn expand(mut self) -> syn::Result<TokenStream> {
+        // First, validate that the context type has no explicit generics
+        // and capture the original type path for StepContext lookup
+        let original_ctx_type = parse_context_type_from_args(&self.func.sig, self.attr_name)?.clone();
+
+        // Create a version of the type with 'static lifetime for StepContext lookup
+        // This is needed because TestWorldMut requires a lifetime parameter
+        // The actual lifetime doesn't matter - we only use the associated World type
+        let ctx_type_with_lifetime = {
+            let mut path = original_ctx_type.path.clone();
+            if let Some(last_seg) = path.segments.last_mut() {
+                last_seg.arguments = syn::PathArguments::AngleBracketed(
+                    syn::AngleBracketedGenericArguments {
+                        colon2_token: None,
+                        lt_token: Default::default(),
+                        args: std::iter::once(syn::GenericArgument::Lifetime(
+                            syn::Lifetime::new("'static", proc_macro2::Span::call_site())
+                        )).collect(),
+                        gt_token: Default::default(),
+                    }
+                );
+            }
+            syn::TypePath { qself: original_ctx_type.qself.clone(), path }
+        };
+
+        // Rewrite the function signature to inject the lifetime
+        rewrite_signature_with_lifetime(&mut self.func)?;
+
         let func = &self.func;
         let func_name = &func.sig.ident;
 
-        let world = parse_world_from_args(&self.func.sig, self.attr_name)?;
+        // Use the type WITH anonymous lifetime for StepContext lookup
+        let ctx_type = ctx_type_with_lifetime;
         let step_type = self.step_type();
         let (func_args, addon_parsing) =
             self.fn_arguments_and_additional_parsing()?;
@@ -117,10 +145,24 @@ impl Step {
         let accepts_docstring = signature_info.accepts_docstring;
         let accepts_datatable = signature_info.accepts_datatable;
 
-        let world_arg = if self.attr_name == "then" {
-            quote! { &*__namako_world }
+        // Context-first ABI: construct ctx from world and pass to user fn
+        // Given/When: use ctx_mut() for mutable context
+        // Then: use ctx_ref() for read/assertion context (still &mut self internally)
+        let ctx_construction = if self.attr_name == "then" {
+            quote! {
+                let mut __namako_ctx_arg = ::namako::World::ctx_ref(__namako_world);
+            }
         } else {
-            quote! { __namako_world }
+            quote! {
+                let mut __namako_ctx_arg = ::namako::World::ctx_mut(__namako_world);
+            }
+        };
+
+        // Pass context as first arg to user function
+        let ctx_arg = if self.attr_name == "then" {
+            quote! { __namako_ctx_arg }
+        } else {
+            quote! { __namako_ctx_arg }
         };
 
         Ok(quote! {
@@ -128,11 +170,15 @@ impl Step {
 
             #[automatically_derived]
             ::namako::codegen::submit!({
+                // Derive World type from context type via StepContext trait
+                // Use 'static lifetime for the type alias - we only need the World associated type
+                type WorldAlias = <#ctx_type as ::namako::codegen::StepContext>::World;
+
                 // TODO: Remove this, once `#![feature(more_qualified_paths)]`
                 //       is stabilized:
                 //       https://github.com/rust-lang/rust/issues/86935
                 type StepAlias =
-                    <#world as ::namako::codegen::WorldInventory>::#step_type;
+                    <WorldAlias as ::namako::codegen::WorldInventory>::#step_type;
 
                 StepAlias {
                     loc: ::namako::step::Location {
@@ -158,7 +204,8 @@ impl Step {
                     func: |__namako_world, __namako_ctx| {
                         let f = async move {
                             #addon_parsing
-                            let _ = #func_name(#world_arg, #func_args)
+                            #ctx_construction
+                            let _ = #func_name(#ctx_arg, #func_args)
                                 #awaiting
                                 #unwrapping;
                         };
@@ -859,48 +906,129 @@ fn find_first_slice(sig: &syn::Signature) -> Option<&syn::TypePath> {
     })
 }
 
-/// Parses `namako::World` from arguments of the function signature.
-fn parse_world_from_args<'a>(sig: &'a Signature, attr_name: &str) -> syn::Result<&'a syn::TypePath> {
-    sig.inputs
-        .first()
-        .ok_or_else(|| sig.ident.span())
-        .and_then(|first_arg| match first_arg {
-            syn::FnArg::Typed(a) => Ok(a),
-            syn::FnArg::Receiver(_) => Err(first_arg.span()),
-        })
-        .and_then(|typed_arg| {
-            if let syn::Type::Reference(r) = typed_arg.ty.as_ref() {
-                Ok(r)
-            } else {
-                Err(typed_arg.span())
+/// Parses the context type from the first argument of a step function.
+///
+/// For context-first ABI:
+/// - Given/When: first arg is `mut CtxMut` (by value, mutable binding)
+/// - Then: first arg is `CtxRef` (by value)
+///
+/// This function enforces the "no explicit lifetimes" ergonomics rule:
+/// - Users must write `TestWorldMut`, NOT `TestWorldMut<'a>` or `TestWorldMut<'_>`
+/// - The signature rewriting in `rewrite_signature_with_lifetime` injects the lifetime
+///
+/// Returns the context type path (must have no generics). The World type is derived via the
+/// `StepContext` trait at expansion time.
+fn parse_context_type_from_args<'a>(sig: &'a Signature, attr_name: &str) -> syn::Result<&'a syn::TypePath> {
+    let first_arg = sig.inputs.first().ok_or_else(|| {
+        let msg = if attr_name == "then" {
+            "first function argument expected to be `TestWorldRef` (no generics) for `Then` steps"
+        } else {
+            "first function argument expected to be `mut TestWorldMut` (no generics) for `Given`/`When` steps"
+        };
+        syn::Error::new(sig.ident.span(), msg)
+    })?;
+
+    let typed_arg = match first_arg {
+        syn::FnArg::Typed(a) => a,
+        syn::FnArg::Receiver(r) => {
+            return Err(syn::Error::new(r.span(), "step function cannot use `self`"));
+        }
+    };
+
+    // Context-first ABI: accept a type path WITHOUT generics.
+    // Users must write `TestWorldMut`, not `TestWorldMut<'a>`.
+    if let syn::Type::Path(p) = typed_arg.ty.as_ref() {
+        // Check that the type has NO generics (the ergonomics rule)
+        if let Some(last_segment) = p.path.segments.last() {
+            if !last_segment.arguments.is_empty() {
+                return Err(syn::Error::new(
+                    last_segment.arguments.span(),
+                    "context type must not have explicit lifetimes or generics; \
+                     write `TestWorldMut` or `TestWorldRef`, not `TestWorldMut<'a>`",
+                ));
             }
-        })
-        .and_then(|world_ref| {
-            let is_mut = world_ref.mutability.is_some();
-            if attr_name == "then" {
-                if is_mut {
-                    return Err(world_ref.span());
-                }
-            } else if !is_mut {
-                return Err(world_ref.span());
-            }
-            Ok(world_ref)
-        })
-        .and_then(|world_ref| {
-            if let syn::Type::Path(p) = world_ref.elem.as_ref() {
-                Ok(p)
-            } else {
-                Err(world_ref.span())
-            }
-        })
-        .map_err(|span| {
-            let msg = if attr_name == "then" {
-                "first function argument expected to be `&World` (immutable) for `Then` steps"
-            } else {
-                "first function argument expected to be `&mut World` (mutable)"
-            };
-            syn::Error::new(span, msg)
-        })
+        }
+        Ok(p)
+    } else if let syn::Type::Reference(r) = typed_arg.ty.as_ref() {
+        // Reject reference types - users should use the context types
+        Err(syn::Error::new(
+            r.span(),
+            "step functions must use context types (`TestWorldMut` / `TestWorldRef`), \
+             not references like `&mut TestWorld`",
+        ))
+    } else {
+        let msg = if attr_name == "then" {
+            "first function argument expected to be `TestWorldRef` (no generics) for `Then` steps"
+        } else {
+            "first function argument expected to be `mut TestWorldMut` (no generics) for `Given`/`When` steps"
+        };
+        Err(syn::Error::new(typed_arg.span(), msg))
+    }
+}
+
+/// Rewrites the function signature to inject a fresh lifetime for context-first ABI.
+///
+/// Transforms:
+///   `fn step(mut ctx: TestWorldMut, name: String) { ... }`
+/// Into:
+///   `fn step<'__ctx>(mut ctx: TestWorldMut<'__ctx>, name: String) { ... }`
+///
+/// This provides ergonomic step authoring without requiring explicit lifetimes.
+fn rewrite_signature_with_lifetime(func: &mut syn::ItemFn) -> syn::Result<()> {
+    // Get the first argument type
+    let first_arg = func.sig.inputs.first_mut().ok_or_else(|| {
+        syn::Error::new(func.sig.ident.span(), "step function must have at least one argument")
+    })?;
+
+    let typed_arg = match first_arg {
+        syn::FnArg::Typed(t) => t,
+        syn::FnArg::Receiver(r) => {
+            return Err(syn::Error::new(r.span(), "step function cannot use `self`"));
+        }
+    };
+
+    // Only rewrite if it's a plain type path (no generics)
+    // Note: typed_arg.ty is Box<Type>, as_mut() returns &mut Type
+    let type_path = match typed_arg.ty.as_mut() {
+        syn::Type::Path(p) => p,
+        _ => {
+            // Not a type path - this might be a reference type which we reject elsewhere
+            return Ok(());
+        }
+    };
+
+    let last_segment = match type_path.path.segments.last_mut() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    // Double-check: reject if already has generics
+    if !last_segment.arguments.is_empty() {
+        return Err(syn::Error::new(
+            last_segment.arguments.span(),
+            "context type must not have explicit lifetimes; write `TestWorldMut` not `TestWorldMut<'a>`",
+        ));
+    }
+
+    // Add the fresh lifetime to the function generics
+    let ctx_lifetime: syn::Lifetime = syn::parse_quote!('__ctx);
+    func.sig.generics.params.insert(
+        0,
+        syn::GenericParam::Lifetime(syn::LifetimeParam::new(ctx_lifetime.clone())),
+    );
+
+    // Rewrite the type to include the lifetime: TestWorldMut -> TestWorldMut<'__ctx>
+    last_segment.arguments = syn::PathArguments::AngleBracketed(
+        syn::AngleBracketedGenericArguments {
+            colon2_token: None,
+            lt_token: syn::token::Lt::default(),
+            args: std::iter::once(syn::GenericArgument::Lifetime(ctx_lifetime))
+                .collect(),
+            gt_token: syn::token::Gt::default(),
+        },
+    );
+
+    Ok(())
 }
 
 // =============================================================================

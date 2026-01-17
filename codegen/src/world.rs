@@ -27,6 +27,30 @@ struct Attrs {
     /// If [`None`] then [`Default::default()`] will be used.
     #[parse(value)]
     init: Option<syn::ExprPath>,
+
+    /// Type to use for `MutCtx` associated type.
+    ///
+    /// Required for context-first ABI.
+    #[parse(value)]
+    mut_ctx: Option<syn::Type>,
+
+    /// Type to use for `RefCtx` associated type.
+    ///
+    /// Required for context-first ABI.
+    #[parse(value)]
+    ref_ctx: Option<syn::Type>,
+
+    /// Expression to create `MutCtx` from `&mut self`.
+    ///
+    /// Defaults to `Self::MutCtx::new(self)` if not specified.
+    #[parse(value)]
+    ctx_mut: Option<syn::ExprPath>,
+
+    /// Expression to create `RefCtx` from `&self`.
+    ///
+    /// Defaults to `Self::RefCtx::new(self)` if not specified.
+    #[parse(value)]
+    ctx_ref: Option<syn::ExprPath>,
 }
 
 /// Representation of a type implementing a `World` trait, used for code
@@ -48,6 +72,18 @@ struct Definition {
     /// Function, which is used to construct `World`. Uses [`Default`] impl, in
     /// case no value is provided.
     init: Option<syn::ExprPath>,
+
+    /// Type to use for `MutCtx` associated type.
+    mut_ctx: Option<syn::Type>,
+
+    /// Type to use for `RefCtx` associated type.
+    ref_ctx: Option<syn::Type>,
+
+    /// Expression to create `MutCtx` from `&mut self`.
+    ctx_mut: Option<syn::ExprPath>,
+
+    /// Expression to create `RefCtx` from `&self`.
+    ctx_ref: Option<syn::ExprPath>,
 }
 
 impl TryFrom<syn::DeriveInput> for Definition {
@@ -61,6 +97,10 @@ impl TryFrom<syn::DeriveInput> for Definition {
             generics: input.generics,
             vis: input.vis,
             init: attrs.init,
+            mut_ctx: attrs.mut_ctx,
+            ref_ctx: attrs.ref_ctx,
+            ctx_mut: attrs.ctx_mut,
+            ctx_ref: attrs.ctx_ref,
         })
     }
 }
@@ -107,12 +147,44 @@ impl Definition {
             || parse_quote! { <Self as ::std::default::Default>::default },
         );
 
+        // Context types - required for context-first ABI
+        let mut_ctx_ty = self.mut_ctx.clone().unwrap_or_else(
+            || parse_quote! { &'a mut Self },
+        );
+        let ref_ctx_ty = self.ref_ctx.clone().unwrap_or_else(
+            || parse_quote! { &'a Self },
+        );
+
+        // Context factory expressions
+        let ctx_mut_expr = if let Some(expr) = &self.ctx_mut {
+            quote! { #expr(self) }
+        } else if self.mut_ctx.is_some() {
+            // If mut_ctx is specified, assume it has a `new` constructor
+            quote! { <Self::MutCtx<'_>>::new(self) }
+        } else {
+            // Default: return &mut self
+            quote! { self }
+        };
+
+        let ctx_ref_expr = if let Some(expr) = &self.ctx_ref {
+            quote! { #expr(self) }
+        } else if self.ref_ctx.is_some() {
+            // If ref_ctx is specified, assume it has a `new` constructor
+            quote! { <Self::RefCtx<'_>>::new(self) }
+        } else {
+            // Default: return &self
+            quote! { self }
+        };
+
         quote! {
             #[automatically_derived]
             impl #impl_gens ::namako::World for #world #ty_gens
                  #where_clause
             {
                 type Error = ::namako::codegen::anyhow::Error;
+
+                type MutCtx<'a> = #mut_ctx_ty where Self: 'a;
+                type RefCtx<'a> = #ref_ctx_ty where Self: 'a;
 
                 async fn new() -> ::std::result::Result<Self, Self::Error> {
                     use ::namako::codegen::{
@@ -128,6 +200,14 @@ impl Definition {
                         .await
                         .into_world_result()
                         .map_err(::std::convert::Into::into)
+                }
+
+                fn ctx_mut(&mut self) -> Self::MutCtx<'_> {
+                    #ctx_mut_expr
+                }
+
+                fn ctx_ref(&mut self) -> Self::RefCtx<'_> {
+                    #ctx_ref_expr
                 }
             }
         }
