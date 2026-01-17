@@ -94,64 +94,6 @@ impl<T> AssertOutcome<T> {
     }
 }
 
-/// Trait for Worlds that support Then-step assertions.
-///
-/// The World controls execution semantics:
-/// - **Simple worlds**: Run assertion once; `Pending` is an error.
-/// - **Polling worlds**: Retry on `Pending` until `Passed` or timeout.
-///
-/// The macro-generated code calls `assert_then()` for Then steps,
-/// delegating all execution control to the World.
-///
-/// # Example
-///
-/// ```ignore
-/// impl Assertable for TestWorld {
-///     type Ctx<'a> = TestWorldRef<'a>;
-///
-///     fn assert_then<T, F>(&mut self, mut f: F) -> T
-///     where
-///         F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T>,
-///     {
-///         // Polling implementation with catch_unwind
-///         for _ in 0..100 {
-///             let ctx = TestWorldRef::new(self);
-///             match std::panic::catch_unwind(|| f(&ctx)) {
-///                 Ok(AssertOutcome::Passed(v)) => return v,
-///                 Ok(AssertOutcome::Pending) | Err(_) => {
-///                     self.tick(); // advance simulation
-///                     continue;
-///                 }
-///                 Ok(AssertOutcome::Failed(msg)) => panic!("{}", msg),
-///             }
-///         }
-///         panic!("assertion timed out");
-///     }
-/// }
-/// ```
-pub trait Assertable: World {
-    /// Context type provided to Then assertions.
-    ///
-    /// This should be a read-only context wrapper type that implements `StepContext`.
-    type Ctx<'a>: StepContext<World = Self>
-    where
-        Self: 'a;
-
-    /// Execute a Then-step assertion.
-    ///
-    /// The closure `f` is called with a context reference. It may:
-    /// - Return `Passed(T)` if the assertion succeeded
-    /// - Return `Pending` if the condition is not yet met
-    /// - Return `Failed(msg)` if the assertion permanently failed
-    /// - Panic, which the World may treat as `Pending` (for polling)
-    ///
-    /// The World implementation decides how to handle these outcomes
-    /// and controls retry/polling semantics.
-    fn assert_then<T, F>(&mut self, f: F) -> T
-    where
-        F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T>;
-}
-
 // =============================================================================
 // NPAP v1 Metadata
 // =============================================================================

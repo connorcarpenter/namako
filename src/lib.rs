@@ -252,6 +252,46 @@ pub trait World: Sized + 'static {
     /// because expect operations may need to tick/advance simulation internally.
     fn ctx_ref(&mut self) -> Self::RefCtx<'_>;
 
+    /// Execute a Then-step assertion with polling.
+    ///
+    /// The default implementation polls with retry on `Pending`:
+    /// - Calls `f()` with a fresh `RefCtx`
+    /// - On `Passed(v)`: returns `v`
+    /// - On `Pending`: sleeps briefly, retries (up to 100 attempts)
+    /// - On `Failed(msg)`: panics with the message
+    ///
+    /// Override this method for custom polling semantics (e.g., tick-based
+    /// simulation where you call `scenario.tick()` between attempts).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the assertion fails or times out after 100 attempts.
+    fn assert_then<T, F>(&mut self, mut f: F) -> T
+    where
+        F: FnMut(&Self::RefCtx<'_>) -> codegen::AssertOutcome<T>,
+    {
+        const MAX_ATTEMPTS: usize = 100;
+        const POLL_INTERVAL_MS: u64 = 10;
+
+        for _attempt in 0..MAX_ATTEMPTS {
+            let ctx = self.ctx_ref();
+            match f(&ctx) {
+                codegen::AssertOutcome::Passed(v) => return v,
+                codegen::AssertOutcome::Pending => {
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        POLL_INTERVAL_MS,
+                    ));
+                }
+                codegen::AssertOutcome::Failed(msg) => panic!("{msg}"),
+            }
+        }
+        panic!(
+            "Then assertion timed out after {} attempts ({}ms total)",
+            MAX_ATTEMPTS,
+            MAX_ATTEMPTS as u64 * POLL_INTERVAL_MS
+        );
+    }
+
     #[cfg(feature = "macros")]
     /// Returns runner for tests with auto-wired steps marked by [`given`],
     /// [`when`] and [`then`] attributes.

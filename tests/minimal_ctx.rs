@@ -1,5 +1,5 @@
 use namako::{
-    codegen::{AssertOutcome, Assertable, StepContext},
+    codegen::StepContext,
     given, then,
 };
 
@@ -33,22 +33,6 @@ impl<'a> StepContext for WorldMut<'a> {
 
 impl<'a> StepContext for WorldRef<'a> {
     type World = World;
-}
-
-impl Assertable for World {
-    type Ctx<'a> = WorldRef<'a> where Self: 'a;
-
-    fn assert_then<T, F>(&mut self, mut f: F) -> T
-    where
-        F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T>,
-    {
-        let ctx = WorldRef(self);
-        match f(&ctx) {
-            AssertOutcome::Passed(v) => v,
-            AssertOutcome::Pending => panic!("Pending not supported"),
-            AssertOutcome::Failed(msg) => panic!("{msg}"),
-        }
-    }
 }
 
 #[given("test")]

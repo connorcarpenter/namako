@@ -2,7 +2,7 @@ use std::{fs, io};
 
 use namako::{
     StatsWriter as _, World,
-    codegen::{AssertOutcome, Assertable, StepContext},
+    codegen::StepContext,
     gherkin::Step, given, then, when,
 };
 
@@ -31,18 +31,6 @@ impl<'a> MyWorldMut<'a> { fn new(world: &'a mut MyWorld) -> Self { Self(world) }
 impl<'a> MyWorldRef<'a> { fn new(world: &'a MyWorld) -> Self { Self(world) } }
 impl<'a> StepContext for MyWorldMut<'a> { type World = MyWorld; }
 impl<'a> StepContext for MyWorldRef<'a> { type World = MyWorld; }
-
-impl Assertable for MyWorld {
-    type Ctx<'a> = MyWorldRef<'a> where Self: 'a;
-    fn assert_then<T, F>(&mut self, mut f: F) -> T
-    where F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T> {
-        match f(&MyWorldRef(self)) {
-            AssertOutcome::Passed(v) => v,
-            AssertOutcome::Pending => panic!("Pending not supported"),
-            AssertOutcome::Failed(msg) => panic!("{msg}"),
-        }
-    }
-}
 
 #[given("non-regex")]
 fn test_non_regex_sync(w: MyWorldMut) {

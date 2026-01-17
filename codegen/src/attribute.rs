@@ -186,7 +186,7 @@ impl Step {
                         ::std::boxed::Box::pin(async move {
                             #addon_parsing
 
-                            <WorldAlias as ::namako::codegen::Assertable>::assert_then(
+                            <WorldAlias as ::namako::World>::assert_then(
                                 __namako_world,
                                 |__namako_ctx_arg| {
                                     let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
@@ -219,7 +219,7 @@ impl Step {
                         ::std::boxed::Box::pin(async move {
                             #addon_parsing
 
-                            <WorldAlias as ::namako::codegen::Assertable>::assert_then(
+                            <WorldAlias as ::namako::World>::assert_then(
                                 __namako_world,
                                 |__namako_ctx_arg| {
                                     let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {

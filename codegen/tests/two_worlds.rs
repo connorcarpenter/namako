@@ -1,6 +1,6 @@
 use namako::{
     StatsWriter as _, World,
-    codegen::{AssertOutcome, Assertable, StepContext},
+    codegen::StepContext,
     gherkin::Step, given, then, when, writer,
 };
 
@@ -32,18 +32,6 @@ impl<'a> FirstWorldRef<'a> {
 impl<'a> StepContext for FirstWorldMut<'a> { type World = FirstWorld; }
 impl<'a> StepContext for FirstWorldRef<'a> { type World = FirstWorld; }
 
-impl Assertable for FirstWorld {
-    type Ctx<'a> = FirstWorldRef<'a> where Self: 'a;
-    fn assert_then<T, F>(&mut self, mut f: F) -> T
-    where F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T> {
-        match f(&FirstWorldRef(self)) {
-            AssertOutcome::Passed(v) => v,
-            AssertOutcome::Pending => panic!("Pending not supported"),
-            AssertOutcome::Failed(msg) => panic!("{msg}"),
-        }
-    }
-}
-
 // Context wrapper types for SecondWorld
 pub struct SecondWorldMut<'a>(&'a mut SecondWorld);
 
@@ -59,18 +47,6 @@ impl<'a> SecondWorldRef<'a> {
 }
 impl<'a> StepContext for SecondWorldMut<'a> { type World = SecondWorld; }
 impl<'a> StepContext for SecondWorldRef<'a> { type World = SecondWorld; }
-
-impl Assertable for SecondWorld {
-    type Ctx<'a> = SecondWorldRef<'a> where Self: 'a;
-    fn assert_then<T, F>(&mut self, mut f: F) -> T
-    where F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T> {
-        match f(&SecondWorldRef(self)) {
-            AssertOutcome::Passed(v) => v,
-            AssertOutcome::Pending => panic!("Pending not supported"),
-            AssertOutcome::Failed(msg) => panic!("{msg}"),
-        }
-    }
-}
 
 #[given("{word} is sync {int}")]
 fn test_regex_sync_slice_first(w: FirstWorldMut, step: &Step, matches: &[String]) {

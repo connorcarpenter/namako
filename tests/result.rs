@@ -1,6 +1,6 @@
 use namako::{
     StatsWriter as _, World,
-    codegen::{AssertOutcome, Assertable, StepContext},
+    codegen::StepContext,
     given, then, when,
 };
 
@@ -22,18 +22,6 @@ impl<'a> WRef<'a> {
 
 impl<'a> StepContext for WMut<'a> { type World = W; }
 impl<'a> StepContext for WRef<'a> { type World = W; }
-
-impl Assertable for W {
-    type Ctx<'a> = WRef<'a> where Self: 'a;
-    fn assert_then<T, F>(&mut self, mut f: F) -> T
-    where F: FnMut(&Self::Ctx<'_>) -> AssertOutcome<T> {
-        match f(&WRef(self)) {
-            AssertOutcome::Passed(v) => v,
-            AssertOutcome::Pending => panic!("Pending not supported"),
-            AssertOutcome::Failed(msg) => panic!("{msg}"),
-        }
-    }
-}
 
 #[given("ok")]
 #[when("ok")]
