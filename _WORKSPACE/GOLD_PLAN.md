@@ -157,13 +157,13 @@ Step functions MUST be declared using exactly:
 
 ```rust
 #[given("...")]
-fn some_given_step(world: &mut World) { ... }
+fn some_given_step(mut ctx: TestWorldMut) { ... }
 
 #[when("...")]
-fn some_when_step(world: &mut World) { ... }
+fn some_when_step(mut ctx: TestWorldMut) { ... }
 
 #[then("...")]
-fn some_then_step(world: &mut World) { ... }
+fn some_then_step(ctx: TestWorldRef) { ... }
 ```
 
 Each macro takes **exactly one string argument**.
@@ -172,26 +172,31 @@ Each macro takes **exactly one string argument**.
 - No embedded IDs in strings
 - No optional parameters
 
-**Step Function Signatures (v1 ABI):**
+**Step Function Signatures (v1 Context-First ABI):**
 
-While the macro takes exactly one string, the function signature MAY include additional parameters after `&mut World` to receive captures, DocStrings, and DataTables per the v1 Binding ABI (see §4.4):
+The v1 ABI enforces **capability separation** at compile time through context types:
+
+- **Given/When steps**: First parameter MUST be `ctx: &mut CtxMut` (mutable reference to context)
+- **Then steps**: First parameter MUST be `ctx: &CtxRef` (immutable reference to read-only context)
+
+The context types MUST implement the `StepContext` trait to link back to their World type.
 
 ```rust
-// Captures only (two {string} placeholders → two String parameters)
+// Given/When: mutation context only (no assertions)
 #[given("a user named {string} with role {string}")]
-fn user_with_role(world: &mut World, username: String, role: String) { ... }
+fn user_with_role(ctx: &mut TestWorldMut, username: String, role: String) { ... }
+
+// Then: read-only context only (no mutations)
+#[then("the user count is {int}")]
+fn check_user_count(ctx: &TestWorldRef, expected: usize) { ... }
 
 // Captures + DocString
 #[when("the server receives config")]
-fn server_config(world: &mut World, config_doc: Option<String>) { ... }
+fn server_config(ctx: &mut TestWorldMut, config_doc: Option<String>) { ... }
 
 // Captures + DataTable
 #[then("the following users exist")]
-fn users_exist(world: &mut World, users_table: Option<Vec<Vec<String>>>) { ... }
-
-// Captures + DocString + DataTable (docstring before datatable by convention)
-#[given("setup with data")]
-fn setup_data(world: &mut World, doc: Option<String>, table: Option<Vec<Vec<String>>>) { ... }
+fn users_exist(ctx: &TestWorldRef, users_table: Option<Vec<Vec<String>>>) { ... }
 ```
 
 The function signature determines `signature.captures_arity`, `signature.accepts_docstring`, and `signature.accepts_datatable` in the manifest (see §4.4 for the normative ABI definition).
@@ -241,20 +246,53 @@ The adapter MUST:
 
 This section defines how `namako_codegen` derives signature metadata from the step function signature. This is the authoritative definition for signature enforcement in §5.3.
 
+#### 4.4.0 Context-First ABI (Capability Separation)
+
+The v1 ABI enforces **capability separation at compile time** through typed context parameters:
+
+| Step Kind | Required First Parameter | Capabilities |
+|-----------|--------------------------|--------------|
+| Given | `ctx: &mut CtxMut` (mutable reference) | Mutation operations ONLY |
+| When | `ctx: &mut CtxMut` (mutable reference) | Mutation operations ONLY |
+| Then | `ctx: &CtxRef` (immutable reference) | Read/assertion operations ONLY |
+
+**Rationale:** This design makes it structurally impossible to:
+- Call mutation operations from a Then step (read-only context has no mutation methods)
+- Call assertion operations from a Given/When step (mutable context has no assertion methods)
+
+**Context Types:**
+- `CtxMut` (e.g., `TestWorldMut<'a>`) — wraps mutable access to the World, exposes ONLY mutation APIs
+- `CtxRef` (e.g., `TestWorldRef<'a>`) — wraps read-only access to the World, exposes ONLY assertion APIs
+
+Both context types MUST implement `namako::codegen::StepContext` to provide the `World` type association.
+
+**Trampoline Generation:**
+
+The adapter still receives `&mut World` internally. The `namako_codegen` macro generates a trampoline that:
+1. Receives `&mut World` from the adapter runtime
+2. Constructs the appropriate context:
+   - Given/When: `let mut ctx = world.ctx_mut();`
+   - Then: `let ctx = world.ctx_ref();`
+3. Calls the user function with the context as a reference (`&mut ctx` or `&ctx`)
+
 #### 4.4.1 Required First Parameter
 
-Every step function MUST have `&mut World` as its first parameter.
+Every step function MUST have a context reference as its first parameter:
+- **Given/When**: `ctx: &mut CtxMut` where `CtxMut: StepContext`
+- **Then**: `ctx: &CtxRef` where `CtxRef: StepContext`
+
+The World type is derived from the context type via the `StepContext::World` associated type.
 
 #### 4.4.2 Captures Mapping
 
-- **`signature.captures_arity`** equals the number of capture parameters after `&mut World`, **excluding** any optional DocString/DataTable parameters.
+- **`signature.captures_arity`** equals the number of capture parameters after the context parameter, **excluding** any optional DocString/DataTable parameters.
 - All captures are passed as `String` in v1 (typed capture conversion is deferred to v2+).
 - Captures appear in the function signature in the same order as their corresponding `{...}` placeholders in the expression string.
 
 **Example:**
 ```rust
 #[given("a {string} named {string}")]
-fn example(world: &mut World, type_name: String, entity_name: String) { ... }
+fn example(mut ctx: TestWorldMut, type_name: String, entity_name: String) { ... }
 // captures_arity = 2
 ```
 
@@ -273,7 +311,7 @@ fn example(world: &mut World, type_name: String, entity_name: String) { ... }
 #### 4.4.5 Parameter Order (Normative)
 
 When both DocString and DataTable are supported, the parameter order MUST be:
-1. `&mut World`
+1. Context parameter (`ctx: &mut CtxMut` or `ctx: &CtxRef`)
 2. Capture parameters (in expression order)
 3. DocString parameter (if present)
 4. DataTable parameter (if present)
@@ -285,6 +323,8 @@ This fixed order ensures deterministic signature reflection by `namako_codegen`.
 - Exactly **zero or one** DocString parameter allowed per binding.
 - Exactly **zero or one** DataTable parameter allowed per binding.
 - Ambiguous signatures (e.g., multiple `Option<String>` parameters that could be DocString or captures) MUST be rejected by `namako_codegen` at compile time.
+- **Given/When with read-only context (`CtxRef`)** → MUST be rejected at compile time.
+- **Then with mutable context (`CtxMut`)** → MUST be rejected at compile time.
 
 > **Note:** The v1 Binding ABI is what `namako_codegen` uses to compute the `signature.*` fields in the adapter manifest.
 
