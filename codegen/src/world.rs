@@ -56,7 +56,7 @@ struct Attrs {
 /// Representation of a type implementing a `World` trait, used for code
 /// generation.
 #[derive(Debug, ToTokens)]
-#[to_tokens(append(impl_world_inventory, impl_world, impl_step_constructors))]
+#[to_tokens(append(impl_world_inventory, impl_world, impl_step_contexts, impl_step_constructors))]
 struct Definition {
     /// Name of this type.
     ident: syn::Ident,
@@ -210,6 +210,104 @@ impl Definition {
                     #ctx_ref_expr
                 }
             }
+        }
+    }
+
+    /// Generates `StepContext` impls for the context wrapper types.
+    ///
+    /// This eliminates the need for users to manually implement `StepContext`
+    /// for their context wrapper types. The derive macro knows the context
+    /// types from `#[world(mut_ctx = ..., ref_ctx = ...)]` and can generate
+    /// the impls automatically.
+    #[must_use]
+    fn impl_step_contexts(&self) -> TokenStream {
+        let world = &self.ident;
+        let (_, ty_gens, _) = self.generics.split_for_impl();
+
+        let mut impls = TokenStream::new();
+
+        // Generate StepContext impl for mut_ctx type
+        if let Some(ref mut_ctx_ty) = self.mut_ctx {
+            if let Some(impl_tokens) = Self::generate_step_context_impl(mut_ctx_ty, world, &ty_gens) {
+                impls.extend(impl_tokens);
+            }
+        }
+
+        // Generate StepContext impl for ref_ctx type (only if different from mut_ctx)
+        if let Some(ref ref_ctx_ty) = self.ref_ctx {
+            // Check if ref_ctx is the same as mut_ctx to avoid duplicate impls
+            let is_same = self.mut_ctx.as_ref().map_or(false, |mut_ty| {
+                // Compare type string representations for simplicity
+                quote!(#mut_ty).to_string() == quote!(#ref_ctx_ty).to_string()
+            });
+
+            if !is_same {
+                if let Some(impl_tokens) = Self::generate_step_context_impl(ref_ctx_ty, world, &ty_gens) {
+                    impls.extend(impl_tokens);
+                }
+            }
+        }
+
+        impls
+    }
+
+    /// Generate a `StepContext` impl for a context type.
+    ///
+    /// Handles types like `WorldMut<'a>` by extracting the base path and
+    /// generating an impl with a wildcard lifetime.
+    fn generate_step_context_impl(
+        ctx_ty: &syn::Type,
+        world: &syn::Ident,
+        world_ty_gens: &syn::TypeGenerics<'_>,
+    ) -> Option<TokenStream> {
+        match ctx_ty {
+            syn::Type::Path(type_path) => {
+                // Type like `WorldMut<'a>` - extract base path
+                let path = &type_path.path;
+
+                // Check if it has generic arguments (lifetime)
+                if let Some(last_segment) = path.segments.last() {
+                    if matches!(last_segment.arguments, syn::PathArguments::AngleBracketed(_)) {
+                        // Has generics - generate impl with wildcard lifetime
+                        // e.g., `impl StepContext for WorldMut<'_>`
+                        let base_path = {
+                            let mut p = path.clone();
+                            if let Some(seg) = p.segments.last_mut() {
+                                seg.arguments = syn::PathArguments::AngleBracketed(
+                                    syn::AngleBracketedGenericArguments {
+                                        colon2_token: None,
+                                        lt_token: Default::default(),
+                                        args: std::iter::once(syn::GenericArgument::Lifetime(
+                                            syn::Lifetime::new("'_", proc_macro2::Span::call_site()),
+                                        ))
+                                        .collect(),
+                                        gt_token: Default::default(),
+                                    },
+                                );
+                            }
+                            p
+                        };
+
+                        return Some(quote! {
+                            #[automatically_derived]
+                            impl ::namako::codegen::StepContext for #base_path {
+                                type World = #world #world_ty_gens;
+                            }
+                        });
+                    }
+                }
+
+                // No generics - generate simple impl
+                Some(quote! {
+                    #[automatically_derived]
+                    impl ::namako::codegen::StepContext for #path {
+                        type World = #world #world_ty_gens;
+                    }
+                })
+            }
+            // Reference types are not wrapper types, skip them
+            syn::Type::Reference(_) => None,
+            _ => None,
         }
     }
 

@@ -4,5 +4,5 @@ Feature: ambiguous
       Step failed:
       Defined: tests/features/output/ambiguous_step.feature:3:5
       Step match is ambiguous: Possible matches:
-      ^foo is ((?:-?\d+)|(?:\d+)) ambiguous$ --> tests/output.rs:26:1
-      ^foo is ((?:-?\d+)|(?:\d+)) ambiguous$ --> tests/output.rs:43:1
+      ^foo is ((?:-?\d+)|(?:\d+)) ambiguous$ --> tests/output.rs:23:1
+      ^foo is ((?:-?\d+)|(?:\d+)) ambiguous$ --> tests/output.rs:40:1
