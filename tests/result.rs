@@ -12,10 +12,12 @@ struct WRef<'a>(&'a W);
 
 impl<'a> WMut<'a> {
     fn new(world: &'a mut W) -> Self { Self(world) }
+    fn world(&mut self) -> &mut W { self.0 }
 }
 
 impl<'a> WRef<'a> {
     fn new(world: &'a W) -> Self { Self(world) }
+    fn world(&self) -> &W { self.0 }
 }
 
 impl<'a> StepContext for WMut<'a> { type World = W; }
@@ -35,23 +37,27 @@ impl Assertable for W {
 
 #[given("ok")]
 #[when("ok")]
-fn ok(_: WMut) -> Result<(), &'static str> {
+fn ok(mut ctx: WMut) -> Result<(), &'static str> {
+    let _ = ctx.world();
     Ok(())
 }
 
 #[then("ok")]
-fn then_ok(_: WRef) -> Result<(), &'static str> {
+fn then_ok(ctx: WRef) -> Result<(), &'static str> {
+    let _ = ctx.world();
     Ok(())
 }
 
 #[given("error")]
 #[when("error")]
-fn error(_: WMut) -> Result<(), &'static str> {
+fn error(mut ctx: WMut) -> Result<(), &'static str> {
+    let _ = ctx.world();
     Err("error")
 }
 
 #[then("error")]
-fn then_error(_: WRef) -> Result<(), &'static str> {
+fn then_error(ctx: WRef) -> Result<(), &'static str> {
+    let _ = ctx.world();
     Err("error")
 }
 

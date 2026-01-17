@@ -20,11 +20,17 @@ impl<'a> WorldMut<'a> {
     fn new(world: &'a mut World) -> Self {
         Self(world)
     }
+    fn world(&mut self) -> &mut World {
+        self.0
+    }
 }
 
 impl<'a> WorldRef<'a> {
     fn new(world: &'a World) -> Self {
         Self(world)
+    }
+    fn world(&self) -> &World {
+        self.0
     }
 }
 
@@ -62,12 +68,14 @@ impl Assertable for World {
 
 #[given("{int} < 10")]
 #[when("{int} < 10")]
-fn step(_: WorldMut, num: usize) {
+fn step(mut ctx: WorldMut, num: usize) {
+    let _ = ctx.world();
     assert!(num < 10, "not filtered");
 }
 
 #[then("{int} < 10")]
-fn then_step(_: WorldRef, num: usize) {
+fn then_step(ctx: WorldRef, num: usize) {
+    let _ = ctx.world();
     assert!(num < 10, "not filtered");
 }
 

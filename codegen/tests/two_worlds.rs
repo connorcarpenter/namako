@@ -22,8 +22,13 @@ pub struct FirstWorldMut<'a>(&'a mut FirstWorld);
 #[derive(Clone, Copy)]
 pub struct FirstWorldRef<'a>(&'a FirstWorld);
 
-impl<'a> FirstWorldMut<'a> { fn new(world: &'a mut FirstWorld) -> Self { Self(world) } }
-impl<'a> FirstWorldRef<'a> { fn new(world: &'a FirstWorld) -> Self { Self(world) } }
+impl<'a> FirstWorldMut<'a> {
+    fn new(world: &'a mut FirstWorld) -> Self { Self(world) }
+}
+impl<'a> FirstWorldRef<'a> {
+    fn new(world: &'a FirstWorld) -> Self { Self(world) }
+    fn world(&self) -> &FirstWorld { self.0 }
+}
 impl<'a> StepContext for FirstWorldMut<'a> { type World = FirstWorld; }
 impl<'a> StepContext for FirstWorldRef<'a> { type World = FirstWorld; }
 
@@ -45,8 +50,13 @@ pub struct SecondWorldMut<'a>(&'a mut SecondWorld);
 #[derive(Clone, Copy)]
 pub struct SecondWorldRef<'a>(&'a SecondWorld);
 
-impl<'a> SecondWorldMut<'a> { fn new(world: &'a mut SecondWorld) -> Self { Self(world) } }
-impl<'a> SecondWorldRef<'a> { fn new(world: &'a SecondWorld) -> Self { Self(world) } }
+impl<'a> SecondWorldMut<'a> {
+    fn new(world: &'a mut SecondWorld) -> Self { Self(world) }
+}
+impl<'a> SecondWorldRef<'a> {
+    fn new(world: &'a SecondWorld) -> Self { Self(world) }
+    fn world(&self) -> &SecondWorld { self.0 }
+}
 impl<'a> StepContext for SecondWorldMut<'a> { type World = SecondWorld; }
 impl<'a> StepContext for SecondWorldRef<'a> { type World = SecondWorld; }
 
@@ -93,10 +103,14 @@ fn test_foo_is_not_bar_first(_w: FirstWorldMut, _foo: String, _bar: String) {}
 fn test_write_first(_w: FirstWorldMut, _what: String, _filename: String) {}
 
 #[then("the file {string} should contain {string}")]
-fn test_read_first(_w: FirstWorldRef, _inputs: &[String]) {}
+fn test_read_first(w: FirstWorldRef, _inputs: &[String]) {
+    let _ = w.world();
+}
 
 #[then("{string} contains {string}")]
-fn test_read_slice_first(_w: FirstWorldRef, _inputs: &[String]) {}
+fn test_read_slice_first(w: FirstWorldRef, _inputs: &[String]) {
+    let _ = w.world();
+}
 
 #[given("{word} is {int}")]
 #[when("{word} is {int}")]
@@ -128,10 +142,14 @@ fn test_foo_is_not_bar_second(_w: SecondWorldMut, _foo: String, _bar: String) {}
 fn test_write_second(_w: SecondWorldMut, _what: String, _filename: String) {}
 
 #[then("the file {string} should contain {string}")]
-fn test_read_second(_w: SecondWorldRef, _inputs: &[String]) {}
+fn test_read_second(w: SecondWorldRef, _inputs: &[String]) {
+    let _ = w.world();
+}
 
 #[then("{string} contains {string}")]
-fn test_read_slice_second(_w: SecondWorldRef, _inputs: &[String]) {}
+fn test_read_slice_second(w: SecondWorldRef, _inputs: &[String]) {
+    let _ = w.world();
+}
 
 
 #[tokio::main]

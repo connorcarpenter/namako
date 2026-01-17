@@ -3,7 +3,7 @@ use std::{convert::Infallible, str::FromStr};
 use namako::{
     Parameter, StatsWriter as _, World,
     codegen::{AssertOutcome, Assertable, StepContext},
-    given,
+    given, then,
 };
 
 // Context wrapper types
@@ -12,8 +12,14 @@ struct WMut<'a>(&'a mut W);
 #[derive(Clone, Copy)]
 struct WRef<'a>(&'a W);
 
-impl<'a> WMut<'a> { fn new(world: &'a mut W) -> Self { Self(world) } }
-impl<'a> WRef<'a> { fn new(world: &'a W) -> Self { Self(world) } }
+impl<'a> WMut<'a> {
+    fn new(world: &'a mut W) -> Self { Self(world) }
+    fn world(&mut self) -> &mut W { self.0 }
+}
+impl<'a> WRef<'a> {
+    fn new(world: &'a W) -> Self { Self(world) }
+    fn world(&self) -> &W { self.0 }
+}
 impl<'a> StepContext for WMut<'a> { type World = W; }
 impl<'a> StepContext for WRef<'a> { type World = W; }
 
@@ -47,14 +53,21 @@ impl FromStr for Param {
 
 #[given("regex: int: {param}")]
 #[given("expr: int: {param}")]
-fn assert_int(_: WMut, v: Param) {
+fn assert_int(mut ctx: WMut, v: Param) {
+    let _ = ctx.world();
     assert_eq!(v, Param::Int(42));
 }
 
 #[given("regex: quoted: {param}")]
 #[given("expr: quoted: {param}")]
-fn assert_quoted(_: WMut, v: Param) {
+fn assert_quoted(mut ctx: WMut, v: Param) {
+    let _ = ctx.world();
     assert_eq!(v, Param::Quoted("inner".to_owned()));
+}
+
+#[then("params verified")]
+fn then_verified(ctx: WRef) {
+    let _ = ctx.world();
 }
 
 #[derive(Clone, Copy, Debug, Default, World)]

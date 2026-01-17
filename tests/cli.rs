@@ -4,7 +4,7 @@ use clap::Parser;
 use namako::{
     World as _, cli,
     codegen::{AssertOutcome, Assertable, StepContext},
-    given,
+    given, then,
 };
 use futures::FutureExt as _;
 use serial_test::{parallel, serial};
@@ -32,8 +32,14 @@ struct WorldMut<'a>(&'a mut World);
 #[derive(Clone, Copy)]
 struct WorldRef<'a>(&'a World);
 
-impl<'a> WorldMut<'a> { fn new(world: &'a mut World) -> Self { Self(world) } }
-impl<'a> WorldRef<'a> { fn new(world: &'a World) -> Self { Self(world) } }
+impl<'a> WorldMut<'a> {
+    fn new(world: &'a mut World) -> Self { Self(world) }
+    fn world(&mut self) -> &mut World { self.0 }
+}
+impl<'a> WorldRef<'a> {
+    fn new(world: &'a World) -> Self { Self(world) }
+    fn world(&self) -> &World { self.0 }
+}
 impl<'a> StepContext for WorldMut<'a> { type World = World; }
 impl<'a> StepContext for WorldRef<'a> { type World = World; }
 
@@ -54,8 +60,14 @@ impl Assertable for World {
 struct World;
 
 #[given("an invalid step")]
-fn invalid_step(_world: WorldMut) {
+fn invalid_step(mut ctx: WorldMut) {
+    let _ = ctx.world();
     assert!(false);
+}
+
+#[then("cli verified")]
+fn then_verified(ctx: WorldRef) {
+    let _ = ctx.world();
 }
 
 // This test uses a subcommand with the global option `--tags` to filter on two
