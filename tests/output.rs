@@ -1,18 +1,27 @@
-use std::{borrow::Cow, fmt::Debug, mem, sync::LazyLock};
+use std::{borrow::Cow, fmt::Debug, mem, sync::LazyLock, cell::RefCell};
 
 use namako::{Event, Writer, cli, event, given, parser, then, when};
 use regex::Regex;
 
 #[derive(Debug, Default, namako::World)]
-struct World(usize);
+struct World(RefCell<usize>);
 
 #[given("foo is {int}")]
 #[given("foo is {int} ambiguous")]
 #[when("foo is {int}")]
-#[then("foo is {int}")]
 fn step(w: &mut World, num: usize) {
-    assert_eq!(w.0, num);
-    w.0 += 1;
+    check_and_inc(w, num);
+}
+
+#[then("foo is {int}")]
+fn then_step(w: &World, num: usize) {
+    check_and_inc(w, num);
+}
+
+fn check_and_inc(w: &World, num: usize) {
+    let mut val = w.0.borrow_mut();
+    assert_eq!(*val, num);
+    *val += 1;
 }
 
 #[given("foo is {int} ambiguous")]

@@ -74,10 +74,16 @@ fn test_return_result_write(
 
 #[then("the file {string} should contain {string}")]
 fn test_return_result_read(
-    w: &mut MyWorld,
+    w: &MyWorld,
     filename: String,
     what: String,
 ) -> io::Result<()> {
+    // Can't mutate, but we don't need to actually read from immutable world struct
+    // The previous code read mutable world to get 'dir', we need that immutable or via interior mutability.
+    // 'dir' is TemporaryDirectory which is not Copy.
+    // Let's assume MyWorld definition allows immutable access OR we change MyWorld for this test.
+
+    // BUT WAIT, MyWorld is defined in this file. Let's check MyWorld definition.
     let mut path = w.dir.path().to_path_buf();
     path.push(filename);
 
@@ -88,7 +94,7 @@ fn test_return_result_read(
 
 #[then("{string} contains {string}")]
 fn test_return_result_read_slice(
-    w: &mut MyWorld,
+    w: &MyWorld,
     inputs: &[String],
 ) -> io::Result<()> {
     let mut path = w.dir.path().to_path_buf();

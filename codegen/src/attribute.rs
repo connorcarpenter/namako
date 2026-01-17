@@ -6,11 +6,7 @@ use cucumber_expressions::{Expression, Parameter, SingleExpression, Spanned};
 use inflections::case::to_pascal_case;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{
-    parse::{Parse, ParseStream},
-    parse_quote,
-    spanned::Spanned as _,
-};
+use syn::{parse::{Parse, ParseStream}, parse_quote, spanned::Spanned as _, Signature};
 
 /// Names of default [`Parameter`]s.
 const DEFAULT_PARAMETERS: [&str; 5] = ["int", "float", "word", "string", ""];
@@ -864,7 +860,7 @@ fn find_first_slice(sig: &syn::Signature) -> Option<&syn::TypePath> {
 }
 
 /// Parses `namako::World` from arguments of the function signature.
-fn parse_world_from_args(sig: &syn::Signature, attr_name: &str) -> syn::Result<&syn::TypePath> {
+fn parse_world_from_args<'a>(sig: &'a Signature, attr_name: &str) -> syn::Result<&'a syn::TypePath> {
     sig.inputs
         .first()
         .ok_or_else(|| sig.ident.span())

@@ -6,9 +6,13 @@ use tempfile::NamedTempFile;
 
 #[given("{int} sec(s)")]
 #[when("{int} sec(s)")]
-#[then("{int} sec(s)")]
 fn step(world: &mut World) {
     world.0 += 1;
+    assert!(world.0 < 4, "Too much!");
+}
+
+#[then("{int} sec(s)")]
+fn then_step(world: &World) {
     assert!(world.0 < 4, "Too much!");
 }
 

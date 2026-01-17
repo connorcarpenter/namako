@@ -6,8 +6,12 @@ use namako::{
 
 #[given("{int} < 10")]
 #[when("{int} < 10")]
-#[then("{int} < 10")]
 fn step(_: &mut World, num: usize) {
+    assert!(num < 10, "not filtered");
+}
+
+#[then("{int} < 10")]
+fn then_step(_: &World, num: usize) {
     assert!(num < 10, "not filtered");
 }
 

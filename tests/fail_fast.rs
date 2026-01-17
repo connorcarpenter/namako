@@ -4,12 +4,12 @@ use namako::{World as _, runner, then, writer::summarize::Stats};
 struct World;
 
 #[then("step panics")]
-fn step_panics(_: &mut World) {
+fn step_panics(_: &World) {
     panic!("this is a panic message");
 }
 
 #[then("nothing happens")]
-fn nothing_happens(_: &mut World) {
+fn nothing_happens(_: &World) {
     // noop
 }
 

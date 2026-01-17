@@ -46,10 +46,10 @@ fn test_foo_is_not_bar_first(_w: &mut FirstWorld, _foo: String, _bar: String) {}
 fn test_write_first(_w: &mut FirstWorld, _what: String, _filename: String) {}
 
 #[then("the file {string} should contain {string}")]
-fn test_read_first(_w: &mut FirstWorld, _filename: String, _what: String) {}
+fn test_read_first(_w: &FirstWorld, _filename: String, _what: String) {}
 
 #[then("{string} contains {string}")]
-fn test_read_slice_first(_w: &mut FirstWorld, _inputs: &[String]) {}
+fn test_read_slice_first(_w: &FirstWorld, _inputs: &[String]) {}
 
 #[given("{word} is {int}")]
 #[when("{word} is {int}")]
@@ -86,10 +86,10 @@ fn test_foo_is_not_bar_second(_w: &mut SecondWorld, _foo: String, _bar: String) 
 fn test_write_second(_w: &mut SecondWorld, _what: String, _filename: String) {}
 
 #[then("the file {string} should contain {string}")]
-fn test_read_second(_w: &mut SecondWorld, _filename: String, _what: String) {}
+fn test_read_second(_w: &SecondWorld, _filename: String, _what: String) {}
 
 #[then("{string} contains {string}")]
-fn test_read_slice_second(_w: &mut SecondWorld, _inputs: &[String]) {}
+fn test_read_slice_second(_w: &SecondWorld, _inputs: &[String]) {}
 
 
 #[tokio::main]

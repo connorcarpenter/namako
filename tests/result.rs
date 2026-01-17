@@ -2,15 +2,23 @@ use namako::{StatsWriter as _, World, given, then, when};
 
 #[given("ok")]
 #[when("ok")]
-#[then("ok")]
 fn ok(_: &mut W) -> Result<(), &'static str> {
+    Ok(())
+}
+
+#[then("ok")]
+fn then_ok(_: &W) -> Result<(), &'static str> {
     Ok(())
 }
 
 #[given("error")]
 #[when("error")]
-#[then("error")]
 fn error(_: &mut W) -> Result<(), &'static str> {
+    Err("error")
+}
+
+#[then("error")]
+fn then_error(_: &W) -> Result<(), &'static str> {
     Err("error")
 }
 
