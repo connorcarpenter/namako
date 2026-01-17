@@ -147,11 +147,10 @@ impl Step {
 
         // Context-first ABI: construct ctx from world and pass to user fn
         // Given/When: use ctx_mut() for mutable context
-        // Then: use ctx_ref() for read/assertion context (still &mut self internally)
+        // Then: uses polling loop with ExpectCtx wrapping (handled separately below)
         let ctx_construction = if self.attr_name == "then" {
-            quote! {
-                let mut __namako_ctx_arg = ::namako::World::ctx_ref(__namako_world);
-            }
+            // For Then steps, ctx_construction is handled inside the polling loop
+            quote! {}
         } else {
             quote! {
                 let mut __namako_ctx_arg = ::namako::World::ctx_mut(__namako_world);
@@ -159,10 +158,82 @@ impl Step {
         };
 
         // Pass context as first arg to user function
+        // Given/When: pass as &mut reference
+        // Then: pass as & reference (handled in Then-specific code)
         let ctx_arg = if self.attr_name == "then" {
             quote! { __namako_ctx_arg }
         } else {
-            quote! { __namako_ctx_arg }
+            quote! { &mut __namako_ctx_arg }
+        };
+
+        // Generate different func body for Then vs Given/When
+        let func_body = if self.attr_name == "then" {
+            // Then steps: polling loop with ExpectCtx wrapping
+            // User function takes &TestWorldRef and returns () or ExpectResult<()>
+            // Note: use original_ctx_type (without 'static) for constructor call
+            let ctx_type_path = &original_ctx_type.path;
+            quote! {
+                func: |__namako_world, __namako_ctx| {
+                    ::std::boxed::Box::pin(async move {
+                        #addon_parsing
+
+                        // Get mutable scenario from world
+                        let __namako_scenario = __namako_world.scenario_mut();
+                        const __NAMAKO_MAX_TICKS: usize = 100;
+
+                        for __namako_tick in 0..__NAMAKO_MAX_TICKS {
+                            // Use catch_unwind to treat panics as "not yet"
+                            let __namako_result = ::std::panic::catch_unwind(
+                                ::std::panic::AssertUnwindSafe(|| {
+                                    __namako_scenario.expect_once(|__namako_exp_ctx| {
+                                        // Wrap ExpectCtx in TestWorldRef for user function
+                                        let __namako_ctx_arg = #ctx_type_path::new(__namako_exp_ctx);
+
+                                        // Call user function - if it returns, it passed
+                                        // If it panics, catch_unwind will handle it
+                                        let _ = #func_name(&#ctx_arg, #func_args);
+
+                                        ::naia_test_harness::ExpectResult::Passed(())
+                                    })
+                                })
+                            );
+
+                            match __namako_result {
+                                Ok(::naia_test_harness::ExpectResult::Passed(())) => return,
+                                Ok(::naia_test_harness::ExpectResult::NotYet) => continue,
+                                Ok(::naia_test_harness::ExpectResult::Failed(msg)) => {
+                                    panic!("Then step failed: {}", msg);
+                                }
+                                Err(_panic) => {
+                                    // Panic means assertion failed - retry next tick
+                                    continue;
+                                }
+                            }
+                        }
+
+                        // If we get here, the step timed out
+                        panic!(
+                            "Then step '{}' timed out after {} ticks",
+                            #expression,
+                            __NAMAKO_MAX_TICKS
+                        );
+                    })
+                },
+            }
+        } else {
+            // Given/When steps: simple context construction and call
+            quote! {
+                func: |__namako_world, __namako_ctx| {
+                    let f = async move {
+                        #addon_parsing
+                        #ctx_construction
+                        let _ = #func_name(#ctx_arg, #func_args)
+                            #awaiting
+                            #unwrapping;
+                    };
+                    ::std::boxed::Box::pin(f)
+                },
+            }
         };
 
         Ok(quote! {
@@ -201,16 +272,7 @@ impl Step {
                         > = ::std::sync::LazyLock::new(|| { #regex });
                         LAZY.clone()
                     },
-                    func: |__namako_world, __namako_ctx| {
-                        let f = async move {
-                            #addon_parsing
-                            #ctx_construction
-                            let _ = #func_name(#ctx_arg, #func_args)
-                                #awaiting
-                                #unwrapping;
-                        };
-                        ::std::boxed::Box::pin(f)
-                    },
+                    #func_body
                 }
             });
         })
@@ -909,11 +971,11 @@ fn find_first_slice(sig: &syn::Signature) -> Option<&syn::TypePath> {
 /// Parses the context type from the first argument of a step function.
 ///
 /// For context-first ABI:
-/// - Given/When: first arg is `mut CtxMut` (by value, mutable binding)
-/// - Then: first arg is `CtxRef` (by value)
+/// - Given/When: first arg is `ctx: &mut CtxMut` (mutable reference)
+/// - Then: first arg is `ctx: &CtxRef` (shared reference)
 ///
 /// This function enforces the "no explicit lifetimes" ergonomics rule:
-/// - Users must write `TestWorldMut`, NOT `TestWorldMut<'a>` or `TestWorldMut<'_>`
+/// - Users must write `&mut TestWorldMut`, NOT `&mut TestWorldMut<'a>` or `&mut TestWorldMut<'_>`
 /// - The signature rewriting in `rewrite_signature_with_lifetime` injects the lifetime
 ///
 /// Returns the context type path (must have no generics). The World type is derived via the
@@ -950,17 +1012,68 @@ fn parse_context_type_from_args<'a>(sig: &'a Signature, attr_name: &str) -> syn:
         }
         Ok(p)
     } else if let syn::Type::Reference(r) = typed_arg.ty.as_ref() {
-        // Reject reference types - users should use the context types
-        Err(syn::Error::new(
-            r.span(),
-            "step functions must use context types (`TestWorldMut` / `TestWorldRef`), \
-             not references like `&mut TestWorld`",
-        ))
+        // For Then steps: allow `&TestWorldRef` (immutable reference to context)
+        // For Given/When steps: allow `&mut TestWorldMut` (mutable reference to context)
+        if attr_name == "then" {
+            // Then steps accept &TestWorldRef (immutable)
+            if r.mutability.is_some() {
+                return Err(syn::Error::new(
+                    r.span(),
+                    "Then steps should use `&TestWorldRef`, not `&mut TestWorldRef`",
+                ));
+            }
+            // Extract the inner type path
+            if let syn::Type::Path(inner_p) = r.elem.as_ref() {
+                // Check no generics on inner type
+                if let Some(last_segment) = inner_p.path.segments.last() {
+                    if !last_segment.arguments.is_empty() {
+                        return Err(syn::Error::new(
+                            last_segment.arguments.span(),
+                            "context type must not have explicit lifetimes or generics; \
+                             write `&TestWorldRef`, not `&TestWorldRef<'a>`",
+                        ));
+                    }
+                }
+                Ok(inner_p)
+            } else {
+                Err(syn::Error::new(
+                    r.elem.span(),
+                    "Then steps should use `&TestWorldRef`",
+                ))
+            }
+        } else {
+            // Given/When steps: allow `&mut TestWorldMut` (mutable reference)
+            if r.mutability.is_none() {
+                return Err(syn::Error::new(
+                    r.span(),
+                    "Given/When steps should use `&mut TestWorldMut`, not `&TestWorldMut`",
+                ));
+            }
+            // Extract the inner type path
+            if let syn::Type::Path(inner_p) = r.elem.as_ref() {
+                // Check no generics on inner type
+                if let Some(last_segment) = inner_p.path.segments.last() {
+                    if !last_segment.arguments.is_empty() {
+                        return Err(syn::Error::new(
+                            last_segment.arguments.span(),
+                            "context type must not have explicit lifetimes or generics; \
+                             write `&mut TestWorldMut`, not `&mut TestWorldMut<'a>`",
+                        ));
+                    }
+                }
+                Ok(inner_p)
+            } else {
+                Err(syn::Error::new(
+                    r.elem.span(),
+                    "Given/When steps should use `&mut TestWorldMut`",
+                ))
+            }
+        }
     } else {
         let msg = if attr_name == "then" {
-            "first function argument expected to be `TestWorldRef` (no generics) for `Then` steps"
+            "first function argument expected to be `&TestWorldRef` (no generics) for `Then` steps"
         } else {
-            "first function argument expected to be `mut TestWorldMut` (no generics) for `Given`/`When` steps"
+            "first function argument expected to be `ctx: &mut TestWorldMut` (no generics) for `Given`/`When` steps"
         };
         Err(syn::Error::new(typed_arg.span(), msg))
     }
@@ -972,6 +1085,11 @@ fn parse_context_type_from_args<'a>(sig: &'a Signature, attr_name: &str) -> syn:
 ///   `fn step(mut ctx: TestWorldMut, name: String) { ... }`
 /// Into:
 ///   `fn step<'__ctx>(mut ctx: TestWorldMut<'__ctx>, name: String) { ... }`
+///
+/// For Then steps with references:
+///   `fn step(ctx: &TestWorldRef, name: String) { ... }`
+/// Into:
+///   `fn step<'__ctx>(ctx: &TestWorldRef<'__ctx>, name: String) { ... }`
 ///
 /// This provides ergonomic step authoring without requiring explicit lifetimes.
 fn rewrite_signature_with_lifetime(func: &mut syn::ItemFn) -> syn::Result<()> {
@@ -987,12 +1105,20 @@ fn rewrite_signature_with_lifetime(func: &mut syn::ItemFn) -> syn::Result<()> {
         }
     };
 
-    // Only rewrite if it's a plain type path (no generics)
-    // Note: typed_arg.ty is Box<Type>, as_mut() returns &mut Type
+    // Handle both Type::Path and Type::Reference
     let type_path = match typed_arg.ty.as_mut() {
         syn::Type::Path(p) => p,
+        syn::Type::Reference(r) => {
+            // For references like &TestWorldRef, we need to rewrite the inner type
+            if let syn::Type::Path(inner_p) = r.elem.as_mut() {
+                inner_p
+            } else {
+                // Not a path inside the reference
+                return Ok(());
+            }
+        }
         _ => {
-            // Not a type path - this might be a reference type which we reject elsewhere
+            // Not a type we handle
             return Ok(());
         }
     };
