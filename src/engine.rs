@@ -307,6 +307,11 @@ impl ResolutionEngine {
         );
 
         for scenario in &feature.scenarios {
+            // Skip deferred scenarios - they are excluded from the executable plan
+            if is_deferred_scenario(scenario) {
+                continue;
+            }
+
             // Derive scenario key (line is usize, convert to u32)
             let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
             let scenario_key = derive_scenario_key(path, line_u32);
@@ -343,6 +348,11 @@ impl ResolutionEngine {
             );
 
             for scenario in &rule.scenarios {
+                // Skip deferred scenarios - they are excluded from the executable plan
+                if is_deferred_scenario(scenario) {
+                    continue;
+                }
+
                 let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
                 let scenario_key = derive_scenario_key(path, line_u32);
 
@@ -535,6 +545,17 @@ fn resolve_effective_kind(keyword: &str, last_keyword: &mut &str) -> String {
         }
         _ => trimmed.to_string(),
     }
+}
+
+/// Checks if a scenario has the @Deferred tag and should be excluded from execution.
+///
+/// Per GOLD_PLAN, scenarios tagged with @Deferred are excluded from the executable
+/// plan but included in review as promotion candidates.
+fn is_deferred_scenario(scenario: &gherkin::Scenario) -> bool {
+    scenario.tags.iter().any(|tag| {
+        let tag_lower = tag.to_lowercase();
+        tag_lower == "deferred" || tag_lower == "@deferred"
+    })
 }
 
 /// Converts a cucumber expression to a regex pattern.
