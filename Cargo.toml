@@ -89,4 +89,4 @@ required-features = ["tracing"]
 harness = false
 
 [workspace]
-members = ["codegen", "cli"]
+members = ["codegen", "cli", "tesaki"]

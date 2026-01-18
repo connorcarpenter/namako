@@ -156,12 +156,12 @@ Contains all step binding functions.
 - Step functions use Namako step macros from `namako_codegen`
 - Depends on `naia_test_harness` to construct World and drive scenarios
 
-#### 3.2.3 `naia_npap` (bin)
+#### 3.2.3 `naia_npa` (bin)
 The NPAP adapter binary for Naia.
 - Links `naia_tests` so all bindings/registry/dispatch are present
 - Implements:
-  - `naia_npap manifest` — prints registry JSON
-  - `naia_npap run --plan ... --out ...` — executes resolved plan by `binding_id` only, emits `run_report`
+  - `naia_npa manifest` — prints registry JSON
+  - `naia_npa run --plan ... --out ...` — executes resolved plan by `binding_id` only, emits `run_report`
 
 ### 3.3 File Locations (Normative)
 
@@ -495,7 +495,7 @@ All artifacts MUST include:
 
 The adapter MUST implement:
 ```
-naia_npap manifest
+naia_npa manifest
 ```
 
 Returns the **semantic step registry** as JSON.
@@ -580,7 +580,7 @@ The `impl_hash` MUST be deterministic across builds on the same codebase:
 
 The adapter MUST implement:
 ```
-naia_npap run --plan <resolved_plan.json> --out <run_report.json>
+naia_npa run --plan <resolved_plan.json> --out <run_report.json>
 ```
 
 #### 6.3.1 Runtime Rules (Normative)
@@ -1327,7 +1327,7 @@ Any language ecosystem SHOULD follow this pattern (equivalent to Naia's Rust str
 |-----------|---------|----------------|
 | `<project>_test_harness` | World type + test helpers | `naia_test_harness` |
 | `<project>_tests` | Step definitions (one keyword + one string per step) | `naia_tests` |
-| `<project>_npap` | Adapter executable (`manifest` + `run`) | `naia_npap` |
+| `<project>_npap` | Adapter executable (`manifest` + `run`) | `naia_npa` |
 
 **Language-Specific Examples:**
 
@@ -1365,7 +1365,7 @@ The `namako.toml` file configures the adapter command for each project:
 
 ```toml
 # Rust (current Naia setup)
-adapter_cmd = ["cargo", "run", "-q", "-p", "naia_npap", "--"]
+adapter_cmd = ["cargo", "run", "-q", "-p", "naia_npa", "--"]
 
 # JavaScript/TypeScript (Node.js)
 adapter_cmd = ["node", "dist/myproject_namako.js"]

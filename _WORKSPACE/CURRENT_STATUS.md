@@ -18,7 +18,7 @@ Based on: Namako v2 "Autonomy" Sprint (Loop Enablement)
 ```
 naia/test/
 ├── harness/              # naia_test_harness lib (with TestWorldRef::server_observed)
-├── npap/                 # naia_npap adapter binary
+├── npa/                  # naia_npa adapter binary
 ├── specs/
 │   ├── features/         # 16 feature files (canonical contracts)
 │   │   ├── 00_common.feature             # 10 deferred scenarios (commented)
