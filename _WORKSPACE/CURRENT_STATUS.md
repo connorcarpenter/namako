@@ -153,7 +153,7 @@ v1.5 features are **IN PROGRESS** — per GOLD_PLAN.md §10.5.
 
 | Feature | Section | Status |
 |---------|---------|--------|
-| Explicit ID tags (@FID/@Rnn/@Snn) | §10.5.1 | 🔲 Not Started |
+| Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §10.5.1 | 🔲 Not Started |
 | Orphan binding hard error + `namako stub` | §10.5.2 | 🔲 Not Started |
 | `namako review` coverage enhancements | §10.5.3 | 🔲 Not Started |
 | Scenario fidelity packets (`namako explain`) | §10.5.4 | 🔲 Not Started |
@@ -268,7 +268,7 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 | Sprint | Focus | Status |
 |--------|-------|--------|
-| Sprint 1 | Explicit ID tags (@FID/@Rnn/@Snn) | 🔲 Not Started |
+| Sprint 1 | Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | 🔲 Not Started |
 | Sprint 2 | Orphan binding enforcement + `namako stub` | 🔲 Not Started |
 | Sprint 3 | Enhanced `namako review` packets | 🔲 Not Started |
 | Sprint 4 | Enhanced `namako explain` + `status` | 🔲 Not Started |

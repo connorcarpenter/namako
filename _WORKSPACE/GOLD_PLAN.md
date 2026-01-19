@@ -86,7 +86,7 @@ This document explicitly separates:
 |---------|---------------|----------------------|---------------------|
 | Scope | Minimum viable for Naia self-development | AI-driven autonomous development | Publish-grade hardening |
 | Timeline | ✅ Complete | Build now (immediate) | Build later (captured here) |
-| Identity stability | Expression-based binding IDs | Explicit ID tags (@FID/@Rnn/@Snn) | Refactor-stable explicit IDs |
+| Identity stability | Expression-based binding IDs | Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | Refactor-stable explicit IDs |
 | Feature hashing | Feature fingerprint (simpler) | Feature fingerprint | Full FeatureAstNorm |
 | Orphan policy | Warning only | Hard error + `namako stub` | Hard error + mitigation tools |
 | Encoding | Canonical JSON | Canonical JSON | CBOR profiles, conformance fixtures |
@@ -488,7 +488,7 @@ v1 MUST NOT require:
 | Deferred Feature | Rationale |
 |------------------|-----------|
 | Full FeatureAstNorm hashing | Simpler fingerprint is sufficient for v1 |
-| Explicit ID scheme (`@FID/@Rnn/@Snn/EID`) | Expression-based IDs are acceptable for v1 |
+| Explicit ID scheme (`@Feature/@Rule_nn/@Scenario_nn/EID`) | Expression-based IDs are acceptable for v1 |
 | Orphan binding hard errors | v1 MAY warn; v2+ makes it a hard error |
 | Tesaki work packets (review/explain/status JSON outputs) | Deferred to v2+ |
 | CBOR canonical encoding profiles | v1 uses canonical JSON; v2+ may migrate |
@@ -827,7 +827,7 @@ If two scenarios in a project compute the same `scenario_key`:
 - Lint MUST emit a **hard error**: `SCENARIO KEY COLLISION: <key>`
 - This indicates duplicate scenarios at the same location (should not happen) or a bug in key derivation
 
-> **v2+ Note:** Explicit identity tags (`@Snn`) may replace line-based keys for refactor stability.
+> **v2+ Note:** Explicit identity tags (`@Scenario_nn`) may replace line-based keys for refactor stability.
 
 ### 6.5 Execution Payload Contract (Normative)
 
@@ -1090,7 +1090,7 @@ v1 uses feature fingerprint (content hash) rather than FeatureAstNorm.
 
 ### 8.3 No Explicit Structural IDs
 
-v1 does not require `@FID`, `@Rnn`, `@Snn`, `EID` tags.
+v1 does not require `@Feature`, `@Rule_nn`, `@Scenario_nn`, `EID` tags.
 - Scenario identity derived from normalized relative path + line number (and Outline examples extensions) per §6.4.3
 - This is acceptable for v1 (self-development)
 - v2+ may enforce explicit IDs for refactor stability
@@ -1262,7 +1262,7 @@ This project has existing Markdown docs describing Naia behavior.
 
 | Feature | Source Section | Priority | Rationale |
 |---------|----------------|----------|-----------|
-| Explicit ID tags (@FID/@Rnn/@Snn) | §11.2 | HIGH | Identity survives refactoring; essential for autonomous spec management |
+| Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §11.2 | HIGH | Identity survives refactoring; essential for autonomous spec management |
 | Orphan binding hard error + `namako stub` | §11.3 | HIGH | Prevents dead code accumulation in bindings |
 | `namako review` coverage enhancements | §11.4 | HIGH | Rich work packets for Tesaki task selection |
 | Scenario fidelity packets (`namako explain`) | §11.5 | MEDIUM | AI-assisted "spirit of the spec" review |
@@ -1277,25 +1277,25 @@ v1.5 MUST support structural identity tags:
 
 | Tag | Applies To | Format | Example |
 |-----|-----------|--------|---------|
-| `@FID(name)` | Feature | Alphanumeric snake_case | `@FID(connection_lifecycle)` |
-| `@Rnn` | Rule | Numeric index (1-based) | `@R01`, `@R02` |
-| `@Snn` | Scenario | Numeric index (1-based) | `@S01`, `@S02` |
+| `@Feature(name)` | Feature | Alphanumeric snake_case | `@Feature(connection_lifecycle)` |
+| `@Rule_nn` | Rule | Numeric index (1-based) | `@Rule_01`, `@Rule_02` |
+| `@Scenario_nn` | Scenario | Numeric index (1-based) | `@Scenario_01`, `@Scenario_02` |
 | `EID` column | Examples row | String identifier | `EID: auth_success` |
 
 **Invariant (v1.5):**
-- Features MUST have `@FID(name)` tag
-- Rules MUST have `@Rnn` tag
-- Scenarios MUST have `@Snn` tag
+- Features MUST have `@Feature(name)` tag
+- Rules MUST have `@Rule_nn` tag
+- Scenarios MUST have `@Scenario_nn` tag
 - Example rows SHOULD have `EID` column (MUST for v2+)
 
 **Migration from v1:**
 - Add tags to all existing `.feature` files
-- Scenario keys will use `FID:Rnn:Snn` format instead of `path:Lnn`
+- Scenario keys will use `Feature:Rule_nn:Scenario_nn` format instead of `path:Lnn`
 - Bump identity (run `update-cert` after migration)
 
 **Derivation Rules:**
-- `scenario_key` = `FID + ":" + Rnn + ":" + Snn` (or `+ ":E" + EID` for outline rows)
-- Collision detection: duplicate `(FID, Rnn, Snn)` tuples → hard error
+- `scenario_key` = `Feature + ":" + Rule_nn + ":" + Scenario_nn` (or `+ ":E" + EID` for outline rows)
+- Collision detection: duplicate `(Feature, Rule_nn, Scenario_nn)` tuples → hard error
 
 ### 10.5.2 Orphan Bindings as Hard Error (v1.5, Normative)
 
@@ -1472,7 +1472,7 @@ The v1.5 system is complete when:
 
 | Criterion | Description |
 |-----------|-------------|
-| **Explicit IDs enforced** | All features require @FID/@Rnn/@Snn; scenario_key uses ID-based format |
+| **Explicit IDs enforced** | All features require @Feature/@Rule_nn/@Scenario_nn; scenario_key uses ID-based format |
 | **Orphan → hard error** | `namako lint` fails on orphan bindings; `namako stub` generates placeholders |
 | **Review packets enhanced** | All 5 packet sections present in `namako review` output |
 | **Explain packets complete** | `namako explain` outputs full fidelity packets |
@@ -1511,9 +1511,9 @@ This section captures all hardening features not required in v1/v1.5 but designe
 ### 11.2 Explicit Identity Tags
 
 **What it adds:**
-- `@FID(name)` on Features — explicit, refactor-stable feature identity
-- `@Rnn` on Rules — explicit rule identity
-- `@Snn` on Scenarios — explicit scenario identity
+- `@Feature(name)` on Features — explicit, refactor-stable feature identity
+- `@Rule_nn` on Rules — explicit rule identity
+- `@Scenario_nn` on Scenarios — explicit scenario identity
 - `EID` column in Scenario Outline examples — explicit row identity
 
 **Why it matters:**
@@ -1961,9 +1961,9 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| `@FID` feature identity | **DEFERRED** to v2+ | §11.2 |
-| `@Rnn` rule identity | **DEFERRED** to v2+ | §11.2 |
-| `@Snn` scenario identity | **DEFERRED** to v2+ | §11.2 |
+| `@Feature` feature identity | **DEFERRED** to v2+ | §11.2 |
+| `@Rule_nn` rule identity | **DEFERRED** to v2+ | §11.2 |
+| `@Scenario_nn` scenario identity | **DEFERRED** to v2+ | §11.2 |
 | `EID` example row identity | **DEFERRED** to v2+ | §11.2 |
 | Expression-based binding ID | **IN v1** | §4.2 |
 

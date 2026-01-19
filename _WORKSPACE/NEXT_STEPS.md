@@ -33,7 +33,7 @@
 
 | Feature | GOLD_PLAN Section | Priority | Status |
 |---------|-------------------|----------|--------|
-| Explicit ID tags (@FID/@Rnn/@Snn) | §10.5.1 | HIGH | 🔲 Not Started |
+| Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §10.5.1 | HIGH | 🔲 Not Started |
 | Orphan binding hard error + `namako stub` | §10.5.2 | HIGH | 🔲 Not Started |
 | `namako review` coverage enhancements | §10.5.3 | HIGH | 🔲 Not Started |
 | Scenario fidelity packets (`namako explain`) | §10.5.4 | MEDIUM | 🔲 Not Started |
@@ -45,8 +45,8 @@
 #### Sprint 1: Foundation — Explicit ID Tags
 **Duration:** 2-3 days
 
-1. **Update Gherkin parsing** to recognize `@FID(name)`, `@Rnn`, `@Snn` tags
-2. **Modify scenario_key derivation** to use `FID:Rnn:Snn` format
+1. **Update Gherkin parsing** to recognize `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` tags
+2. **Modify scenario_key derivation** to use `Feature:Rule_nn:Scenario_nn` format
 3. **Add validation** for missing/duplicate IDs
 4. **Migrate existing feature files** to use explicit IDs
 5. **Update certification** (run `update-cert`)
@@ -99,7 +99,7 @@
 
 | Criterion | Verification |
 |-----------|--------------|
-| Explicit IDs enforced | `namako lint` fails if @FID/@Rnn/@Snn missing |
+| Explicit IDs enforced | `namako lint` fails if @Feature/@Rule_nn/@Scenario_nn missing |
 | Orphan → hard error | `namako lint` fails on orphan bindings |
 | `namako stub` works | Can generate stub scenarios for orphans |
 | Review packets complete | All 5 sections present in JSON output |
@@ -250,7 +250,7 @@ For each harness enhancement:
 ### For AI Agent (v1.5 Implementation)
 
 **Current Phase: v1.5 Sprint 1 — Explicit ID Tags**
-1. Update engine.rs to parse @FID/@Rnn/@Snn tags
+1. Update engine.rs to parse @Feature/@Rule_nn/@Scenario_nn tags
 2. Modify scenario_key derivation to use ID-based format
 3. Add validation for missing/duplicate IDs
 4. Migrate all `.feature` files to use explicit IDs
@@ -273,7 +273,7 @@ Once MODE = CONSUMPTION:
 
 | Metric | Target |
 |--------|--------|
-| Explicit ID tags | All 16 feature files have @FID/@Rnn/@Snn |
+| Explicit ID tags | All 16 feature files have @Feature/@Rule_nn/@Scenario_nn |
 | Orphan enforcement | `namako lint` fails on orphans |
 | Review packets | All 5 sections implemented |
 | Explain packets | Full fidelity output |
