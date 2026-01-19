@@ -7,7 +7,7 @@ This file is a **15-second onramp**. All detailed information lives in the autho
 ## Before Any Work
 
 1. **Read `CURRENT_STATUS.md`** — Check MODE, Active FSM, Current Objective, Next Actions
-2. **Read `GOLD_PLAN.md`** — Understand layer boundaries (§2.3–§2.6), normative rules
+2. **Read `GOLD_PLAN.md`** — Understand layer boundaries (§2.3–§2.7), normative rules
 3. **Obey `SYSTEM.md`** — Hard constraints (no git ops, repo hygiene)
 
 ---

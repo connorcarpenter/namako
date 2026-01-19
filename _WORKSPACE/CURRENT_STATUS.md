@@ -9,8 +9,8 @@
 | Generated | 2026-01-19 |
 | Naia HEAD | `caa1c377` (modified) |
 | Namako HEAD | `57e4290` (modified) |
-| **MODE** | **BOOTSTRAP** |
-| **Active FSM** | **Bootstrap Loop** (per GOLD_PLAN §2.3.1) |
+| **MODE** | **CONSUMPTION** |
+| **Active FSM** | **Tesaki Product FSM** (per GOLD_PLAN §2.3.2) |
 
 ---
 
@@ -64,34 +64,47 @@ cargo run -p tesaki -- next \
 
 ## 3. Current Objective
 
-**Determinism/ordering @Deferred scenarios unblocked. Blocker classification and mode-aware filtering implemented.**
+**CONSUMPTION Mission 001: ProtocolMismatch contract end-to-end.**
+
+Drive the first CORE blocker through the full Tesaki Product FSM:
+1. Promote @Deferred scenario (remove tag)
+2. Implement missing step bindings
+3. Implement minimal Naia core changes (protocol versioning)
+4. Run gates until green
+5. Update baseline with governance
 
 ---
 
 ## 4. Next 3 Actions
 
-1. Verify all gates pass: `namako_ci.sh`, `determinism_check.sh`, `cargo test -p tesaki`
-2. Review OUTPUT.md for session summary
-3. Consider MODE=CONSUMPTION transition once CORE work is ready
+1. Implement step bindings for ProtocolMismatch scenario
+2. Implement Naia core protocol versioning in handshake
+3. Run gates and certify new baseline
 
 ---
 
 ## 5. Guardrails
 
-### BOOTSTRAP Allowed Edit Surface
+### CONSUMPTION Allowed Edit Surface
 - `namako/**` (Namako CLI, Tesaki, engine crates)
 - `naia/test/**` (harness, tests, adapter `naia_npa`, specs, scripts)
 - `_WORKSPACE/**` (docs)
+- **Naia core** — but ONLY as required by current mission (ProtocolMismatch)
 
-### BOOTSTRAP Forbidden Edit Surface
-- `naia/client/**`
-- `naia/server/**`
-- `naia/shared/**`
-- `naia/adapters/**`
-- Any Naia crate outside `test/`
+### Mission-Scoped Core Edits (ProtocolMismatch)
+Allowed core changes for this mission:
+- Protocol ID computation (deterministic hash of registered types)
+- Handshake exchange of protocol ID
+- Comparison as early gate in handshake
+- Rejection classification with ProtocolMismatch reason
+
+### Forbidden (even in CONSUMPTION)
+- Unrelated refactors or "improvements"
+- Core changes not directly required by current mission
+- Any edits to unrelated features
 
 ### Violation Handling
-If forbidden surface is edited: **revert immediately** and record incident in `OUTPUT.md`.
+If unrelated core surface is edited: **revert immediately** and record incident in `OUTPUT.md`.
 
 ---
 

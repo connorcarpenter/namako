@@ -12,6 +12,7 @@
     - [2.4 Modes: BOOTSTRAP vs CONSUMPTION](#24-modes-bootstrap-vs-consumption-normative)
     - [2.5 Bootstrap Exit Criteria](#25-bootstrap-exit-criteria-normative)
     - [2.6 Consumption Entry Criteria](#26-consumption-entry-criteria-normative)
+    - [2.7 First CONSUMPTION Mission Template](#27-first-consumption-mission-template-normative)
 3. [Canonical Repo & Crate Architecture](#part-3-canonical-repo--crate-architecture)
 4. [Step Macro UX and Binding Identity](#part-4-step-macro-ux-and-binding-identity)
     - [4.4 v1 Binding ABI](#44-v1-binding-abi-normative)
@@ -191,6 +192,25 @@ The system transitions from `MODE=BOOTSTRAP` to `MODE=CONSUMPTION` only when ALL
 Until that declaration:
 - All autonomous loops MUST stay within BOOTSTRAP allowed surfaces
 - Any drift into Naia core is a violation requiring revert
+
+### 2.7 First CONSUMPTION Mission Template (Normative)
+
+When transitioning from BOOTSTRAP to CONSUMPTION, the first mission SHOULD follow this template:
+
+1. **Select ONE CORE blocker** from the promotion candidates
+2. **Define the minimal observable contract:**
+   - What MUST become observable (client events, server state)
+   - What MUST NOT happen (panic, ambiguous errors)
+   - Minimal implementation boundaries (no unrelated refactors)
+3. **Drive end-to-end through the Tesaki Product FSM:**
+   - Promote the @Deferred scenario (remove tag)
+   - Implement missing step bindings
+   - Implement minimal Naia core changes
+   - Run gates until green
+   - Update baseline with governance
+4. **Keep scope minimal:** One scenario, one mission, no scope creep
+
+This template ensures controlled, incremental expansion of the certified surface.
 
 ---
 
