@@ -1,7 +1,7 @@
 # CURRENT_STATUS.md — GOLD_PLAN v1 Dashboard
 
-Generated: 2026-01-18 (Final Update by Opus)
-Based on: Namako v2 "Autonomy" Sprint (Loop Enablement) + Failure Targeting
+Generated: 2026-01-19 (Updated by Opus after Promotion Sprint)
+Based on: Namako v2 "Autonomy" Sprint + Common Definitions Promotion
 
 ---
 
@@ -12,8 +12,8 @@ Based on: Namako v2 "Autonomy" Sprint (Loop Enablement) + Failure Targeting
 | Naia HEAD | `caa1c377` (modified) |
 | Namako HEAD | `57e4290` (modified) |
 | Pipeline Status | **GREEN** (Lint + Run + Verify all pass) |
-| Active Scenarios | **23 executable** |
-| Promotion Candidates | **8** (from 00_common.feature, all need new bindings) |
+| Active Scenarios | **28 executable** (+5 from previous) |
+| Promotion Candidates | **3** (from 00_common.feature, remaining @Deferred) |
 
 ### Namako Integration Layout (`naia/test/`)
 ```
@@ -22,7 +22,7 @@ naia/test/
 ├── npa/                  # naia_npa adapter binary (renamed from npap)
 ├── specs/
 │   ├── features/         # 16 feature files (canonical contracts)
-│   │   ├── 00_common.feature             # 8 @Deferred scenarios
+│   │   ├── 00_common.feature             # 5 active + 3 @Deferred scenarios
 │   │   ├── 01_connection_lifecycle.feature # 14 active scenarios
 │   │   ├── smoke.feature                 # 9 active scenarios
 │   │   └── [02-14]...feature             # Pruned (0 scenarios)
@@ -33,6 +33,10 @@ naia/test/
 │   │   └── tesaki_loop.sh                # V2 NEXT_TASK.md Generator
 │   └── certification.json                # Certified baseline (UPDATED)
 └── tests/                # naia_tests step bindings lib
+    └── src/steps/
+        ├── smoke.rs                      # Basic smoke test bindings
+        ├── connection.rs                 # Connection lifecycle bindings
+        └── common.rs                     # NEW: Common contract bindings
 ```
 
 ---
@@ -43,8 +47,8 @@ naia/test/
 
 | Step | Result | Notes |
 |------|--------|-------|
-| Lint | ✅ PASS | Resolved 23 scenarios, all steps bound |
-| Run  | ✅ PASS | All 23 scenarios passed execution |
+| Lint | ✅ PASS | Resolved 28 scenarios, 120 steps bound |
+| Run  | ✅ PASS | All 28 scenarios passed execution |
 | Verify | ✅ PASS | Baseline matches current state |
 
 **Stability:** CI passed twice consecutively. Determinism check passes.
@@ -85,7 +89,7 @@ naia/test/
 |--------------|---------------------|--------|
 | smoke.feature | 9 | ✅ Working |
 | 01_connection_lifecycle.feature | **14** | ✅ Working |
-| 00_common.feature | 0 | 8 @Deferred (promotion candidates) |
+| 00_common.feature | **5** | ✅ Working (+5 promoted) |
 | 02_transport.feature | 0 | Pruned |
 | 03_messaging.feature | 0 | Pruned |
 | 04_time_ticks_commands.feature | 0 | Pruned |
@@ -99,42 +103,60 @@ naia/test/
 | 12_server_events_api.feature | 0 | Pruned |
 | 13_client_events_api.feature | 0 | Pruned |
 | 14_world_integration.feature | 0 | Pruned |
-| **TOTAL** | **23** | 8 promotion candidates |
+| **TOTAL** | **28** | 3 remaining promotion candidates |
 
 ---
 
-## 5. Session Changes Summary
+## 5. Session Changes Summary (2026-01-19 Promotion Sprint)
 
-### Namako Changes (Uncommitted)
-- **cli/src/status.rs**: Added failure targeting (+167 lines)
-  - New `FailureRecord` struct with scenario_key, scenario_name, failure_kind, summary
-  - New `last_run_failures` field in `StatusOutput`
-  - `load_run_failures()` function to extract failures from run_report.json
-  - Helper functions: `extract_scenario_name()`, `classify_failure()`, `truncate_summary()`
-  - Unit tests for all new helper functions
+### Naia Test Harness Changes
+- **harness/src/harness/scenario.rs**: Added `OperationResult` struct and tracking API
+  - `last_operation_result: Option<OperationResult>` field in Scenario
+  - Methods: `record_ok()`, `record_err()`, `record_panic()`, `clear_operation_result()`
+  - Enables common outcome assertions (panic/Err detection)
 
-### Naia Changes (Uncommitted)
-- **certification.json**: Updated to current baseline
-- **scripts/*.sh**: Updated `npap` → `npa` paths
+- **harness/src/harness/mod.rs**: Exported `OperationResult`
+- **harness/src/lib.rs**: Exported `OperationResult`
+
+### Naia Tests Changes
+- **tests/src/steps/common.rs**: NEW - Common Definitions contract bindings (~600 lines)
+  - **Given steps**: `a test scenario`, `a connected client`, `a connected client with replicated entities`, `a client that was previously connected`, `the client disconnected`, `a test scenario with deterministic time`, `a deterministic network input sequence`
+  - **When steps**: `the client attempts an invalid API operation`, `the server receives a malformed packet`, `duplicate replication messages arrive`, `the client reconnects`, `the same API call sequence is executed twice`
+  - **Then steps**: `the operation returns an Err result`, `no panic occurs`, `the packet is dropped`, `they are handled idempotently`, `it receives fresh entity spawns for all in-scope entities`, `no prior session state is retained`, `the event emission order is identical both times`, `the entity spawn order is identical both times`
+
+- **tests/src/steps/mod.rs**: Added `pub mod common;`
+
+### Feature File Changes
+- **specs/features/00_common.feature**: Promoted 5 scenarios
+  - "API misuse returns Err not panic" - ACTIVE
+  - "Malformed inbound packet is dropped without panic" - ACTIVE
+  - "Duplicate replication messages do not panic" - ACTIVE
+  - "Reconnecting client receives fresh entity spawns" - ACTIVE
+  - "Identical inputs produce identical outputs" - ACTIVE
+  - Remaining @Deferred: 3 scenarios (protocol mismatch, per-tick determinism x2)
+
+### Certification Changes
+- **specs/certification.json**: Updated to new baseline (28 scenarios, 120 steps)
 
 ---
 
-## 6. Promotion Candidates (All Blocked)
+## 6. Remaining Promotion Candidates (3)
 
-From `namako review`, all 8 candidates have `reuse_score: 0`:
+After the 2026-01-19 Promotion Sprint, 3 scenarios remain @Deferred:
 
-1. Multiple commands for same tick apply in receipt order
-2. Same-tick scope operations resolve deterministically
-3. Identical inputs produce identical outputs
-4. Duplicate replication messages do not panic
-5. Malformed inbound packet is dropped without panic
-6. API misuse returns Err not panic
-7. Protocol mismatch produces ProtocolMismatch rejection
-8. Reconnecting client receives fresh entity spawns
+1. **Protocol mismatch produces ProtocolMismatch rejection**
+   - Requires: Protocol version mismatch setup, rejection handling
+   - Complexity: Medium (needs protocol negotiation testing)
 
-**Blocker:** All candidates require implementing new step bindings (no reuse).
+2. **Same-tick scope operations resolve deterministically**
+   - Requires: Multiple scope operations in same tick, determinism verification
+   - Complexity: Medium (needs concurrent operation testing)
 
-Per TODO.md §5.2: "If all candidates require net-new bindings (reuse_score=0), stop loop and record what was achieved."
+3. **Multiple commands for same tick apply in receipt order**
+   - Requires: Command ordering verification across multiple commands
+   - Complexity: Medium (needs tick buffer message ordering testing)
+
+**Status:** These 3 scenarios require more complex harness infrastructure for testing concurrent/ordered operations and protocol negotiation.
 
 ---
 
