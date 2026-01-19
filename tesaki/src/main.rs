@@ -67,6 +67,11 @@ enum Commands {
         /// Maximum number of autonomous update-cert operations per run (0 to disable)
         #[arg(long, default_value = "3", value_parser = clap::value_parser!(u32).range(0..=999))]
         max_cert_updates: u32,
+
+        /// Path to CURRENT_STATUS.md for mode-aware filtering (optional)
+        /// If provided, CORE blockers will be filtered in BOOTSTRAP mode.
+        #[arg(long)]
+        current_status: Option<PathBuf>,
     },
 }
 
@@ -117,6 +122,26 @@ struct CoverageSummary {
     deferred_items_total: u32,
 }
 
+/// Blocker classification matching namako review output.
+/// - HARNESS_ONLY: Can be unblocked with test harness changes only
+/// - CORE: Requires changes to the core codebase (blocked in BOOTSTRAP mode)
+/// - EXTERNAL: Requires external dependencies
+/// - UNKNOWN: No blocker annotation found
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum BlockerType {
+    HarnessOnly,
+    Core,
+    External,
+    Unknown,
+}
+
+impl Default for BlockerType {
+    fn default() -> Self {
+        BlockerType::Unknown
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct PromotionCandidate {
     scenario_name: String,
@@ -124,6 +149,8 @@ struct PromotionCandidate {
     rule_name: String,
     reuse_score: f32,
     new_step_texts_estimate: u32,
+    #[serde(default)]
+    blocker: BlockerType,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +158,41 @@ struct MissingBindings {
     candidate_name: String,
     #[serde(default)]
     missing_step_texts: Vec<String>,
+}
+
+/// Operating mode from CURRENT_STATUS.md
+#[derive(Debug, Clone, PartialEq)]
+enum OperatingMode {
+    Bootstrap,
+    Consumption,
+    Unknown,
+}
+
+/// Read the operating mode from CURRENT_STATUS.md.
+/// Looks for "MODE: BOOTSTRAP" or "MODE: CONSUMPTION" in the file.
+fn read_current_status_mode(status_path: &PathBuf) -> OperatingMode {
+    let content = match fs::read_to_string(status_path) {
+        Ok(c) => c,
+        Err(_) => return OperatingMode::Unknown,
+    };
+
+    // Look for MODE: ... in the content
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("MODE:") || trimmed.starts_with("**MODE:**") {
+            let mode_str = trimmed
+                .trim_start_matches("MODE:")
+                .trim_start_matches("**MODE:**")
+                .trim();
+            return match mode_str.to_uppercase().as_str() {
+                "BOOTSTRAP" => OperatingMode::Bootstrap,
+                "CONSUMPTION" => OperatingMode::Consumption,
+                _ => OperatingMode::Unknown,
+            };
+        }
+    }
+
+    OperatingMode::Unknown
 }
 
 fn main() -> Result<()> {
@@ -143,7 +205,8 @@ fn main() -> Result<()> {
             out,
             namako_cli,
             max_cert_updates,
-        } => run_next(&spec_root, &adapter, out, namako_cli, max_cert_updates),
+            current_status,
+        } => run_next(&spec_root, &adapter, out, namako_cli, max_cert_updates, current_status),
     }
 }
 
@@ -190,10 +253,17 @@ fn run_next(
     out: Option<PathBuf>,
     namako_cli: Option<String>,
     max_cert_updates: u32,
+    current_status: Option<PathBuf>,
 ) -> Result<()> {
     // Canonicalize spec_root to get absolute path
     let spec_root = fs::canonicalize(spec_root)
         .context("Failed to canonicalize spec_root path")?;
+
+    // Read operating mode from CURRENT_STATUS.md if provided
+    let mode = current_status
+        .as_ref()
+        .map(|p| read_current_status_mode(p))
+        .unwrap_or(OperatingMode::Unknown);
 
     // Canonicalize adapter command paths
     let adapter = canonicalize_adapter_cmd(adapter)?;
@@ -275,6 +345,22 @@ fn run_next(
         review.coverage_summary.deferred_items_total,
         review.promotion_candidates.len()
     );
+
+    // Check for CORE blockers in BOOTSTRAP mode
+    if mode == OperatingMode::Bootstrap {
+        let core_blockers: Vec<_> = review.promotion_candidates.iter()
+            .filter(|c| c.blocker == BlockerType::Core)
+            .collect();
+        if !core_blockers.is_empty() {
+            eprintln!(
+                "  ⚠️  {} CORE blocker(s) skipped in BOOTSTRAP mode:",
+                core_blockers.len()
+            );
+            for c in &core_blockers {
+                eprintln!("      - {} (blocked; wait for CONSUMPTION mode)", c.scenario_name);
+            }
+        }
+    }
 
     // Step 3: Handle NEEDS_UPDATE_CERT_APPROVAL with --max-cert-updates governance
     let mut update_cert_message: Option<String> = None;
@@ -390,6 +476,7 @@ fn run_next(
         &out_dir,
         update_cert_message.as_ref(),
         max_cert_updates,
+        &mode,
     )?;
 
     eprintln!();
@@ -580,8 +667,20 @@ fn generate_next_task(
     out_dir: &PathBuf,
     update_cert_message: Option<&String>,
     max_cert_updates: u32,
+    mode: &OperatingMode,
 ) -> Result<()> {
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    // Filter out CORE blockers in BOOTSTRAP mode
+    let (eligible_candidates, blocked_candidates): (Vec<_>, Vec<_>) =
+        review.promotion_candidates.iter().partition(|c| {
+            // In BOOTSTRAP mode, CORE blockers are not eligible
+            if *mode == OperatingMode::Bootstrap && c.blocker == BlockerType::Core {
+                false
+            } else {
+                true
+            }
+        });
     let drift_kind = status
         .drift
         .as_ref()
@@ -609,9 +708,16 @@ fn generate_next_task(
         review.coverage_summary.deferred_items_total
     ));
     content.push_str(&format!(
-        "| Promotion Candidates | {} |\n",
-        review.promotion_candidates.len()
+        "| Promotion Candidates | {} (total), {} (eligible) |\n",
+        review.promotion_candidates.len(),
+        eligible_candidates.len()
     ));
+    if !blocked_candidates.is_empty() {
+        content.push_str(&format!(
+            "| Blocked (CORE in BOOTSTRAP) | {} |\n",
+            blocked_candidates.len()
+        ));
+    }
     content.push_str(&format!("| Drift Status | {} |\n\n", drift_kind));
     content.push_str("---\n\n");
 
@@ -627,11 +733,24 @@ fn generate_next_task(
                 content.push_str(&format!("{}\n\n", msg));
             }
 
+            // Show blocked candidates warning
+            if !blocked_candidates.is_empty() {
+                content.push_str("### ⚠️ Blocked Scenarios (CORE in BOOTSTRAP mode)\n\n");
+                content.push_str("The following scenarios require CORE changes and are blocked in BOOTSTRAP mode:\n\n");
+                for candidate in &blocked_candidates {
+                    content.push_str(&format!(
+                        "  - **{}** — Blocked on CORE; wait until CONSUMPTION mode to address.\n",
+                        candidate.scenario_name
+                    ));
+                }
+                content.push_str("\n");
+            }
+
             content.push_str("### Recommended Next Steps\n\n");
 
-            if !review.promotion_candidates.is_empty() {
+            if !eligible_candidates.is_empty() {
                 content.push_str("Consider promoting the top 3 scenarios from Deferred → Executable:\n\n");
-                for (i, candidate) in review.promotion_candidates.iter().take(3).enumerate() {
+                for (i, candidate) in eligible_candidates.iter().take(3).enumerate() {
                     content.push_str(&format!(
                         "  {}. **{}**\n     - Feature: `{}`\n     - Rule: {}\n     - Reuse score: {:.1}, New steps: {}\n\n",
                         i + 1,

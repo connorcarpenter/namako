@@ -1,6 +1,21 @@
 # SYSTEM.md — Naia + Namako Dual-Repo Agent Operating Rules
 
-## 0) Prime Directive
+## 0) Single Source of Truth (SSoT) Policy
+
+Each document in `_WORKSPACE/` has a distinct responsibility. Do not duplicate content across docs.
+
+| Document | Responsibility |
+|----------|----------------|
+| `SYSTEM.md` | Hard constraints (no git ops, repo hygiene, reporting discipline) |
+| `CURRENT_STATUS.md` | Live dashboard: MODE, gates, commands, paths, current objective |
+| `GOLD_PLAN.md` | Canonical product plan + normative rules (two FSMs, hash contracts, schemas) |
+| `CLAUDE.md` | Short onramp that points to the above docs |
+
+**For MODE/FSM state, always consult `CURRENT_STATUS.md` first; do not infer from other sources.**
+
+---
+
+## 1) Prime Directive
 This workspace contains TWO separate git repositories:
 - `naia/`   — the Naia project and its Namako integration (features, adapter, bindings, test harness)
 - `namako/` — the Namako engine/tooling (fork of cucumber: engine/lib, proc-macro/codegen, CLI, schemas/hashing rules)
@@ -30,7 +45,7 @@ Never write ambiguous paths like `src/lib.rs` without the repo prefix.
 
 ### 3.1 Put it in `namako/` if it is any of:
 - Namako engine behavior: feature parsing, step resolution, plan generation, verification logic
-- NPAP protocol schemas or validation logic
+- NPA protocol schemas or validation logic
 - Hashing / canonical encoding rules and implementations
 - CLI commands (`namako lint/run/verify/update-cert/...`)
 - Proc-macros / codegen (`#[given] #[when] #[then]` machinery, registry generation)
@@ -39,12 +54,12 @@ Never write ambiguous paths like `src/lib.rs` without the repo prefix.
 ### 3.2 Put it in `naia/` if it is any of:
 - `.feature` files (specs) and certification artifacts in the Naia repo
 - Naia-specific step bindings and their implementations
-- The Naia adapter executable (NPAP adapter): `manifest` + `run`
+- The Naia adapter executable (NPA adapter): `manifest` + `run`
 - Naia test harness integration (World type, Scenario wiring, local transport behavior)
 - Anything that is project-specific and not reusable framework functionality
 
 ### 3.3 Cross-repo change rule
-If a change alters an interface boundary (NPAP schema/fields, hashing contract, plan format, etc.):
+If a change alters an interface boundary (NPA schema/fields, hashing contract, plan format, etc.):
 - Update `namako/` first (the authority)
 - Then update `naia/` to conform (adapter output, tests, fixtures, etc.)
 - Provide a short “cross-repo impact note” listing exactly what changed and what was updated.
@@ -102,7 +117,7 @@ If you change anything identity-critical (hashing, canonicalization rules, sorti
 
 ## 7) Common Task Routing Examples
 - “Fix canonical JSON rules / hashing determinism” → `namako/` (and update `naia/` outputs if impacted)
-- “Update NPAP manifest fields” → `namako/` schema + `naia/` adapter emission
+- “Update NPA manifest fields” → `namako/` schema + `naia/` adapter emission
 - “Convert Markdown spec → .feature files” → `naia/`
 - “Adapter refuses stale plans” → likely both (`namako/` defines + verifies, `naia/` enforces)
 - “Step macro registry ordering” → `namako/`

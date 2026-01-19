@@ -116,11 +116,30 @@ pub struct StepInfo {
     pub text: String,
 }
 
-/// Deferred item from DEFERRED TESTS section
+/// Blocker classification for deferred scenarios.
+///
+/// This indicates what type of work is required to unblock a deferred scenario:
+/// - `HARNESS_ONLY`: Can be unblocked with test harness changes only (no core changes)
+/// - `CORE`: Requires changes to the core Naia codebase
+/// - `EXTERNAL`: Requires external dependencies or changes outside the repo
+/// - `UNKNOWN`: No blocker annotation found, classification needed
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BlockerType {
+    HarnessOnly,
+    Core,
+    External,
+    #[default]
+    Unknown,
+}
+
+/// Deferred item from DEFERRED TESTS section or @Deferred tag
 #[derive(Debug, Clone, Serialize)]
 pub struct DeferredItem {
     pub text: String,
     pub source_span: SourceSpan,
+    /// Blocker classification (from @Blocker tag or default UNKNOWN)
+    pub blocker: BlockerType,
 }
 
 /// Coverage summary
@@ -141,6 +160,8 @@ pub struct PromotionCandidate {
     pub steps: Vec<StepInfo>,
     pub new_step_texts_estimate: u32,
     pub reuse_score: u32,
+    /// Blocker classification (from @Blocker tag or default UNKNOWN)
+    pub blocker: BlockerType,
 }
 
 /// Missing binding info
@@ -369,6 +390,7 @@ fn analyze_feature(
             if is_deferred_scenario(scenario, &lines) {
                 let steps = scenario_steps_to_info(scenario, &lines);
                 let (reuse_score, new_count) = compute_reuse_metrics(&steps, existing_expressions);
+                let blocker = extract_blocker_type(scenario);
                 promotion_candidates.push(PromotionCandidate {
                     feature_path: path.to_string(),
                     rule_name: "default".to_string(),
@@ -376,6 +398,7 @@ fn analyze_feature(
                     steps,
                     new_step_texts_estimate: new_count,
                     reuse_score,
+                    blocker,
                 });
             }
         }
@@ -441,6 +464,7 @@ fn analyze_rule(
         if is_deferred_scenario(scenario, lines) {
             let steps = scenario_steps_to_info(scenario, lines);
             let (reuse_score, new_count) = compute_reuse_metrics(&steps, existing_expressions);
+            let blocker = extract_blocker_type(scenario);
             promotion_candidates.push(PromotionCandidate {
                 feature_path: path.to_string(),
                 rule_name: rule.name.clone(),
@@ -448,6 +472,7 @@ fn analyze_rule(
                 steps,
                 new_step_texts_estimate: new_count,
                 reuse_score,
+                blocker,
             });
         }
     }
@@ -486,6 +511,29 @@ fn is_deferred_scenario(scenario: &Scenario, lines: &[&str]) -> bool {
     }
 
     false
+}
+
+/// Extract blocker type from scenario tags.
+///
+/// Looks for tags like `@Blocker(CORE)`, `@Blocker(HARNESS_ONLY)`, or `@Blocker(EXTERNAL)`.
+/// Returns `Unknown` if no blocker tag is found.
+fn extract_blocker_type(scenario: &Scenario) -> BlockerType {
+    for tag in &scenario.tags {
+        let tag_lower = tag.to_lowercase();
+        // Handle both @Blocker(TYPE) and Blocker(TYPE) formats
+        if tag_lower.starts_with("blocker(") || tag_lower.starts_with("@blocker(") {
+            let start = tag_lower.find('(').unwrap_or(0) + 1;
+            let end = tag_lower.find(')').unwrap_or(tag_lower.len());
+            let blocker_value = tag_lower[start..end].trim();
+            return match blocker_value {
+                "harness_only" | "harness-only" => BlockerType::HarnessOnly,
+                "core" => BlockerType::Core,
+                "external" => BlockerType::External,
+                _ => BlockerType::Unknown,
+            };
+        }
+    }
+    BlockerType::Unknown
 }
 
 fn scenario_to_review(scenario: &Scenario, lines: &[&str]) -> ScenarioReview {
@@ -578,6 +626,7 @@ fn extract_deferred_section(source: &str) -> Vec<DeferredItem> {
                         start_line: current_item_start,
                         end_line: line_num - 1,
                     },
+                    blocker: BlockerType::Unknown,
                 });
                 current_item_lines.clear();
             }
@@ -599,6 +648,7 @@ fn extract_deferred_section(source: &str) -> Vec<DeferredItem> {
                     start_line: current_item_start,
                     end_line: line_num - 1,
                 },
+                blocker: BlockerType::Unknown,
             });
             current_item_lines.clear();
         }
@@ -612,6 +662,7 @@ fn extract_deferred_section(source: &str) -> Vec<DeferredItem> {
                 start_line: current_item_start,
                 end_line: lines.len() as u32,
             },
+            blocker: BlockerType::Unknown,
         });
     }
 

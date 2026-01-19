@@ -16,7 +16,7 @@
 4. [Step Macro UX and Binding Identity](#part-4-step-macro-ux-and-binding-identity)
     - [4.4 v1 Binding ABI](#44-v1-binding-abi-normative)
 5. [Namako v1: The Future-Proof KISS MVP](#part-5-namako-v1-the-future-proof-kiss-mvp)
-6. [NPAP v1: Adapter Protocol](#part-6-npap-v1-adapter-protocol)
+6. [NPA v1: Adapter Protocol](#part-6-npa-v1-adapter-protocol)
     - [6.4.3 Scenario Key Derivation](#643-scenario-key-derivation-v1-normative)
 7. [Hashing & Identity: v1 Contract](#part-7-hashing--identity-v1-contract)
     - [7.0 Hash & Encoding Contract — Single Source of Truth](#70-hash--encoding-contract-v1--single-source-of-truth)
@@ -59,7 +59,7 @@ The **Namako Engine** is the sole source of matching logic. It resolves every st
 
 ### Language-Neutral by Design
 
-Namako is **language-agnostic**: the engine/CLI is a Rust tool, but adapters MAY be implemented in **any programming language** (Rust, JS/TS, Python, Go, C++, etc.). The adapter protocol (NPAP) is the only cross-language integration boundary. v1 ships with Rust adapter support for Naia; v2+ expands to official SDKs and conformance tooling for other ecosystems.
+Namako is **language-agnostic**: the engine/CLI is a Rust tool, but adapters MAY be implemented in **any programming language** (Rust, JS/TS, Python, Go, C++, etc.). The adapter protocol (NPA) is the only cross-language integration boundary. v1 ships with Rust adapter support for Naia; v2+ expands to official SDKs and conformance tooling for other ecosystems.
 
 ### Tesaki (AI Driver) — Inference Lives Above Namako
 
@@ -99,7 +99,7 @@ This document explicitly separates:
 | Layer | Responsibility | Determinism |
 |------|----------------|------------|
 | Namako | parse/resolve/plan/verify + packet outputs | MUST be deterministic |
-| NPAP adapter | execute plan by binding_id + emit run_report | MUST be deterministic for same inputs |
+| NPA adapter | execute plan by binding_id + emit run_report | MUST be deterministic for same inputs |
 | Tesaki | LLM-driven patch generation + loop control | NOT deterministic (by nature), but must be gated |
 
 ### 2.2 Design Principle: No Dead Ends
@@ -242,7 +242,7 @@ Contains all step binding functions.
 - Depends on `naia_test_harness` to construct World and drive scenarios
 
 #### 3.2.3 `naia_npa` (bin)
-The NPAP adapter binary for Naia.
+The NPA adapter binary for Naia.
 - Links `naia_tests` so all bindings/registry/dispatch are present
 - Implements:
   - `naia_npa manifest` — prints registry JSON
@@ -559,11 +559,11 @@ A signature mismatch occurs when the step's requirements do not match the bindin
 
 ---
 
-## Part 6: NPAP v1: Adapter Protocol
+## Part 6: NPA v1: Adapter Protocol
 
 ### 6.0 Language Neutrality (Normative)
 
-NPAP is **language-neutral**. Adapters MAY be implemented in any programming language as long as they:
+NPA is **language-neutral**. Adapters MAY be implemented in any programming language as long as they:
 - Implement the `manifest` and `run` commands per this specification
 - Obey all schema and invariant requirements
 - Dispatch by `binding_id` only (no runtime text matching)
@@ -1113,12 +1113,45 @@ v1 may warn on orphan bindings (bindings not used by any scenario).
 
 ### 9.3 Tesaki's Non-Negotiable Rules (Normative)
 
-1. **Tesaki MUST NOT run `update-cert` without explicit developer approval.**
-2. **Tesaki MUST NOT modify certification/baseline to "fix" failures.**
-3. **Tesaki MUST treat Namako outputs as authority** (no guessing which steps ran).
-4. **Tesaki MUST operate slice-first:** promote small batches, keep CI green.
+1. **Tesaki MUST NOT modify certification/baseline to "fix" failures.**
+2. **Tesaki MUST treat Namako outputs as authority** (no guessing which steps ran).
+3. **Tesaki MUST operate slice-first:** promote small batches, keep CI green.
 
-### 9.4 v1 vs v2 in the Loop
+### 9.4 Tesaki Update-Cert Governance (Normative)
+
+Baseline updates require controlled governance. The `tesaki` CLI provides this via:
+
+**Command-Line Control:**
+```bash
+tesaki next --max-cert-updates N
+```
+
+| `--max-cert-updates` | Behavior |
+|----------------------|----------|
+| `0` | Manual only — Tesaki will NOT run `update-cert` (CI default) |
+| `1..999` | Autonomous — Tesaki MAY run `update-cert` up to N times per session (local dev) |
+
+**Audit Log:**
+
+When Tesaki runs `update-cert`, it MUST append an entry to `update_cert_log.jsonl`:
+
+```json
+{"timestamp_utc": "...", "reason": "...", "identity_before": {...}, "identity_after": {...}}
+```
+
+**Recommended Defaults:**
+- **CI:** `--max-cert-updates 0` (require manual approval for baseline changes)
+- **Local BOOTSTRAP dev:** `--max-cert-updates 3` (allow autonomous updates when gates pass)
+
+**Prerequisite for Autonomous Update:**
+
+Tesaki MAY run `update-cert` autonomously only when ALL of the following are true:
+1. `--max-cert-updates N > 0` and update count < N for this session
+2. All gates pass (lint, run, verify would succeed with new baseline)
+3. No scenario failures in the run report
+4. No git operations are performed (no commits)
+
+### 9.5 v1 vs v2 in the Loop
 
 - **v1** can run the loop manually (human choosing slices).
 - **v2** adds packets that make Tesaki autonomous (`review`/`explain`/`status`).
@@ -1391,7 +1424,7 @@ This section defines how Namako supports projects in **any programming language*
 #### 11.13.1 Core Principle (Normative)
 
 - The Namako Engine/CLI MUST remain a Rust tool.
-- Any project integrates via an **external adapter executable** that implements NPAP.
+- Any project integrates via an **external adapter executable** that implements NPA.
 - The adapter protocol is the **only cross-language integration boundary**.
 
 **Engine Constraints:**
@@ -1402,7 +1435,7 @@ This section defines how Namako supports projects in **any programming language*
 **Adapter Constraints:**
 - The adapter MUST implement `manifest` and `run` commands.
 - The adapter MUST dispatch by `binding_id` only (no runtime text matching).
-- The adapter MUST emit artifacts conforming to NPAP schemas.
+- The adapter MUST emit artifacts conforming to NPA schemas.
 
 #### 11.13.2 Universal "3-Piece" Project Pattern
 
@@ -1490,7 +1523,7 @@ Each SDK MUST provide:
    - MUST produce identical IDs to the Rust implementation for the same inputs
 
 3. **Semantic Registry Export**
-   - Emit JSON manifest matching NPAP schema
+   - Emit JSON manifest matching NPA schema
    - Include `binding_id`, `kind`, `expression`, `signature`, `impl_hash`
 
 4. **Plan Execution Harness**
@@ -1500,11 +1533,11 @@ Each SDK MUST provide:
 
 5. **Run Report Emission**
    - Emit `run_report.json` with canonical ordering
-   - Include all required fields per NPAP schema
+   - Include all required fields per NPA schema
 
 **Migration:**
 - SDK adoption is optional but recommended
-- Projects MAY implement NPAP directly without SDK
+- Projects MAY implement NPA directly without SDK
 
 ### 11.15 Cross-Language Hashing & Conformance (v2+)
 
@@ -1593,7 +1626,7 @@ The Namako repo MUST ship conformance fixtures for:
 
 | Check | Description |
 |-------|-------------|
-| **Schema Validation** | Manifest and run_report match NPAP JSON schemas exactly |
+| **Schema Validation** | Manifest and run_report match NPA JSON schemas exactly |
 | **Binding ID Correctness** | All `binding_id` values match expected computation from `(kind, expression)` |
 | **Canonical Ordering** | Run report scenarios and steps are correctly ordered |
 | **Hash Implementation** | All hashes match conformance fixture expectations |
@@ -1707,7 +1740,7 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 | 7: Collision-Free Execution | **IN v1** | Per-scenario World |
 | 8: Explicit Certification Workflow | **IN v1** | `verify` checks, `update-cert` changes |
 
-### NPAP
+### NPA
 
 | Concept | Status | Notes |
 |---------|--------|-------|
@@ -1761,7 +1794,7 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| Language-neutral adapter protocol | **IN v1** (conceptual) | NPAP is language-neutral by design; v1 ships Rust adapter only |
+| Language-neutral adapter protocol | **IN v1** (conceptual) | NPA is language-neutral by design; v1 ships Rust adapter only |
 | Any-language adapter support | **DEFERRED** to v2+ | §11.13 |
 | Universal 3-piece project pattern | **DEFERRED** to v2+ | §11.13.2 |
 | Adapter SDKs (JS/TS, Python, Go, etc.) | **DEFERRED** to v2+ | §11.14 |
