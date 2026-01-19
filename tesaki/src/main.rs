@@ -4,7 +4,7 @@
 //! - Consumes Namako status and review packets
 //! - Generates NEXT_TASK.md with specific, actionable instructions
 //! - Never modifies source files (only writes to artifact directories)
-//! - May run update-cert ONLY if ALLOW_UPDATE_CERT token is present (per TODO.md §1.1)
+//! - May run update-cert up to --max-cert-updates times per run (governed by CLI flag)
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -13,48 +13,26 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Token file name for autonomous baseline update approval
-const ALLOW_UPDATE_CERT_TOKEN: &str = "ALLOW_UPDATE_CERT.json";
+/// Log file name for update-cert audit trail
+const UPDATE_CERT_LOG: &str = "update_cert_log.jsonl";
 
-/// Schema for the ALLOW_UPDATE_CERT token per TODO.md §1.1
+/// Log entry for each update-cert operation (append-only audit log)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct UpdateCertToken {
-    /// Schema version (must be 1)
-    version: u32,
-    /// Remaining number of autonomous updates allowed
-    max_updates: u32,
+struct UpdateCertLogEntry {
+    timestamp_utc: String,
+    old_identity: Option<IdentitySnapshot>,
+    new_identity: IdentitySnapshot,
+    reason: String,
+    updates_this_run: u32,
+    max_updates_allowed: u32,
 }
 
-impl UpdateCertToken {
-    /// Read token from file path, returns None if file doesn't exist or is invalid
-    fn read(path: &PathBuf) -> Option<Self> {
-        let content = fs::read_to_string(path).ok()?;
-        let token: Self = serde_json::from_str(&content).ok()?;
-        // Validate version
-        if token.version != 1 {
-            eprintln!("  WARNING: Token version {} not supported (expected 1)", token.version);
-            return None;
-        }
-        Some(token)
-    }
-
-    /// Write token to file path
-    fn write(&self, path: &PathBuf) -> Result<()> {
-        let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json).context("Failed to write token file")?;
-        Ok(())
-    }
-
-    /// Decrement max_updates and return whether update is still allowed
-    /// If max_updates reaches 0, returns false and token should be deleted
-    fn decrement(&mut self) -> bool {
-        if self.max_updates > 0 {
-            self.max_updates -= 1;
-            true
-        } else {
-            false
-        }
-    }
+/// Snapshot of identity hashes for logging
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IdentitySnapshot {
+    feature_fingerprint_hash: String,
+    step_registry_hash: String,
+    resolved_plan_hash: String,
 }
 
 /// Tesaki - AI-friendly task orchestrator for Namako
@@ -85,6 +63,10 @@ enum Commands {
         /// Path to the namako CLI (default: searches in parent workspace)
         #[arg(long)]
         namako_cli: Option<String>,
+
+        /// Maximum number of autonomous update-cert operations per run (0 to disable)
+        #[arg(long, default_value = "3", value_parser = clap::value_parser!(u32).range(0..=999))]
+        max_cert_updates: u32,
     },
 }
 
@@ -160,7 +142,8 @@ fn main() -> Result<()> {
             adapter,
             out,
             namako_cli,
-        } => run_next(&spec_root, &adapter, out, namako_cli),
+            max_cert_updates,
+        } => run_next(&spec_root, &adapter, out, namako_cli, max_cert_updates),
     }
 }
 
@@ -206,6 +189,7 @@ fn run_next(
     adapter: &str,
     out: Option<PathBuf>,
     namako_cli: Option<String>,
+    max_cert_updates: u32,
 ) -> Result<()> {
     // Canonicalize spec_root to get absolute path
     let spec_root = fs::canonicalize(spec_root)
@@ -246,11 +230,15 @@ fn run_next(
     let artifacts_dir = spec_root.join("target/namako_artifacts");
     let run_report_path = artifacts_dir.join("run_report.json");
     let cert_path = spec_root.join("certification.json");
-    let token_path = out_dir.join(ALLOW_UPDATE_CERT_TOKEN);
+    let log_path = out_dir.join(UPDATE_CERT_LOG);
 
-    eprintln!("=== Tesaki v1 ===");
+    // Track update-cert operations for this run
+    let mut updates_this_run: u32 = 0;
+
+    eprintln!("=== Tesaki v2 ===");
     eprintln!("Spec root: {}", spec_root.display());
     eprintln!("Output dir: {}", out_dir.display());
+    eprintln!("Max cert updates: {}", max_cert_updates);
     eprintln!();
 
     // Step 1: Run namako status (auto-passes --run-report if file exists per TODO.md §2.1)
@@ -288,57 +276,82 @@ fn run_next(
         review.promotion_candidates.len()
     );
 
-    // Step 3: Handle NEEDS_UPDATE_CERT_APPROVAL with token-based autonomy (per TODO.md §1.1)
+    // Step 3: Handle NEEDS_UPDATE_CERT_APPROVAL with --max-cert-updates governance
     let mut update_cert_message: Option<String> = None;
     if action == "NEEDS_UPDATE_CERT_APPROVAL" {
-        eprintln!("[3/4] Checking ALLOW_UPDATE_CERT token...");
-        if token_path.exists() {
-            eprintln!("  Token found at: {}", token_path.display());
+        eprintln!("[3/4] Checking update-cert governance...");
+
+        let remaining = max_cert_updates.saturating_sub(updates_this_run);
+        if remaining > 0 {
+            eprintln!("  {} updates remaining this run (max: {})", remaining, max_cert_updates);
         } else {
-            eprintln!("  No token found - manual approval required");
+            eprintln!("  No updates remaining this run (max: {})", max_cert_updates);
         }
 
-        if run_report_path.exists() {
-            let result = try_autonomous_update_cert(
+        if !run_report_path.exists() {
+            update_cert_message = Some(
+                "Cannot attempt autonomous update: run_report.json not found. Run `namako run` first.".to_string()
+            );
+        } else if max_cert_updates == 0 {
+            eprintln!("  Autonomous updates disabled (--max-cert-updates=0)");
+            update_cert_message = Some(
+                "Autonomous updates disabled. Use --max-cert-updates=N (N>0) to enable.".to_string()
+            );
+        } else if updates_this_run >= max_cert_updates {
+            eprintln!("  Update limit reached for this run");
+            update_cert_message = Some(format!(
+                "Update limit reached ({}/{} used this run). Run tesaki again for more updates.",
+                updates_this_run, max_cert_updates
+            ));
+        } else {
+            // Read old certification for logging (if exists)
+            let old_identity = read_certification_identity(&cert_path);
+
+            // Attempt update-cert
+            let result = run_namako_update_cert(
                 &namako,
                 &adapter,
                 &spec_root,
                 &run_report_path,
                 &cert_path,
-                &token_path,
             );
 
             match result {
-                UpdateCertResult::Updated { remaining } => {
-                    eprintln!("  ✓ Baseline updated autonomously ({} updates remaining)", remaining);
+                Ok(()) => {
+                    updates_this_run += 1;
+                    eprintln!("  ✓ Baseline updated ({}/{} used this run)", updates_this_run, max_cert_updates);
+
+                    // Read new certification for logging
+                    let new_identity = read_certification_identity(&cert_path);
+
+                    // Log the update
+                    let drift_reason = status.drift.as_ref()
+                        .map(|d| d.kind.clone())
+                        .unwrap_or_else(|| "UNKNOWN".to_string());
+
+                    if let Some(new_id) = new_identity {
+                        let log_entry = UpdateCertLogEntry {
+                            timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                            old_identity,
+                            new_identity: new_id,
+                            reason: drift_reason,
+                            updates_this_run,
+                            max_updates_allowed: max_cert_updates,
+                        };
+                        append_to_log(&log_path, &log_entry);
+                    }
+
                     update_cert_message = Some(format!(
-                        "Baseline updated autonomously using ALLOW_UPDATE_CERT token. {} updates remaining.",
-                        remaining
+                        "Baseline updated autonomously. {}/{} updates used this run.",
+                        updates_this_run, max_cert_updates
                     ));
-                    action = "DONE".to_string(); // Re-run will show DONE
-                }
-                UpdateCertResult::TokenExhausted => {
-                    eprintln!("  ✓ Baseline updated (token exhausted and deleted)");
-                    update_cert_message = Some(
-                        "Baseline updated autonomously. Token exhausted (max_updates reached 0), token file deleted.".to_string()
-                    );
                     action = "DONE".to_string();
                 }
-                UpdateCertResult::NoToken => {
-                    eprintln!("  No valid token found - manual approval required");
-                    update_cert_message = Some(
-                        "No ALLOW_UPDATE_CERT token found. Create token file to enable autonomous updates.".to_string()
-                    );
-                }
-                UpdateCertResult::Failed(err) => {
+                Err(err) => {
                     eprintln!("  ✗ Update-cert failed: {}", err);
                     update_cert_message = Some(format!("Update-cert failed: {}", err));
                 }
             }
-        } else {
-            update_cert_message = Some(
-                "Cannot attempt autonomous update: run_report.json not found. Run `namako run` first.".to_string()
-            );
         }
     } else {
         eprintln!("[3/4] Skipped (no baseline update needed)");
@@ -376,7 +389,7 @@ fn run_next(
         explain_path.as_ref(),
         &out_dir,
         update_cert_message.as_ref(),
-        &token_path,
+        max_cert_updates,
     )?;
 
     eprintln!();
@@ -489,7 +502,6 @@ fn run_namako_explain(
 }
 
 /// Run namako update-cert to update the baseline certification.
-/// Per TODO.md §1.1, this should only be called when ALLOW_UPDATE_CERT token is present.
 fn run_namako_update_cert(
     namako: &str,
     adapter: &str,
@@ -521,65 +533,42 @@ fn run_namako_update_cert(
     Ok(())
 }
 
-/// Result of attempting autonomous baseline update
-#[derive(Debug)]
-enum UpdateCertResult {
-    /// Token was consumed, baseline updated, N updates remaining
-    Updated { remaining: u32 },
-    /// Token exhausted (max_updates reached 0), file deleted
-    TokenExhausted,
-    /// No token present, approval required
-    NoToken,
-    /// Update-cert command failed
-    Failed(String),
+/// Read certification.json and extract identity fields for logging
+fn read_certification_identity(cert_path: &PathBuf) -> Option<IdentitySnapshot> {
+    let content = fs::read_to_string(cert_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let identity = json.get("identity")?;
+    Some(IdentitySnapshot {
+        feature_fingerprint_hash: identity.get("feature_fingerprint_hash")?.as_str()?.to_string(),
+        step_registry_hash: identity.get("step_registry_hash")?.as_str()?.to_string(),
+        resolved_plan_hash: identity.get("resolved_plan_hash")?.as_str()?.to_string(),
+    })
 }
 
-/// Attempt autonomous baseline update using ALLOW_UPDATE_CERT token.
-/// Per TODO.md §1.1:
-/// - If token missing: return NoToken (caller should STOP)
-/// - If token present with max_updates > 0: run update-cert, decrement, rewrite
-/// - If max_updates reaches 0: delete token
-fn try_autonomous_update_cert(
-    namako: &str,
-    adapter: &str,
-    spec_root: &PathBuf,
-    run_report_path: &PathBuf,
-    cert_output_path: &PathBuf,
-    token_path: &PathBuf,
-) -> UpdateCertResult {
-    // Check if token exists
-    let mut token = match UpdateCertToken::read(token_path) {
-        Some(t) => t,
-        None => return UpdateCertResult::NoToken,
+/// Append an update-cert log entry to the audit log (JSONL format)
+fn append_to_log(log_path: &PathBuf, entry: &UpdateCertLogEntry) {
+    use std::io::Write;
+    let json_line = match serde_json::to_string(entry) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("  WARNING: Failed to serialize log entry: {}", e);
+            return;
+        }
     };
-
-    // Check if we have updates remaining
-    if token.max_updates == 0 {
-        // Token exists but exhausted - delete it
-        let _ = fs::remove_file(token_path);
-        return UpdateCertResult::TokenExhausted;
+    let mut file = match fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("  WARNING: Failed to open log file: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = writeln!(file, "{}", json_line) {
+        eprintln!("  WARNING: Failed to write log entry: {}", e);
     }
-
-    // Attempt update-cert
-    if let Err(e) = run_namako_update_cert(namako, adapter, spec_root, run_report_path, cert_output_path) {
-        return UpdateCertResult::Failed(e.to_string());
-    }
-
-    // Update-cert succeeded, decrement token
-    token.decrement();
-
-    if token.max_updates == 0 {
-        // Token exhausted, delete it
-        let _ = fs::remove_file(token_path);
-        return UpdateCertResult::TokenExhausted;
-    }
-
-    // Rewrite token with decremented count
-    if let Err(e) = token.write(token_path) {
-        eprintln!("  WARNING: Failed to update token file: {}", e);
-    }
-
-    UpdateCertResult::Updated { remaining: token.max_updates }
 }
 
 fn generate_next_task(
@@ -590,7 +579,7 @@ fn generate_next_task(
     explain_path: Option<&PathBuf>,
     out_dir: &PathBuf,
     update_cert_message: Option<&String>,
-    token_path: &PathBuf,
+    max_cert_updates: u32,
 ) -> Result<()> {
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let drift_kind = status
@@ -748,9 +737,9 @@ fn generate_next_task(
             content.push_str("## STOP: Approval Required\n\n");
             content.push_str("Drift detected between current state and baseline certification.\n\n");
 
-            // Show update-cert message if available (token status)
+            // Show update-cert message if available
             if let Some(msg) = update_cert_message {
-                content.push_str("### Token Status\n\n");
+                content.push_str("### Update Status\n\n");
                 content.push_str(&format!("{}\n\n", msg));
             }
 
@@ -779,10 +768,14 @@ fn generate_next_task(
             content.push_str("### Instructions\n\n");
             content.push_str("1. Review the drift details carefully\n");
             content.push_str("2. **STOP AND WAIT** for Connor's approval\n");
-            content.push_str(&format!("3. To enable autonomous updates, create `{}`:\n", token_path.display()));
-            content.push_str("   ```json\n");
-            content.push_str("   { \"version\": 1, \"max_updates\": 3 }\n");
-            content.push_str("   ```\n");
+            if max_cert_updates > 0 {
+                content.push_str(&format!(
+                    "3. Autonomous updates are enabled (--max-cert-updates={}). Run tesaki again to auto-update.\n",
+                    max_cert_updates
+                ));
+            } else {
+                content.push_str("3. Autonomous updates are disabled (--max-cert-updates=0). Use --max-cert-updates=N to enable.\n");
+            }
             content.push_str("4. Or manually: run `namako update-cert`\n\n");
         }
 
@@ -818,7 +811,7 @@ fn generate_next_task(
         content.push_str(&format!("| Explain (Failure) | `{}` |\n", explain.display()));
     }
     content.push_str("\n---\n\n");
-    content.push_str("*Generated by tesaki — Tesaki v1 (autonomous update-cert with token)*\n");
+    content.push_str("*Generated by tesaki — Tesaki v2 (--max-cert-updates governance)*\n");
 
     fs::write(path, content)?;
     Ok(())
@@ -830,76 +823,115 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    /// Test token decrement behavior (per TODO.md §1.1 acceptance criteria)
+    /// Test log entry serialization
     #[test]
-    fn test_token_decrement() {
-        let mut token = UpdateCertToken {
-            version: 1,
-            max_updates: 3,
+    fn test_log_entry_serialization() {
+        let entry = UpdateCertLogEntry {
+            timestamp_utc: "2026-01-19T12:00:00Z".to_string(),
+            old_identity: Some(IdentitySnapshot {
+                feature_fingerprint_hash: "aaa".to_string(),
+                step_registry_hash: "bbb".to_string(),
+                resolved_plan_hash: "ccc".to_string(),
+            }),
+            new_identity: IdentitySnapshot {
+                feature_fingerprint_hash: "ddd".to_string(),
+                step_registry_hash: "eee".to_string(),
+                resolved_plan_hash: "fff".to_string(),
+            },
+            reason: "FEATURE_DRIFT".to_string(),
+            updates_this_run: 1,
+            max_updates_allowed: 3,
         };
 
-        // First decrement: 3 -> 2, returns true
-        assert!(token.decrement());
-        assert_eq!(token.max_updates, 2);
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("timestamp_utc"));
+        assert!(json.contains("old_identity"));
+        assert!(json.contains("new_identity"));
+        assert!(json.contains("reason"));
 
-        // Second decrement: 2 -> 1, returns true
-        assert!(token.decrement());
-        assert_eq!(token.max_updates, 1);
-
-        // Third decrement: 1 -> 0, returns true
-        assert!(token.decrement());
-        assert_eq!(token.max_updates, 0);
-
-        // Fourth decrement: already 0, returns false
-        assert!(!token.decrement());
-        assert_eq!(token.max_updates, 0);
+        // Verify it can be deserialized back
+        let parsed: UpdateCertLogEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.reason, "FEATURE_DRIFT");
+        assert_eq!(parsed.updates_this_run, 1);
     }
 
-    /// Test token read/write roundtrip
+    /// Test append_to_log writes valid JSONL
     #[test]
-    fn test_token_read_write() {
+    fn test_append_to_log() {
         let temp_dir = TempDir::new().unwrap();
-        let token_path = temp_dir.path().join("ALLOW_UPDATE_CERT.json");
+        let log_path = temp_dir.path().join("update_cert_log.jsonl");
 
-        // Write token
-        let token = UpdateCertToken {
-            version: 1,
-            max_updates: 5,
+        let entry1 = UpdateCertLogEntry {
+            timestamp_utc: "2026-01-19T12:00:00Z".to_string(),
+            old_identity: None,
+            new_identity: IdentitySnapshot {
+                feature_fingerprint_hash: "aaa".to_string(),
+                step_registry_hash: "bbb".to_string(),
+                resolved_plan_hash: "ccc".to_string(),
+            },
+            reason: "INITIAL".to_string(),
+            updates_this_run: 1,
+            max_updates_allowed: 3,
         };
-        token.write(&token_path).unwrap();
 
-        // Read token back
-        let read_token = UpdateCertToken::read(&token_path).unwrap();
-        assert_eq!(read_token.version, 1);
-        assert_eq!(read_token.max_updates, 5);
+        let entry2 = UpdateCertLogEntry {
+            timestamp_utc: "2026-01-19T12:01:00Z".to_string(),
+            old_identity: Some(IdentitySnapshot {
+                feature_fingerprint_hash: "aaa".to_string(),
+                step_registry_hash: "bbb".to_string(),
+                resolved_plan_hash: "ccc".to_string(),
+            }),
+            new_identity: IdentitySnapshot {
+                feature_fingerprint_hash: "ddd".to_string(),
+                step_registry_hash: "eee".to_string(),
+                resolved_plan_hash: "fff".to_string(),
+            },
+            reason: "REGISTRY_DRIFT".to_string(),
+            updates_this_run: 2,
+            max_updates_allowed: 3,
+        };
+
+        append_to_log(&log_path, &entry1);
+        append_to_log(&log_path, &entry2);
+
+        let content = fs::read_to_string(&log_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        // Each line should be valid JSON
+        let _: UpdateCertLogEntry = serde_json::from_str(lines[0]).unwrap();
+        let _: UpdateCertLogEntry = serde_json::from_str(lines[1]).unwrap();
     }
 
-    /// Test token read returns None for missing file
+    /// Test read_certification_identity with valid cert
     #[test]
-    fn test_token_read_missing() {
+    fn test_read_certification_identity() {
         let temp_dir = TempDir::new().unwrap();
-        let token_path = temp_dir.path().join("nonexistent.json");
+        let cert_path = temp_dir.path().join("certification.json");
 
-        assert!(UpdateCertToken::read(&token_path).is_none());
+        let cert_content = r#"{
+            "identity": {
+                "feature_fingerprint_hash": "abc123",
+                "step_registry_hash": "def456",
+                "resolved_plan_hash": "ghi789"
+            },
+            "metadata": {}
+        }"#;
+
+        fs::write(&cert_path, cert_content).unwrap();
+
+        let identity = read_certification_identity(&cert_path).unwrap();
+        assert_eq!(identity.feature_fingerprint_hash, "abc123");
+        assert_eq!(identity.step_registry_hash, "def456");
+        assert_eq!(identity.resolved_plan_hash, "ghi789");
     }
 
-    /// Test token read returns None for invalid JSON
+    /// Test read_certification_identity returns None for missing file
     #[test]
-    fn test_token_read_invalid_json() {
+    fn test_read_certification_identity_missing() {
         let temp_dir = TempDir::new().unwrap();
-        let token_path = temp_dir.path().join("invalid.json");
+        let cert_path = temp_dir.path().join("nonexistent.json");
 
-        fs::write(&token_path, "not valid json").unwrap();
-        assert!(UpdateCertToken::read(&token_path).is_none());
-    }
-
-    /// Test token read returns None for wrong version
-    #[test]
-    fn test_token_read_wrong_version() {
-        let temp_dir = TempDir::new().unwrap();
-        let token_path = temp_dir.path().join("wrong_version.json");
-
-        fs::write(&token_path, r#"{ "version": 2, "max_updates": 3 }"#).unwrap();
-        assert!(UpdateCertToken::read(&token_path).is_none());
+        assert!(read_certification_identity(&cert_path).is_none());
     }
 }

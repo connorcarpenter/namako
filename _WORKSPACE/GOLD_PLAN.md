@@ -8,6 +8,10 @@
 
 1. [Executive Summary](#part-1-executive-summary)
 2. [Thesis: v1 is KISS MVP, v2+ is Armor Plating](#part-2-thesis-v1-is-kiss-mvp-v2-is-armor-plating)
+    - [2.3 Two FSMs: Bootstrap vs Product](#23-two-fsms-bootstrap-vs-product-normative)
+    - [2.4 Modes: BOOTSTRAP vs CONSUMPTION](#24-modes-bootstrap-vs-consumption-normative)
+    - [2.5 Bootstrap Exit Criteria](#25-bootstrap-exit-criteria-normative)
+    - [2.6 Consumption Entry Criteria](#26-consumption-entry-criteria-normative)
 3. [Canonical Repo & Crate Architecture](#part-3-canonical-repo--crate-architecture)
 4. [Step Macro UX and Binding Identity](#part-4-step-macro-ux-and-binding-identity)
     - [4.4 v1 Binding ABI](#44-v1-binding-abi-normative)
@@ -106,6 +110,87 @@ v1 is designed such that every v2+ feature can be adopted incrementally via:
 - Identity regeneration (via `update-cert`)
 
 No v1 decision MUST be reversed to adopt v2+.
+
+### 2.3 Two FSMs: Bootstrap vs Product (Normative)
+
+This specification defines two distinct finite state machines. **Do not confuse these layers.**
+
+#### 2.3.1 Bootstrap Loop (Construction Process)
+
+The loop that Opus/Claude follows **while building the Namako/Tesaki toolchain**. This is NOT the Product FSM.
+
+**Bootstrap Loop States:**
+1. Read CURRENT_STATUS.md + GOLD_PLAN.md
+2. Identify next toolchain gap (Namako CLI, Tesaki driver, harness, adapter)
+3. Implement minimal fix
+4. Run gates (`namako_ci.sh`, `determinism_check.sh`, `cargo test`)
+5. Update docs (CURRENT_STATUS.md, OUTPUT.md)
+6. Stop (human reviews diff)
+
+**Scope:** Building the spec-driven development infrastructure itself.
+
+#### 2.3.2 Tesaki Product FSM (End-State Process)
+
+The FSM that Tesaki will run autonomously to drive `spec → scenario → bindings → implementation`. This is the target workflow described in Part 9 and Part 10.
+
+**Product FSM States:** AuthorContract → ReviewBacklog → PromoteScenarios → Resolve → BindSteps → Execute → Verify → BlessBaseline → MilestoneComplete (per §9.2)
+
+**Scope:** Using the completed toolchain to develop the Naia product.
+
+### 2.4 Modes: BOOTSTRAP vs CONSUMPTION (Normative)
+
+A single mode flag governs what edits are permitted:
+
+| Mode | Description |
+|------|-------------|
+| `BOOTSTRAP` | Default. Building the toolchain. Product core is off-limits. |
+| `CONSUMPTION` | Using the toolchain to build the product. Product core edits allowed via Tesaki loop. |
+
+**Current mode MUST be recorded in `CURRENT_STATUS.md`.**
+
+#### 2.4.1 BOOTSTRAP Allowed Edit Surface
+
+- `namako/**` (Namako CLI, Tesaki, engine crates)
+- `naia/test/**` (harness, tests, adapter crate `naia_npa`, specs, scripts)
+- Docs under `_WORKSPACE/**`
+
+#### 2.4.2 BOOTSTRAP Forbidden Edit Surface
+
+Naia product core (anything outside `naia/test/**`):
+- `naia/client/**`
+- `naia/server/**`
+- `naia/shared/**`
+- `naia/adapters/**`
+- Any other Naia crate not under `test/`
+
+**Violation handling:** Revert and record incident in OUTPUT.md.
+
+#### 2.4.3 CONSUMPTION Allowed Edit Surface
+
+All BOOTSTRAP surfaces, **plus** Naia product core — but ONLY when driven by a selected contract/scenario via the Tesaki Product FSM.
+
+### 2.5 Bootstrap Exit Criteria (Normative)
+
+The system transitions from `MODE=BOOTSTRAP` to `MODE=CONSUMPTION` only when ALL of the following are satisfied:
+
+1. **Tesaki end-to-end:** `tesaki next` runs and produces `NEXT_TASK.md` deterministically
+2. **Namako packets deterministic:** `status --json`, `review`, `explain` all produce stable, usable outputs
+3. **Tesaki autonomous capabilities:**
+   - Can select promotion candidates when `reuse_score > 0`
+   - Can implement bindings for suggested bundles
+   - Can run gates (lint → run → verify)
+   - Can update baseline (with governance)
+   - Stops safely when blocked (no infinite loops)
+4. **Scenario fidelity workflow exists:** At least v1 depth via `namako explain`
+5. **CI green:** All gates pass (`namako_ci.sh`, `determinism_check.sh`, `cargo test -p tesaki`)
+
+### 2.6 Consumption Entry Criteria (Normative)
+
+**Rule:** Naia core work begins ONLY after `CURRENT_STATUS.md` declares `MODE = CONSUMPTION`.
+
+Until that declaration:
+- All autonomous loops MUST stay within BOOTSTRAP allowed surfaces
+- Any drift into Naia core is a violation requiring revert
 
 ---
 
