@@ -15,7 +15,7 @@ use walkdir::WalkDir;
 
 use namako::engine::ResolutionEngine;
 use namako::npap::{
-    Certification, CertificationIdentity, SemanticStepRegistry,
+    Certification, CertificationIdentity, RunReport, ScenarioStatus, SemanticStepRegistry,
     HASH_CONTRACT_VERSION,
 };
 
@@ -33,6 +33,10 @@ pub struct StatusArgs {
     /// Path to the certification.json baseline.
     #[arg(short, long, default_value = "certification.json")]
     pub certification: PathBuf,
+
+    /// Path to the run_report.json from last adapter execution.
+    #[arg(short, long, default_value = "run_report.json")]
+    pub run_report: PathBuf,
 
     /// Output as JSON (default: human-readable).
     #[arg(long)]
@@ -66,6 +70,23 @@ pub struct StatusOutput {
     pub drift: DriftInfo,
     /// Recommended next action for Tesaki
     pub recommended_next_action: RecommendedAction,
+    /// Failures from last run report (per TODO.md §4.2)
+    /// Populated when recommended_next_action == FIX_RUN
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub last_run_failures: Vec<FailureRecord>,
+}
+
+/// Record of a single failed scenario for failure targeting (per TODO.md §4.2).
+#[derive(Debug, Clone, Serialize)]
+pub struct FailureRecord {
+    /// Scenario key from run report
+    pub scenario_key: String,
+    /// Human-readable scenario name (extracted from scenario_key)
+    pub scenario_name: String,
+    /// Type of failure: "assertion", "panic", "missing_binding", "timeout", "unknown"
+    pub failure_kind: String,
+    /// Short error summary from first failing step
+    pub summary: String,
 }
 
 /// Gate status for each pipeline step
@@ -263,6 +284,10 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
         resolved_plan_hash: "UNKNOWN".to_string(),
     });
 
+    // Load run report failures if recommended action involves fixing run failures
+    // or if run report exists and has failures
+    let last_run_failures = load_run_failures(&args.run_report);
+
     Ok(StatusOutput {
         version: 1,
         spec_root,
@@ -272,6 +297,7 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
         identity_baseline,
         drift,
         recommended_next_action: recommended_action,
+        last_run_failures,
     })
 }
 
@@ -319,6 +345,102 @@ fn load_baseline(path: &PathBuf) -> Result<Certification> {
     let json = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read baseline: {}", path.display()))?;
     serde_json::from_str(&json).context("Failed to parse certification JSON")
+}
+
+/// Load run report and extract failures for failure targeting (per TODO.md §4.2).
+/// Returns empty vector if run_report doesn't exist or has no failures.
+fn load_run_failures(run_report_path: &PathBuf) -> Vec<FailureRecord> {
+    // Attempt to read run report - silently return empty if not found
+    let json = match std::fs::read_to_string(run_report_path) {
+        Ok(j) => j,
+        Err(_) => return Vec::new(),
+    };
+
+    // Parse run report
+    let run_report: RunReport = match serde_json::from_str(&json) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    // Extract failed scenarios
+    let mut failures: Vec<FailureRecord> = run_report
+        .scenarios
+        .iter()
+        .filter(|s| matches!(s.status, ScenarioStatus::Failed))
+        .map(|s| {
+            // Extract scenario name from scenario_key (e.g., "features/smoke.feature:L8")
+            // For now, use the scenario_key as the name
+            let scenario_name = extract_scenario_name(&s.scenario_key);
+
+            // Determine failure kind and summary from first failing step
+            let (failure_kind, summary) = s
+                .steps
+                .iter()
+                .find(|step| matches!(step.status, namako::npap::StepStatus::Failed))
+                .map(|step| {
+                    let kind = classify_failure(&step.error_message);
+                    let summary = step
+                        .error_message
+                        .as_ref()
+                        .map(|m| truncate_summary(m, 200))
+                        .unwrap_or_else(|| "Step failed".to_string());
+                    (kind, summary)
+                })
+                .unwrap_or_else(|| ("unknown".to_string(), "Scenario failed".to_string()));
+
+            FailureRecord {
+                scenario_key: s.scenario_key.clone(),
+                scenario_name,
+                failure_kind,
+                summary,
+            }
+        })
+        .collect();
+
+    // Sort by scenario_key for determinism
+    failures.sort_by(|a, b| a.scenario_key.cmp(&b.scenario_key));
+    failures
+}
+
+/// Extract a human-readable scenario name from a scenario_key.
+/// Example: "features/smoke.feature:L8" -> "smoke.feature:L8"
+fn extract_scenario_name(scenario_key: &str) -> String {
+    // Take everything after the last "/" or return the whole key
+    scenario_key
+        .rsplit('/')
+        .next()
+        .unwrap_or(scenario_key)
+        .to_string()
+}
+
+/// Classify failure based on error message content.
+fn classify_failure(error_message: &Option<String>) -> String {
+    match error_message {
+        Some(msg) => {
+            let msg_lower = msg.to_lowercase();
+            if msg_lower.contains("assertion") || msg_lower.contains("assert") {
+                "assertion".to_string()
+            } else if msg_lower.contains("panic") || msg_lower.contains("thread") {
+                "panic".to_string()
+            } else if msg_lower.contains("missing") || msg_lower.contains("not found") {
+                "missing_binding".to_string()
+            } else if msg_lower.contains("timeout") || msg_lower.contains("timed out") {
+                "timeout".to_string()
+            } else {
+                "unknown".to_string()
+            }
+        }
+        None => "unknown".to_string(),
+    }
+}
+
+/// Truncate summary to a maximum length, adding "..." if truncated.
+fn truncate_summary(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len - 3])
+    }
 }
 
 fn compute_drift(current: &IdentityFields, baseline: &CertificationIdentity) -> DriftInfo {
@@ -384,6 +506,17 @@ fn print_human_readable(status: &StatusOutput) {
     println!("Drift: {:?}", status.drift.kind);
     for detail in &status.drift.details {
         println!("  {} changed", detail.field);
+    }
+    if !status.last_run_failures.is_empty() {
+        println!();
+        println!("Last Run Failures ({}):", status.last_run_failures.len());
+        for failure in &status.last_run_failures {
+            println!("  {} [{}]: {}",
+                failure.scenario_key,
+                failure.failure_kind,
+                failure.summary
+            );
+        }
     }
     println!();
     println!("Recommended Action: {:?}", status.recommended_next_action);
@@ -521,5 +654,38 @@ mod tests {
         let drift = compute_drift(&current, &baseline);
         assert!(matches!(drift.kind, DriftKind::Multiple));
         assert_eq!(drift.details.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_scenario_name() {
+        assert_eq!(
+            extract_scenario_name("features/smoke.feature:L8"),
+            "smoke.feature:L8"
+        );
+        assert_eq!(
+            extract_scenario_name("features/sub/test.feature:L15:E0:R2"),
+            "test.feature:L15:E0:R2"
+        );
+        assert_eq!(
+            extract_scenario_name("simple_key"),
+            "simple_key"
+        );
+    }
+
+    #[test]
+    fn test_classify_failure() {
+        assert_eq!(classify_failure(&Some("assertion failed: expected 1, got 2".to_string())), "assertion");
+        assert_eq!(classify_failure(&Some("thread panicked at 'explicit panic'".to_string())), "panic");
+        assert_eq!(classify_failure(&Some("binding not found".to_string())), "missing_binding");
+        assert_eq!(classify_failure(&Some("operation timed out".to_string())), "timeout");
+        assert_eq!(classify_failure(&Some("some other error".to_string())), "unknown");
+        assert_eq!(classify_failure(&None), "unknown");
+    }
+
+    #[test]
+    fn test_truncate_summary() {
+        assert_eq!(truncate_summary("short", 100), "short");
+        assert_eq!(truncate_summary("0123456789", 10), "0123456789");
+        assert_eq!(truncate_summary("01234567890", 10), "0123456...");
     }
 }
