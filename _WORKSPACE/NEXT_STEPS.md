@@ -1,6 +1,7 @@
 # NEXT_STEPS.md — Strategic Development Process for Spec-Driven AI Development
 
 **Created:** 2026-01-19
+**Updated:** 2026-01-19
 **Author:** Architecture Review
 **Purpose:** Define the optimal path forward for using Namako + Tesaki to drive autonomous spec-driven development
 
@@ -18,19 +19,101 @@
 - ✅ CI gates green (namako_ci.sh, determinism_check.sh)
 - ✅ All Bootstrap Exit Criteria satisfied
 
-**V2+ features are deferred but designed-in.** The v1 foundation supports incremental adoption of hardening features without breaking changes.
+### What's Next: Namako v1.5
 
-### What's Next
-
-The toolchain is ready for its intended purpose: **autonomous AI-driven development of Naia**. The transition from BOOTSTRAP to CONSUMPTION mode unlocks the ability to modify Naia core code through the Tesaki FSM.
+**v1.5 is the immediate next milestone.** Before entering CONSUMPTION mode to build Naia, we will implement the AI-enablement features that make Tesaki truly autonomous.
 
 ---
 
-## Recommended Development Process
+## Phase 0: Namako v1.5 — AI-Enablement Features (IMMEDIATE PRIORITY)
 
-### Phase 1: Consumption Mode Activation (Immediate)
+**Goal:** Implement the v1.5 feature set defined in GOLD_PLAN.md §10.5 to enable robust AI-driven development.
 
-**Goal:** Formally transition from BOOTSTRAP to CONSUMPTION mode and validate the end-to-end workflow with a controlled first mission.
+### v1.5 Feature Set
+
+| Feature | GOLD_PLAN Section | Priority | Status |
+|---------|-------------------|----------|--------|
+| Explicit ID tags (@FID/@Rnn/@Snn) | §10.5.1 | HIGH | 🔲 Not Started |
+| Orphan binding hard error + `namako stub` | §10.5.2 | HIGH | 🔲 Not Started |
+| `namako review` coverage enhancements | §10.5.3 | HIGH | 🔲 Not Started |
+| Scenario fidelity packets (`namako explain`) | §10.5.4 | MEDIUM | 🔲 Not Started |
+| Machine-readable process state (`namako status --json`) | §10.5.5 | HIGH | 🔲 Partial (basic impl exists) |
+| Rich `namako status` diffs | §10.5.6 | MEDIUM | 🔲 Not Started |
+
+### Implementation Order (Recommended)
+
+#### Sprint 1: Foundation — Explicit ID Tags
+**Duration:** 2-3 days
+
+1. **Update Gherkin parsing** to recognize `@FID(name)`, `@Rnn`, `@Snn` tags
+2. **Modify scenario_key derivation** to use `FID:Rnn:Snn` format
+3. **Add validation** for missing/duplicate IDs
+4. **Migrate existing feature files** to use explicit IDs
+5. **Update certification** (run `update-cert`)
+
+**Files to modify:**
+- `namako/src/engine.rs` — scenario key derivation
+- `namako/src/npap.rs` — key format changes
+- `naia/test/specs/features/*.feature` — add ID tags
+
+#### Sprint 2: Hygiene — Orphan Binding Enforcement
+**Duration:** 1-2 days
+
+1. **Enhance lint** to detect orphan bindings
+2. **Change warning → hard error** for orphans
+3. **Implement `namako stub`** command
+4. **Update tests** to verify orphan detection
+
+**Files to modify:**
+- `namako/cli/src/lint.rs` — orphan detection
+- `namako/cli/src/main.rs` — add `stub` subcommand
+- `namako/cli/src/stub.rs` — new file
+
+#### Sprint 3: AI Packets — Enhanced Review
+**Duration:** 2-3 days
+
+1. **Expand `namako review`** output with all 5 sections:
+   - Coverage summary
+   - Deferred items with blocker classification
+   - Promotion candidates with reuse_score
+   - Missing bindings worklist
+   - Harness gaps
+
+2. **Ensure deterministic output** (sorted, stable)
+
+**Files to modify:**
+- `namako/cli/src/review.rs` — enhanced packet output
+
+#### Sprint 4: AI Packets — Explain & Status
+**Duration:** 2-3 days
+
+1. **Enhance `namako explain`** with full fidelity packet
+2. **Enhance `namako status --json`** with all required fields
+3. **Add rich text diff output** to `namako status`
+
+**Files to modify:**
+- `namako/cli/src/explain.rs` — fidelity packet
+- `namako/cli/src/status.rs` — JSON and diff output
+
+### v1.5 Definition of Done
+
+| Criterion | Verification |
+|-----------|--------------|
+| Explicit IDs enforced | `namako lint` fails if @FID/@Rnn/@Snn missing |
+| Orphan → hard error | `namako lint` fails on orphan bindings |
+| `namako stub` works | Can generate stub scenarios for orphans |
+| Review packets complete | All 5 sections present in JSON output |
+| Explain packets complete | Full fidelity packet for any scenario |
+| Status JSON complete | All required fields present |
+| Rich diffs work | Text output shows clear diagnostics |
+| Feature files migrated | All 16 feature files have explicit ID tags |
+| Gates green | namako_ci.sh, determinism_check.sh pass |
+
+---
+
+## Phase 1: Consumption Mode Activation (After v1.5)
+
+**Goal:** After v1.5 is complete, formally transition from BOOTSTRAP to CONSUMPTION mode and validate the end-to-end workflow with a controlled first mission.
 
 #### Step 1.1: Mode Transition
 1. Update `CURRENT_STATUS.md`: Set `MODE: CONSUMPTION`
@@ -65,7 +148,7 @@ Run `tesaki next` with `--max-cert-updates 3` to verify:
 
 ---
 
-### Phase 2: Specification Expansion (Short-term)
+## Phase 2: Specification Expansion (Short-term)
 
 **Goal:** Build out the Naia feature specifications incrementally, using the Tesaki loop to drive implementation.
 
@@ -108,7 +191,7 @@ graph TD
 
 ---
 
-### Phase 3: Harness Maturation (Medium-term)
+## Phase 3: Harness Maturation (Medium-term)
 
 **Goal:** Strengthen the test harness to support more complex scenarios.
 
@@ -133,24 +216,25 @@ For each harness enhancement:
 
 ---
 
-### Phase 4: Toolchain Polish (Medium-term)
+## Phase 4: V2+ Toolchain Polish (Long-term)
 
-**Goal:** Address v2+ features that provide the most value for AI-assisted development.
+**Goal:** Address remaining v2+ features that provide additional value beyond v1.5.
 
-#### High-Value V2+ Features (Ranked by Impact)
+#### V2+ Features (Deferred Beyond v1.5)
 
-| Feature | GOLD_PLAN Section | Value for AI Dev | Effort |
-|---------|-------------------|------------------|--------|
-| Rich `namako status` diffs | §11.10 | HIGH — Better error diagnostics | Low |
-| Orphan binding warnings → errors | §11.3 | MEDIUM — Catch dead code | Low |
-| Conformance fixtures | §11.8 | MEDIUM — Regression safety | Medium |
-| FeatureAstNorm | §11.1 | LOW (v1 fingerprint sufficient) | High |
-| Explicit ID tags | §11.2 | LOW (line-based keys work) | Medium |
+| Feature | GOLD_PLAN Section | Value | Status |
+|---------|-------------------|-------|--------|
+| FeatureAstNorm | §11.1 | Cosmetic-change immunity | ⏳ Deferred |
+| CBOR encoding | §11.7 | Cross-platform byte reproducibility | ⏳ Deferred |
+| Conformance fixtures | §11.8 | Regression safety | ⏳ Deferred |
+| `resolution_semantics_id` | §11.9 | Version-tracked resolution changes | ⏳ Deferred |
+| `bindings_used_hash` | §11.12 | Fast-path verification | ⏳ Deferred |
+| Multi-language support | §11.13 | Non-Rust adapters | ⏳ Deferred |
+| Adapter SDKs | §11.14 | JS/TS, Python, Go support | ⏳ Deferred |
+| Cross-language hashing | §11.15 | Hash oracle / native SDK | ⏳ Deferred |
+| Adapter certification | §11.16 | Third-party adapter verification | ⏳ Deferred |
 
-**Recommended V2+ Roadmap:**
-1. **§11.10: Rich status diffs** — Immediate value for debugging
-2. **§11.3: Orphan warnings → errors** — Hygiene improvement
-3. **Defer everything else** — v1 fingerprint and keys are sufficient
+**Recommendation:** These features are not needed for autonomous Naia development. Defer until publish-grade requirements emerge.
 
 ---
 
@@ -160,11 +244,19 @@ For each harness enhancement:
 
 - [ ] Review and commit the comprehensive `CURRENT_STATUS.md`
 - [ ] Review and commit `NEXT_STEPS.md`
-- [ ] Decide: Transition to CONSUMPTION mode? (recommended: yes)
-- [ ] Select first CONSUMPTION mission target
-- [ ] Run first mission through Tesaki FSM
+- [ ] Review updated `GOLD_PLAN.md` with v1.5 section
+- [ ] Begin v1.5 Sprint 1: Explicit ID Tags
 
-### For AI Agent (Tesaki-Driven)
+### For AI Agent (v1.5 Implementation)
+
+**Current Phase: v1.5 Sprint 1 — Explicit ID Tags**
+1. Update engine.rs to parse @FID/@Rnn/@Snn tags
+2. Modify scenario_key derivation to use ID-based format
+3. Add validation for missing/duplicate IDs
+4. Migrate all `.feature` files to use explicit IDs
+5. Run gates and update certification
+
+### For AI Agent (After v1.5, CONSUMPTION Mode)
 
 Once MODE = CONSUMPTION:
 1. Run `tesaki next` to get current task
@@ -177,13 +269,25 @@ Once MODE = CONSUMPTION:
 
 ## Success Metrics
 
-### Short-term (Next 2 Weeks)
+### v1.5 Completion (Next 1-2 Weeks)
 
 | Metric | Target |
 |--------|--------|
-| Executable scenarios | 40+ (from 31) |
-| Feature files with scenarios | 6+ (from 3) |
-| Autonomous tesaki cycles completed | 5+ |
+| Explicit ID tags | All 16 feature files have @FID/@Rnn/@Snn |
+| Orphan enforcement | `namako lint` fails on orphans |
+| Review packets | All 5 sections implemented |
+| Explain packets | Full fidelity output |
+| Status enhancements | JSON + rich diffs complete |
+| Gates | All green |
+
+### Short-term (Next 2-4 Weeks, Post-v1.5)
+
+| Metric | Target |
+|--------|--------|
+| MODE | CONSUMPTION |
+| Executable scenarios | 50+ (from 31) |
+| Feature files with scenarios | 8+ (from 3) |
+| Autonomous tesaki cycles completed | 10+ |
 
 ### Medium-term (Next 2 Months)
 
@@ -227,14 +331,15 @@ Once MODE = CONSUMPTION:
 
 ## Conclusion
 
-The Namako + Tesaki toolchain is operational and ready for production use. The v1 KISS MVP provides all necessary capabilities for AI-assisted spec-driven development:
+The Namako v1 toolchain is operational. **v1.5 is the immediate next milestone** — implementing AI-enablement features that will make Tesaki truly autonomous:
 
-1. **Deterministic resolution** — Engine is the sole source of truth
-2. **Plan-driven execution** — Adapter dispatches by binding ID only
-3. **Hash-based certification** — Immutable identity tracking
-4. **Autonomous orchestration** — Tesaki generates actionable tasks
+1. **Explicit ID tags** — Refactor-stable identity for all specs
+2. **Orphan enforcement** — Clean binding registry
+3. **Enhanced packets** — Rich work items for AI task selection
+4. **Fidelity packets** — AI-assisted spec review
+5. **Rich status** — Better debugging and automation
 
-**The recommended next step is to transition to CONSUMPTION mode and run the first AI-driven development mission.** This validates the end-to-end workflow and begins the process of expanding Naia's specification coverage through the Tesaki FSM.
+**After v1.5 is complete**, transition to CONSUMPTION mode and begin autonomous AI-driven development of Naia through the Tesaki FSM.
 
 ---
 

@@ -24,6 +24,7 @@
 8. [Where v1 is Intentionally NOT Publish-Grade](#part-8-where-v1-is-intentionally-not-publish-grade)
 9. [Tesaki: The AI Driver Layer (No Inference in Namako)](#part-9-tesaki-the-ai-driver-layer-no-inference-in-namako)
 10. [The Spec-Driven Development Loop (v1)](#part-10-the-spec-driven-development-loop-v1)
+10.5. [Namako v1.5 — AI-Enablement Features](#part-105-namako-v15--ai-enablement-features)
 11. [Namako v2+ — Armor Plating (Deferred Publish-Grade Features)](#part-11-namako-v2--armor-plating-deferred-publish-grade-features)
     - [11.11 Multi-Language Support](#1111-multi-language-support-language-neutral-engine-language-specific-adapters)
     - [11.12 Adapter SDKs](#1112-adapter-sdks-v2)
@@ -81,15 +82,16 @@ This separation ensures reproducibility, auditability, and model/provider indepe
 
 This document explicitly separates:
 
-| Concern | v1 (KISS MVP) | v2+ (Armor Plating) |
-|---------|---------------|---------------------|
-| Scope | Minimum viable for Naia self-development | Publish-grade hardening |
-| Timeline | Build now | Build later (captured here) |
-| Identity stability | Expression-based binding IDs | Refactor-stable explicit IDs |
-| Feature hashing | Feature fingerprint (simpler) | Full FeatureAstNorm |
-| Orphan policy | Warning only | Hard error + mitigation tools |
-| Encoding | Canonical JSON | CBOR profiles, conformance fixtures |
-| Language support | Rust adapter (Naia) | Multi-language SDKs + conformance |
+| Concern | v1 (KISS MVP) | v1.5 (AI-Enablement) | v2+ (Armor Plating) |
+|---------|---------------|----------------------|---------------------|
+| Scope | Minimum viable for Naia self-development | AI-driven autonomous development | Publish-grade hardening |
+| Timeline | ✅ Complete | Build now (immediate) | Build later (captured here) |
+| Identity stability | Expression-based binding IDs | Explicit ID tags (@FID/@Rnn/@Snn) | Refactor-stable explicit IDs |
+| Feature hashing | Feature fingerprint (simpler) | Feature fingerprint | Full FeatureAstNorm |
+| Orphan policy | Warning only | Hard error + `namako stub` | Hard error + mitigation tools |
+| Encoding | Canonical JSON | Canonical JSON | CBOR profiles, conformance fixtures |
+| Language support | Rust adapter (Naia) | Rust adapter (Naia) | Multi-language SDKs + conformance |
+| AI packets | Basic | Rich (`review`, `explain`, `status --json`) | Full automation support |
 
 ### Namako vs Tesaki (Normative)
 
@@ -1252,9 +1254,237 @@ This project has existing Markdown docs describing Naia behavior.
 
 ---
 
+## Part 10.5: Namako v1.5 — AI-Enablement Features
+
+**v1.5 is the immediate next milestone.** These features enable robust AI-driven autonomous development without requiring the full publish-grade hardening of v2+. They are selected to maximize Tesaki's effectiveness while minimizing implementation complexity.
+
+### v1.5 Feature Set (Normative)
+
+| Feature | Source Section | Priority | Rationale |
+|---------|----------------|----------|-----------|
+| Explicit ID tags (@FID/@Rnn/@Snn) | §11.2 | HIGH | Identity survives refactoring; essential for autonomous spec management |
+| Orphan binding hard error + `namako stub` | §11.3 | HIGH | Prevents dead code accumulation in bindings |
+| `namako review` coverage enhancements | §11.4 | HIGH | Rich work packets for Tesaki task selection |
+| Scenario fidelity packets (`namako explain`) | §11.5 | MEDIUM | AI-assisted "spirit of the spec" review |
+| Machine-readable process state (`namako status --json`) | §11.6 | HIGH | FSM automation without log parsing |
+| Rich `namako status` diffs | §11.10 | MEDIUM | Better debugging and drift diagnostics |
+
+### 10.5.1 Explicit Identity Tags (v1.5, Normative)
+
+**Promoted from §11.2.**
+
+v1.5 MUST support structural identity tags:
+
+| Tag | Applies To | Format | Example |
+|-----|-----------|--------|---------|
+| `@FID(name)` | Feature | Alphanumeric snake_case | `@FID(connection_lifecycle)` |
+| `@Rnn` | Rule | Numeric index (1-based) | `@R01`, `@R02` |
+| `@Snn` | Scenario | Numeric index (1-based) | `@S01`, `@S02` |
+| `EID` column | Examples row | String identifier | `EID: auth_success` |
+
+**Invariant (v1.5):**
+- Features MUST have `@FID(name)` tag
+- Rules MUST have `@Rnn` tag
+- Scenarios MUST have `@Snn` tag
+- Example rows SHOULD have `EID` column (MUST for v2+)
+
+**Migration from v1:**
+- Add tags to all existing `.feature` files
+- Scenario keys will use `FID:Rnn:Snn` format instead of `path:Lnn`
+- Bump identity (run `update-cert` after migration)
+
+**Derivation Rules:**
+- `scenario_key` = `FID + ":" + Rnn + ":" + Snn` (or `+ ":E" + EID` for outline rows)
+- Collision detection: duplicate `(FID, Rnn, Snn)` tuples → hard error
+
+### 10.5.2 Orphan Bindings as Hard Error (v1.5, Normative)
+
+**Promoted from §11.3.**
+
+v1.5 changes orphan binding policy from warning to hard error:
+
+- Binding in registry not used by any scenario → **hard error** in `namako lint`
+- Rationale: Prevents dead code accumulation, keeps registry minimal
+
+**Mitigation Tool:**
+
+`namako stub` generates placeholder usage for orphan bindings:
+
+```bash
+# List orphan bindings
+namako lint --show-orphans
+
+# Generate stub scenario for an orphan
+namako stub --binding <binding_id> --feature <path.feature>
+
+# Auto-stub all orphans (creates _orphan_stubs.feature)
+namako stub --all
+```
+
+**Stub Output Example:**
+```gherkin
+# Auto-generated by namako stub — delete after implementing real scenarios
+@Deferred @Stub
+Scenario: Stub for orphan binding abc123
+  Given <original step text from binding>
+```
+
+### 10.5.3 Enhanced Work Packets (`namako review`) (v1.5, Normative)
+
+**Promoted from §11.4.**
+
+v1.5 enhances `namako review` to output richer AI-actionable packets:
+
+**Required Packet Sections:**
+1. **Coverage Summary:**
+   - Feature/Rule → executable scenario counts
+   - Rules with 0 scenario coverage
+   - @Deferred scenario count per feature
+
+2. **Deferred Items:**
+   - Full list of `@Deferred` scenarios with:
+     - scenario_key
+     - scenario_name
+     - feature_path
+     - rule_name
+     - blocker classification (HARNESS_ONLY, CORE, EXTERNAL, UNKNOWN)
+
+3. **Promotion Candidates:**
+   - Ranked by `reuse_score` (step binding reuse)
+   - `suggested_binding_bundle` for missing steps
+   - `new_step_texts_estimate` count
+
+4. **Missing Bindings Worklist:**
+   - For top N promotion candidates
+   - Step texts that need new bindings
+   - Suggested expression patterns
+
+5. **Harness Gaps:**
+   - Normalized capability descriptions
+   - Count of blocked scenarios per gap
+
+**Determinism Requirement:** Output MUST be stable (sorted keys, stable ordering).
+
+### 10.5.4 Scenario Fidelity Packets (`namako explain`) (v1.5, Normative)
+
+**Promoted from §11.5.**
+
+v1.5 implements `namako explain --scenario-key <key>` to output a fidelity packet:
+
+**Packet Contents:**
+```json
+{
+  "scenario_key": "...",
+  "scenario_name": "...",
+  "feature_path": "...",
+  "rule_name": "...",
+  "rule_description": "...",
+  "steps": [
+    {
+      "step_kind": "Given",
+      "step_text": "...",
+      "binding_id": "...",
+      "binding_expression": "...",
+      "impl_hash": "...",
+      "source_location": "path/to/file.rs:123"
+    }
+  ],
+  "related_tags": ["@smoke", "@connection"],
+  "contract_excerpt": "# Rule: Connection Events\n\nWhen a client..."
+}
+```
+
+**Why it matters:**
+- Enables AI review: "Does this binding actually test what the rule describes?"
+- Provides implementation context without reading entire codebase
+
+### 10.5.5 Machine-Readable Process State (`namako status --json`) (v1.5, Normative)
+
+**Promoted from §11.6.**
+
+v1.5 enhances `namako status --json` for FSM automation:
+
+**Required Output Fields:**
+```json
+{
+  "recommended_next_action": "RUN_LINT | FIX_RUN | NEEDS_UPDATE_CERT_APPROVAL | DONE",
+  "lint_status": "pass | fail | stale",
+  "run_status": "pass | fail | stale | not_run",
+  "verify_status": "pass | fail | stale | not_run",
+  "drift": {
+    "kind": "NONE | FEATURE | REGISTRY | PLAN | BASELINE",
+    "details": [
+      {"field": "...", "baseline": "...", "current": "..."}
+    ]
+  },
+  "last_run_failures": [
+    {
+      "scenario_key": "...",
+      "scenario_name": "...",
+      "failure_kind": "step_failed | panic | timeout"
+    }
+  ],
+  "identity": {
+    "current": { ... },
+    "baseline": { ... }
+  },
+  "metadata": {
+    "timestamp": "...",
+    "namako_version": "..."
+  }
+}
+```
+
+**Determinism Requirement:** Output MUST be stable for same inputs.
+
+### 10.5.6 Rich Status Diffs (v1.5, Normative)
+
+**Promoted from §11.10.**
+
+v1.5 adds human-readable diff output to `namako status`:
+
+**Text Output (default):**
+```
+=== Identity Status ===
+✗ feature_fingerprint_hash: DRIFTED
+  Baseline: abc123...
+  Current:  def456...
+
+✓ step_registry_hash: MATCH
+✓ resolved_plan_hash: MATCH
+
+=== Recommended Action ===
+NEEDS_UPDATE_CERT_APPROVAL
+
+=== Recent Failures ===
+1. features/connection.feature:L42 — Server connection timeout
+   Step 3: Then the client receives a disconnect event
+   Error: assertion failed: expected Disconnect, got None
+```
+
+**Why it matters:**
+- Faster developer debugging
+- Clearer CI failure diagnostics
+
+### v1.5 Definition of Done
+
+The v1.5 system is complete when:
+
+| Criterion | Description |
+|-----------|-------------|
+| **Explicit IDs enforced** | All features require @FID/@Rnn/@Snn; scenario_key uses ID-based format |
+| **Orphan → hard error** | `namako lint` fails on orphan bindings; `namako stub` generates placeholders |
+| **Review packets enhanced** | All 5 packet sections present in `namako review` output |
+| **Explain packets complete** | `namako explain` outputs full fidelity packets |
+| **Status JSON complete** | All required fields present in `namako status --json` |
+| **Rich diffs implemented** | Text diff output shows clear diagnostics |
+| **Migration complete** | All existing `.feature` files have explicit ID tags |
+
+---
+
 ## Part 11: Namako v2+ — Armor Plating (Deferred Publish-Grade Features)
 
-This section captures all hardening features not required in v1 but designed into the system for future adoption.
+This section captures all hardening features not required in v1/v1.5 but designed into the system for future adoption.
 
 ### 11.1 FeatureAstNorm (Full AST Normal Form Hashing)
 

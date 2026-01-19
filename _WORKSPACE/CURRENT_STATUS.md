@@ -1,13 +1,15 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
 **Last Updated:** 2026-01-19
-**MODE:** CONSUMPTION
+**MODE:** BOOTSTRAP (v1.5 implementation in progress)
 
 ---
 
 ## Executive Summary
 
-**Namako v1 is FUNCTIONALLY COMPLETE.** All core components specified in GOLD_PLAN.md Parts 1–10 are implemented and operational. The toolchain is ready for the transition from BOOTSTRAP to CONSUMPTION mode.
+**Namako v1 is FUNCTIONALLY COMPLETE.** All core components specified in GOLD_PLAN.md Parts 1–10 are implemented and operational.
+
+**Namako v1.5 is the IMMEDIATE NEXT MILESTONE.** Before transitioning to CONSUMPTION mode, we are implementing AI-enablement features per GOLD_PLAN.md §10.5.
 
 | Milestone | Status |
 |-----------|--------|
@@ -16,6 +18,7 @@
 | Tesaki Task Orchestrator | ✅ COMPLETE |
 | CI Gates | ✅ ALL GREEN |
 | Bootstrap Exit Criteria | ✅ ALL SATISFIED |
+| **Namako v1.5 AI-Enablement** | 🔲 IN PROGRESS |
 
 ---
 
@@ -144,22 +147,31 @@ cargo run -p tesaki -- next \
 
 ---
 
-## 3. V2+ Features Status (Deferred Per GOLD_PLAN.md Part 11)
+## 3. V1.5 Features Status (AI-Enablement — IMMEDIATE PRIORITY)
 
-All v2+ features are **DEFERRED** — not blocking v1 completion.
+v1.5 features are **IN PROGRESS** — per GOLD_PLAN.md §10.5.
+
+| Feature | Section | Status |
+|---------|---------|--------|
+| Explicit ID tags (@FID/@Rnn/@Snn) | §10.5.1 | 🔲 Not Started |
+| Orphan binding hard error + `namako stub` | §10.5.2 | 🔲 Not Started |
+| `namako review` coverage enhancements | §10.5.3 | 🔲 Not Started |
+| Scenario fidelity packets (`namako explain`) | §10.5.4 | 🔲 Not Started |
+| Machine-readable process state (`namako status --json`) | §10.5.5 | 🔲 Partial |
+| Rich `namako status` diffs | §10.5.6 | 🔲 Not Started |
+
+---
+
+## 4. V2+ Features Status (Deferred Per GOLD_PLAN.md Part 11)
+
+V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 | Feature | Section | Status |
 |---------|---------|--------|
 | FeatureAstNorm (full AST hashing) | §11.1 | ⏳ Deferred |
-| Explicit ID tags (@FID/@Rnn/@Snn) | §11.2 | ⏳ Deferred |
-| Orphan binding hard error + `namako stub` | §11.3 | ⏳ Deferred |
-| `namako review` coverage enhancements | §11.4 | ⏳ Deferred |
-| Post-condition extraction | §11.5 | ⏳ Deferred |
-| CBOR encoding profiles | §11.6 | ⏳ Deferred |
-| Binding registry JSON schema publish | §11.7 | ⏳ Deferred |
+| CBOR encoding profiles | §11.7 | ⏳ Deferred |
 | Conformance fixtures | §11.8 | ⏳ Deferred |
 | `resolution_semantics_id` | §11.9 | ⏳ Deferred |
-| Rich `namako status` diffs | §11.10 | ⏳ Deferred |
 | Stronger `impl_hash` schemes | §11.11 | ⏳ Deferred |
 | `bindings_used_hash` | §11.12 | ⏳ Deferred |
 | Multi-language support | §11.13 | ⏳ Deferred |
@@ -169,7 +181,7 @@ All v2+ features are **DEFERRED** — not blocking v1 completion.
 
 ---
 
-## 4. Bootstrap Exit Criteria (§2.5) — ✅ ALL SATISFIED
+## 5. Bootstrap Exit Criteria (§2.5) — ✅ ALL SATISFIED
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
@@ -184,7 +196,7 @@ All v2+ features are **DEFERRED** — not blocking v1 completion.
 
 ---
 
-## 5. Completed Work History (Reconstructed from Git)
+## 6. Completed Work History (Reconstructed from Git)
 
 ### Recent Commits (namako repo)
 
@@ -224,7 +236,7 @@ All v2+ features are **DEFERRED** — not blocking v1 completion.
 
 ---
 
-## 6. Current Identity (Certified)
+## 7. Current Identity (Certified)
 
 | Field | Hash |
 |-------|------|
@@ -235,7 +247,7 @@ All v2+ features are **DEFERRED** — not blocking v1 completion.
 
 ---
 
-## 7. Artifacts
+## 8. Artifacts
 
 | Artifact | Path |
 |----------|------|
@@ -248,13 +260,22 @@ All v2+ features are **DEFERRED** — not blocking v1 completion.
 
 ---
 
-## 8. Transition Readiness
+## 9. Transition Readiness
 
-### BOOTSTRAP → CONSUMPTION Transition
+### Current Phase: v1.5 Implementation
 
-The system is ready for CONSUMPTION mode. All Bootstrap Exit Criteria (§2.5) are satisfied.
+**Before transitioning to CONSUMPTION mode**, complete the v1.5 AI-enablement features:
 
-**To transition:**
+| Sprint | Focus | Status |
+|--------|-------|--------|
+| Sprint 1 | Explicit ID tags (@FID/@Rnn/@Snn) | 🔲 Not Started |
+| Sprint 2 | Orphan binding enforcement + `namako stub` | 🔲 Not Started |
+| Sprint 3 | Enhanced `namako review` packets | 🔲 Not Started |
+| Sprint 4 | Enhanced `namako explain` + `status` | 🔲 Not Started |
+
+### After v1.5: CONSUMPTION Transition
+
+Once v1.5 is complete:
 1. Update this file: `MODE: CONSUMPTION`
 2. Select first CORE work item (per §2.7 First CONSUMPTION Mission Template)
 3. Drive through Tesaki Product FSM
