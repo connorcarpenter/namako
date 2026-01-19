@@ -5,7 +5,7 @@
 //!
 //! Per TODO.md §2, this enables Tesaki to prioritize scenario promotion.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -63,6 +63,9 @@ pub struct ReviewOutput {
     pub promotion_candidates: Vec<PromotionCandidate>,
     /// Missing bindings for top candidates
     pub missing_bindings_for_top_candidates: Vec<MissingBindingInfo>,
+    /// Suggested binding bundle per TODO.md §3.1
+    /// When all candidates require new bindings (reuse_score=0), this tells exactly what to implement
+    pub suggested_binding_bundle: SuggestedBindingBundle,
 }
 
 /// Current identity fields
@@ -145,6 +148,27 @@ pub struct PromotionCandidate {
 pub struct MissingBindingInfo {
     pub candidate_name: String,
     pub missing_step_texts: Vec<String>,
+}
+
+/// Suggested binding bundle per TODO.md §3.1
+/// Computed from top N promotion candidates - tells Tesaki exactly what to implement
+#[derive(Debug, Clone, Serialize)]
+pub struct SuggestedBindingBundle {
+    /// List of step bindings to implement, ranked by frequency
+    pub steps: Vec<BundleStepInfo>,
+    /// Rationale explaining the bundle
+    pub rationale: String,
+}
+
+/// Step info for the binding bundle
+#[derive(Debug, Clone, Serialize)]
+pub struct BundleStepInfo {
+    /// Step kind: Given, When, Then
+    pub kind: String,
+    /// Step text (normalized)
+    pub text: String,
+    /// Number of candidates that need this step
+    pub frequency: u32,
 }
 
 /// Run the review command.
@@ -296,6 +320,12 @@ fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
         &existing_expressions,
     );
 
+    // Compute suggested binding bundle per TODO.md §3.1
+    let suggested_binding_bundle = compute_binding_bundle(
+        &promotion_candidates[..std::cmp::min(10, promotion_candidates.len())],
+        &existing_expressions,
+    );
+
     Ok(ReviewOutput {
         version: 1,
         spec_root,
@@ -304,6 +334,7 @@ fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
         coverage_summary,
         promotion_candidates,
         missing_bindings_for_top_candidates: missing_bindings,
+        suggested_binding_bundle,
     })
 }
 
@@ -630,6 +661,71 @@ fn compute_missing_bindings(
             missing_step_texts: missing,
         }
     }).collect()
+}
+
+/// Compute a suggested binding bundle from top N promotion candidates.
+/// Per TODO.md §3.1, this ensures Tesaki never stops on reuse_score=0.
+fn compute_binding_bundle(
+    candidates: &[PromotionCandidate],
+    existing_expressions: &BTreeSet<(String, String)>,
+) -> SuggestedBindingBundle {
+    // Count frequency of each missing step across all candidates
+    let mut step_frequency: BTreeMap<(String, String), u32> = BTreeMap::new();
+
+    for candidate in candidates {
+        for step in &candidate.steps {
+            let is_missing = !existing_expressions.iter().any(|(kind, expr)| {
+                kind == &step.kind && (expr == &step.text || expr.contains(&step.text))
+            });
+
+            if is_missing {
+                let key = (step.kind.clone(), step.text.clone());
+                *step_frequency.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Sort by frequency (descending), then by kind (Given < When < Then), then by text
+    let mut steps: Vec<_> = step_frequency.into_iter().collect();
+    steps.sort_by(|a, b| {
+        b.1.cmp(&a.1) // frequency desc
+            .then_with(|| {
+                let kind_order = |k: &str| match k {
+                    "Given" => 0,
+                    "When" => 1,
+                    "Then" => 2,
+                    _ => 3,
+                };
+                kind_order(&a.0.0).cmp(&kind_order(&b.0.0))
+            })
+            .then_with(|| a.0.1.cmp(&b.0.1)) // text asc
+    });
+
+    let total_steps = steps.len();
+    let top_candidates_count = candidates.len();
+
+    let bundle_steps: Vec<BundleStepInfo> = steps
+        .into_iter()
+        .take(15) // Limit to top 15 most common missing steps
+        .map(|((kind, text), frequency)| BundleStepInfo { kind, text, frequency })
+        .collect();
+
+    // Generate rationale
+    let rationale = if bundle_steps.is_empty() {
+        "All steps in top promotion candidates have existing bindings.".to_string()
+    } else {
+        format!(
+            "To promote the top {} scenarios, implement these {} step bindings (most common first). \
+             Implementing the highest-frequency steps will unblock the most scenarios.",
+            top_candidates_count,
+            total_steps
+        )
+    };
+
+    SuggestedBindingBundle {
+        steps: bundle_steps,
+        rationale,
+    }
 }
 
 /// Discover all `.feature` files under the given directory.

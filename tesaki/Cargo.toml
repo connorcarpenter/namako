@@ -21,3 +21,7 @@ anyhow = "1.0"
 
 # File system operations
 chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+# For temporary file handling in tests
+tempfile = "3.15"
