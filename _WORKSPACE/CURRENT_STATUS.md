@@ -1,44 +1,274 @@
-# CURRENT_STATUS.md — Mission 001 Checkpoint
+# CURRENT_STATUS.md — Comprehensive Implementation Status
 
-## Mission
+**Last Updated:** 2026-01-19
+**MODE:** CONSUMPTION
 
-**Mission 001**: ProtocolMismatch detection via protocol_id handshake validation
+---
 
-## Status
+## Executive Summary
 
-✅ **COMPLETE** — Ready for review (no commits yet)
+**Namako v1 is FUNCTIONALLY COMPLETE.** All core components specified in GOLD_PLAN.md Parts 1–10 are implemented and operational. The toolchain is ready for the transition from BOOTSTRAP to CONSUMPTION mode.
 
-## Session Summary
+| Milestone | Status |
+|-----------|--------|
+| Namako v1 Core | ✅ COMPLETE |
+| NPA v1 Protocol | ✅ COMPLETE |
+| Tesaki Task Orchestrator | ✅ COMPLETE |
+| CI Gates | ✅ ALL GREEN |
+| Bootstrap Exit Criteria | ✅ ALL SATISFIED |
 
-### What Was Done
+---
 
-1. **PRUNE_NOTES.md Audit & Rewrite**
-   - Original incorrectly claimed governance scripts were "required for ProtocolMismatch"
-   - Rewrote with accurate MISSION_CORE/MISSION_SUPPORT/INCIDENTAL_HYGIENE classification
+## 1. Gates Snapshot
 
-2. **Named Trait Refactoring** (user-requested scope expansion)
-   - Eliminated `std::any::type_name` stability risk
-   - Moved Named trait to `shared/src/named.rs` (top-level)
-   - Added `fn protocol_name() -> &'static str` for static access
-   - Updated all derive macros (Message, Replicate, Channel) to implement Named
-   - Added Named trait bounds throughout Protocol API
-   - Created ChannelInternal derive for internal use
+### Commands
 
-### Files Changed
+```bash
+# Primary CI gate (lint → run → verify)
+bash naia/test/specs/scripts/namako_ci.sh
 
-- **41 modified** (handshake, server, client, shared, derive macros, test harness)
-- **1 deleted** (`shared/src/messages/named.rs` — old location)
-- **2 new** (`shared/src/named.rs`, `PRUNE_NOTES.md`)
+# Determinism check (runs twice, compares bytes)
+bash naia/test/specs/scripts/determinism_check.sh
 
-### Gates
+# Tesaki orchestrator (from namako/ directory)
+cargo run -p tesaki -- next \
+  -s ../naia/test/specs \
+  -a "cargo run --manifest-path ../naia/test/npa/Cargo.toml --" \
+  --max-cert-updates 3
+```
 
-| Gate | Status |
-|------|--------|
-| namako_ci.sh | ✅ PASS |
-| determinism_check.sh | ✅ PASS |
+### Latest Results (2026-01-19)
 
-## Next Steps
+| Gate | Status | Notes |
+|------|--------|-------|
+| `namako_ci.sh` | ✅ PASS | Lint, Run, Verify all green |
+| `determinism_check.sh` | ✅ PASS | `bytes(run1) == bytes(run2)` |
+| `cargo test -p tesaki` | ✅ PASS | 4 unit tests pass |
+| `cargo build -p namako-cli` | ✅ PASS | All warnings are cosmetic |
 
-1. Review the diff
-2. Stage new files: `git add PRUNE_NOTES.md shared/src/named.rs`
-3. Commit: `git commit -am "feat(handshake): protocol mismatch detection with Named trait"`
+### Scenario Counts
+
+| Metric | Count |
+|--------|-------|
+| Executable scenarios | **31** |
+| @Deferred scenarios | **0** |
+| Promotion candidates | **0** |
+| Feature files | **16** |
+| Total lines in specs | **2,111** |
+
+---
+
+## 2. V1 Implementation Status (Per GOLD_PLAN.md)
+
+### Part 3: Crate Architecture — ✅ COMPLETE
+
+| Crate | Location | Status |
+|-------|----------|--------|
+| `namako` (lib) | `namako/src/` | ✅ Engine, parser, npap, runner |
+| `namako_codegen` (proc-macro) | `namako/codegen/` | ✅ Step macros, registry |
+| `namako-cli` (bin) | `namako/cli/` | ✅ All v1 commands |
+| `naia_test_harness` (lib) | `naia/test/harness/` | ✅ Scenario, World |
+| `naia_tests` (lib) | `naia/test/tests/` | ✅ Step bindings |
+| `naia_npa` (bin) | `naia/test/npa/` | ✅ NPA adapter |
+
+### Part 4: Step Macro UX — ✅ COMPLETE
+
+| Requirement | Status |
+|-------------|--------|
+| One macro + one string | ✅ Implemented |
+| Generated binding IDs (§4.2) | ✅ `kind+expr_norm\|namako-binding-id-v1\|blake3-256-lowerhex` |
+| Context-first ABI (§4.4) | ✅ `&mut CtxMut` for Given/When, `&CtxRef` for Then |
+| Signature validation | ✅ Captures arity, docstring, datatable |
+| Collision detection | ✅ Hard error on duplicate binding IDs |
+
+### Part 5: Namako v1 CLI Commands — ✅ COMPLETE
+
+| Command | Description | Status |
+|---------|-------------|--------|
+| `namako lint` | Resolve features → `resolved_plan.json` | ✅ |
+| `namako verify` | Recompute hashes, compare to baseline | ✅ |
+| `namako update-cert` | Manual baseline update with refusal rules | ✅ |
+| `namako status` | FSM state + identity hashes (JSON output) | ✅ |
+| `namako review` | Work backlog packet (promotion candidates) | ✅ |
+| `namako explain` | Scenario fidelity packet | ✅ |
+
+### Part 6: NPA v1 Protocol — ✅ COMPLETE
+
+| Requirement | Status |
+|-------------|--------|
+| `npap_version = 1` | ✅ |
+| `hash_contract_version` | ✅ `namako-v1-json+blake3-256` |
+| `adapter manifest` | ✅ Semantic registry JSON |
+| `adapter run --plan --out` | ✅ Plan-driven execution |
+| Dispatch by `binding_id` only | ✅ No text matching |
+| Freshness check | ✅ Rejects stale plans |
+| `impl_hash` scheme | ✅ `token-fingerprint-v1\|blake3-256-lowerhex` |
+| Resolved plan schema | ✅ Per §6.4.1 |
+| Run report schema | ✅ Per §6.4.2 |
+| Scenario key derivation | ✅ `path:Lnn` format |
+
+### Part 7: Hashing & Identity — ✅ COMPLETE
+
+| Requirement | Status | Implementation |
+|-------------|--------|----------------|
+| Hash contract version | ✅ | `namako-v1-json+blake3-256` |
+| String normalization (§7.0.2) | ✅ | NFC + `\n` newlines |
+| Canonical JSON (§7.0.3) | ✅ | Sorted keys, explicit nulls |
+| BLAKE3-256 lowerhex | ✅ | 64-char hex output |
+| Self-hash exclusion (§7.0.5) | ✅ | Omit only own hash field |
+| `feature_fingerprint_hash` | ✅ | Simpler v1 fingerprint |
+| `step_registry_hash` | ✅ | Sorted by binding_id |
+| `resolved_plan_hash` | ✅ | |
+| Certification identity tuple | ✅ | `{ identity, metadata }` |
+
+### Part 9: Tesaki AI Driver — ✅ COMPLETE
+
+| Requirement | Status |
+|-------------|--------|
+| Consumes Namako packets | ✅ status, review, explain |
+| Generates NEXT_TASK.md | ✅ Deterministic output |
+| `--max-cert-updates` governance | ✅ 0 = manual, N = autonomous |
+| Audit log for update-cert | ✅ `update_cert_log.jsonl` |
+| Mode-aware CORE blocker filtering | ✅ BOOTSTRAP skips CORE |
+| Blocker classification | ✅ HARNESS_ONLY, CORE, EXTERNAL, UNKNOWN |
+
+### Part 10: Spec-Driven Development Loop — ✅ COMPLETE
+
+| Step | Description | Status |
+|------|-------------|--------|
+| Requirements capture | Human input | ✅ (manual) |
+| Convert to .feature | Normative spec | ✅ |
+| Scenario integrity loop | `namako lint` | ✅ |
+| Binding faithfulness loop | lint → run → verify | ✅ |
+| Implement system | Iterate until green | ✅ |
+
+---
+
+## 3. V2+ Features Status (Deferred Per GOLD_PLAN.md Part 11)
+
+All v2+ features are **DEFERRED** — not blocking v1 completion.
+
+| Feature | Section | Status |
+|---------|---------|--------|
+| FeatureAstNorm (full AST hashing) | §11.1 | ⏳ Deferred |
+| Explicit ID tags (@FID/@Rnn/@Snn) | §11.2 | ⏳ Deferred |
+| Orphan binding hard error + `namako stub` | §11.3 | ⏳ Deferred |
+| `namako review` coverage enhancements | §11.4 | ⏳ Deferred |
+| Post-condition extraction | §11.5 | ⏳ Deferred |
+| CBOR encoding profiles | §11.6 | ⏳ Deferred |
+| Binding registry JSON schema publish | §11.7 | ⏳ Deferred |
+| Conformance fixtures | §11.8 | ⏳ Deferred |
+| `resolution_semantics_id` | §11.9 | ⏳ Deferred |
+| Rich `namako status` diffs | §11.10 | ⏳ Deferred |
+| Stronger `impl_hash` schemes | §11.11 | ⏳ Deferred |
+| `bindings_used_hash` | §11.12 | ⏳ Deferred |
+| Multi-language support | §11.13 | ⏳ Deferred |
+| Adapter SDKs (JS/TS, Python, etc.) | §11.14 | ⏳ Deferred |
+| Cross-language hashing | §11.15 | ⏳ Deferred |
+| Adapter certification tooling | §11.16 | ⏳ Deferred |
+
+---
+
+## 4. Bootstrap Exit Criteria (§2.5) — ✅ ALL SATISFIED
+
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Tesaki end-to-end | ✅ | `tesaki next` produces `NEXT_TASK.md` deterministically |
+| Namako packets deterministic | ✅ | `status --json`, `review`, `explain` all produce stable outputs |
+| Tesaki selects promotion candidates | ✅ | `reuse_score` computed for @Deferred scenarios |
+| Tesaki generates binding bundles | ✅ | `suggested_binding_bundle` in review output |
+| Tesaki generates explain packets | ✅ | `explain` command outputs scenario details |
+| Tesaki stops safely when blocked | ✅ | Returns `DONE` when no work available |
+| Scenario fidelity workflow exists | ✅ | `namako explain` implemented |
+| CI green | ✅ | All gates pass |
+
+---
+
+## 5. Completed Work History (Reconstructed from Git)
+
+### Recent Commits (namako repo)
+
+| Commit | Description |
+|--------|-------------|
+| `d8faace` | Mission 001 checkpoint (Named trait refactoring for ProtocolMismatch) |
+| `d26e76e` | CONSUMPTION mode documentation updates |
+| `a1accdf` | CLAUDE.md, SYSTEM.md SSoT policy, blocker classification, mode-aware filtering |
+| `7c6e580` | Create CLAUDE.md for agent discipline |
+| `7a1d71e` | Add suggested binding bundle computation for promotion candidates |
+| `719569a` | Fix scenario counts and promotion candidates accuracy |
+| `97a83c6` | Implement failure targeting with run report integration |
+| `57e4290` | Add Tesaki task orchestrator with initial implementation |
+| `55d7bf8` | Exclude deferred scenarios from executable plan |
+| `f38adcb` | Remove CONVERSION_PLAN.md, update CURRENT_STATUS.md |
+| `2965192` | Fix integration details in documentation |
+| `1859785` | Consolidate context wrapper types into test_utils |
+| `301b303` | Refactor context wrapper types |
+| `59155ca` | Enhance context wrapper types with world access methods |
+| `d2bb973` | Refactor context handling in codegen and tests |
+| `ec0cb62` | Update GOLD_PLAN.md for context-first ABI |
+| `9b59edb` | Implement polling loop for Then steps with ExpectCtx wrapping |
+
+### Recent Commits (naia repo)
+
+| Commit | Description |
+|--------|-------------|
+| `59efef07` | Refactor message handling and protocol management |
+| `5e4bf6d9` | Implement trace event system for deterministic operation ordering |
+| `726d8f36` | Add operation result tracking for error handling |
+| `caa1c377` | Rename `npap` to `npa`, add implementation files |
+| `baf48c49` | Add auth-required event ordering scenarios |
+| `55a5e444` | Add determinism enforcement scripts |
+| `178785de` | Refactor feature specifications, enhance connection tracking |
+| `5288a9e5` | Comprehensive specification refactoring |
+| `7399e6a3` | Add connection lifecycle specification |
+
+---
+
+## 6. Current Identity (Certified)
+
+| Field | Hash |
+|-------|------|
+| `hash_contract_version` | `namako-v1-json+blake3-256` |
+| `feature_fingerprint_hash` | `1428760ff1f25128f278740c963274e2f6e03beffd12713f37a593fe364aa842` |
+| `step_registry_hash` | `f8c2fb7e2bd4f54835fea8cefb8d2a4aece226750f3e2915091889c1d09f45c5` |
+| `resolved_plan_hash` | `8d064c982360dee56ce68478d3e40d058924b7bcd820abd59c99c2e2fa7290d3` |
+
+---
+
+## 7. Artifacts
+
+| Artifact | Path |
+|----------|------|
+| Certification | `naia/test/specs/certification.json` |
+| Resolved Plan | `naia/target/namako_artifacts/resolved_plan.json` |
+| Run Report | `naia/target/namako_artifacts/run_report.json` |
+| Status JSON | `naia/test/specs/target/namako_artifacts/tesaki/status.json` |
+| Review JSON | `naia/test/specs/target/namako_artifacts/tesaki/review.json` |
+| NEXT_TASK.md | `naia/test/specs/target/namako_artifacts/tesaki/NEXT_TASK.md` |
+
+---
+
+## 8. Transition Readiness
+
+### BOOTSTRAP → CONSUMPTION Transition
+
+The system is ready for CONSUMPTION mode. All Bootstrap Exit Criteria (§2.5) are satisfied.
+
+**To transition:**
+1. Update this file: `MODE: CONSUMPTION`
+2. Select first CORE work item (per §2.7 First CONSUMPTION Mission Template)
+3. Drive through Tesaki Product FSM
+
+### Current @Deferred Status
+
+**0 scenarios are currently @Deferred.** All previously-deferred scenarios have been:
+- Promoted (bindings implemented, tests passing), OR
+- Removed (determined to be out of scope for v1)
+
+The last known @Deferred scenario was:
+- **Protocol mismatch produces ProtocolMismatch rejection** — @Blocker(CORE)
+  - Status: Resolved in Mission 001 via Named trait refactoring
+
+---
+
+*End of CURRENT_STATUS.md*
