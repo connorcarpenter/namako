@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fmt::Debug, mem, sync::LazyLock, cell::RefCell};
 
-use namako::{
+use namako_engine::{
     Event, Writer, cli, event,
     given, parser, then, when,
 };
@@ -85,7 +85,7 @@ static SPAN_OR_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
 mod spec {
     use std::{fmt, fs, io, sync::LazyLock};
 
-    use namako::{
+    use namako_engine::{
         World as _, WriterExt as _,
         writer::{self, Coloring},
     };

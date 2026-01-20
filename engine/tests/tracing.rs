@@ -1,6 +1,6 @@
 use std::{fs, io, panic::AssertUnwindSafe, time::Duration};
 
-use namako::{
+use namako_engine::{
     World as _, WriterExt as _,
     given, writer, writer::Coloring,
 };

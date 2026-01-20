@@ -13,8 +13,8 @@ use clap::Args;
 use serde::Serialize;
 use walkdir::WalkDir;
 
-use namako::engine::ResolutionEngine;
-use namako::npap::{
+use namako_engine::engine::ResolutionEngine;
+use namako_engine::npap::{
     Certification, CertificationIdentity, RunReport, ScenarioStatus, SemanticStepRegistry,
     HASH_CONTRACT_VERSION,
 };
@@ -417,7 +417,7 @@ fn load_run_failures(run_report_path: &PathBuf) -> Vec<FailureRecord> {
             let (failure_kind, summary) = s
                 .steps
                 .iter()
-                .find(|step| matches!(step.status, namako::npap::StepStatus::Failed))
+                .find(|step| matches!(step.status, namako_engine::npap::StepStatus::Failed))
                 .map(|step| {
                     let kind = classify_failure(&step.error_message);
                     let summary = step

@@ -14,8 +14,8 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use walkdir::WalkDir;
 
-use namako::engine::{OrphanBinding, ResolutionEngine};
-use namako::npap::SemanticStepRegistry;
+use namako_engine::engine::{OrphanBinding, ResolutionEngine};
+use namako_engine::npap::SemanticStepRegistry;
 
 /// Arguments for the stub command.
 #[derive(Args, Debug)]

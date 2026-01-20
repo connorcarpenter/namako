@@ -3,7 +3,7 @@ mod test_utils;
 use std::{env, panic::AssertUnwindSafe};
 
 use clap::Parser;
-use namako::{
+use namako_engine::{
     World as _, cli,
     given, then,
 };

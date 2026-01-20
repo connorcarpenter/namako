@@ -1,6 +1,6 @@
 use std::{fs, io};
 
-use namako::{
+use namako_engine::{
     StatsWriter as _, World,
     gherkin::Step, given, then, when,
 };

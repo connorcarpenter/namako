@@ -13,8 +13,8 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use walkdir::WalkDir;
 
-use namako::engine::ResolutionEngine;
-use namako::npap::SemanticStepRegistry;
+use namako_engine::engine::ResolutionEngine;
+use namako_engine::npap::SemanticStepRegistry;
 
 /// Arguments for the lint command.
 #[derive(Args, Debug)]

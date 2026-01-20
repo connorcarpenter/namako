@@ -1,6 +1,6 @@
 mod test_utils;
 
-use namako::{
+use namako_engine::{
     StatsWriter as _, World as _,
     given, then, when,
 };

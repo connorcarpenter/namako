@@ -1,6 +1,6 @@
 mod test_utils;
 
-use namako::{
+use namako_engine::{
     World as _,
     runner, given, then, writer::summarize::Stats,
 };

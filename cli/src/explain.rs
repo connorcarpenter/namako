@@ -14,8 +14,8 @@ use gherkin::{Feature, GherkinEnv};
 use serde::Serialize;
 use walkdir::WalkDir;
 
-use namako::engine::ResolutionEngine;
-use namako::npap::{ResolvedPlan, SemanticStepRegistry, HASH_CONTRACT_VERSION};
+use namako_engine::engine::ResolutionEngine;
+use namako_engine::npap::{ResolvedPlan, SemanticStepRegistry, HASH_CONTRACT_VERSION};
 
 /// Arguments for the explain command.
 #[derive(Args, Debug)]
@@ -444,7 +444,7 @@ fn extract_contract_context(source: &str) -> ContractContext {
 }
 
 fn build_resolution_info(
-    scenario: &namako::npap::ResolvedScenario,
+    scenario: &namako_engine::npap::ResolvedScenario,
     registry: &SemanticStepRegistry,
 ) -> Result<ResolutionInfo> {
     let mut binding_resolutions = Vec::new();
@@ -488,7 +488,7 @@ fn build_resolution_info(
 
 /// Build ExplainStep list with binding metadata per GOLD_PLAN §10.5.4.
 fn build_explain_steps(
-    scenario: &namako::npap::ResolvedScenario,
+    scenario: &namako_engine::npap::ResolvedScenario,
     registry: &SemanticStepRegistry,
 ) -> Result<Vec<ExplainStep>> {
     let mut steps = Vec::new();

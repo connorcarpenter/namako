@@ -139,7 +139,7 @@ impl Step {
             quote! {}
         } else {
             quote! {
-                let mut __namako_ctx_arg = ::namako::World::ctx_mut(__namako_world);
+                let mut __namako_ctx_arg = ::namako_engine::World::ctx_mut(__namako_world);
             }
         };
 
@@ -186,7 +186,7 @@ impl Step {
                         ::std::boxed::Box::pin(async move {
                             #addon_parsing
 
-                            <WorldAlias as ::namako::World>::assert_then(
+                            <WorldAlias as ::namako_engine::World>::assert_then(
                                 __namako_world,
                                 |__namako_ctx_arg| {
                                     let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
@@ -204,7 +204,7 @@ impl Step {
                                             } else {
                                                 "Unknown panic payload".to_string()
                                             };
-                                            ::namako::codegen::AssertOutcome::Failed(msg)
+                                            ::namako_engine::codegen::AssertOutcome::Failed(msg)
                                         }
                                     }
                                 }
@@ -219,7 +219,7 @@ impl Step {
                         ::std::boxed::Box::pin(async move {
                             #addon_parsing
 
-                            <WorldAlias as ::namako::World>::assert_then(
+                            <WorldAlias as ::namako_engine::World>::assert_then(
                                 __namako_world,
                                 |__namako_ctx_arg| {
                                     let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
@@ -229,7 +229,7 @@ impl Step {
                                     }));
 
                                     match result {
-                                        Ok(_) => ::namako::codegen::AssertOutcome::Passed(()),
+                                        Ok(_) => ::namako_engine::codegen::AssertOutcome::Passed(()),
                                         Err(payload) => {
                                             let msg = if let Some(s) = payload.downcast_ref::<&str>() {
                                                 s.to_string()
@@ -238,7 +238,7 @@ impl Step {
                                             } else {
                                                 "Unknown panic payload".to_string()
                                             };
-                                            ::namako::codegen::AssertOutcome::Failed(msg)
+                                            ::namako_engine::codegen::AssertOutcome::Failed(msg)
                                         }
                                     }
                                 }
@@ -267,19 +267,19 @@ impl Step {
             #func
 
             #[automatically_derived]
-            ::namako::codegen::submit!({
+            ::namako_engine::codegen::submit!({
                 // Derive World type from context type via StepContext trait
                 // Use 'static lifetime for the type alias - we only need the World associated type
-                type WorldAlias = <#ctx_type as ::namako::codegen::StepContext>::World;
+                type WorldAlias = <#ctx_type as ::namako_engine::codegen::StepContext>::World;
 
                 // TODO: Remove this, once `#![feature(more_qualified_paths)]`
                 //       is stabilized:
                 //       https://github.com/rust-lang/rust/issues/86935
                 type StepAlias =
-                    <WorldAlias as ::namako::codegen::WorldInventory>::#step_type;
+                    <WorldAlias as ::namako_engine::codegen::WorldInventory>::#step_type;
 
                 StepAlias {
-                    loc: ::namako::step::Location {
+                    loc: ::namako_engine::step::Location {
                         path: ::std::file!(),
                         line: ::std::line!(),
                         column: ::std::column!(),
@@ -302,7 +302,7 @@ impl Step {
                     regex: || {
                         #allow_trivial_regex_attr
                         static LAZY: ::std::sync::LazyLock<
-                            ::namako::codegen::Regex
+                            ::namako_engine::codegen::Regex
                         > = ::std::sync::LazyLock::new(|| { #regex });
                         LAZY.clone()
                     },
@@ -664,7 +664,7 @@ impl Step {
             // 3. All the parameter names are equal to the corresponding
             //    function arguments, so we shouldn't see any
             //    `UnknownParameterError`s.
-            ::namako::codegen::Expression::regex_with_parameters(
+            ::namako_engine::codegen::Expression::regex_with_parameters(
                 #expr,
                 Provider,
             )
@@ -815,7 +815,7 @@ impl<'p> Parameters<'p> {
                             struct Invalid;
 
                             #[automatically_derived]
-                            impl<T: ?Sized + ::namako::Parameter>
+                            impl<T: ?Sized + ::namako_engine::Parameter>
                                 #trait_with_hint<Invalid> for T {}
 
                             // If there is only one specialized trait impl, type
@@ -840,8 +840,8 @@ impl<'p> Parameters<'p> {
                         // `Parameter` and has correct `Parameter::NAME`.
                         #[automatically_derived]
                         const _: () = ::std::assert!(
-                            ::namako::codegen::str_eq(
-                                <#ty as ::namako::Parameter>::NAME,
+                            ::namako_engine::codegen::str_eq(
+                                <#ty as ::namako_engine::Parameter>::NAME,
                                 #name,
                             ),
                             #assert_msg,
@@ -867,19 +867,19 @@ impl<'p> Parameters<'p> {
 
         quote! {
             #[automatically_derived]
-            impl<'s> ::namako::codegen::ParametersProvider<
-                ::namako::codegen::Spanned<'s>
+            impl<'s> ::namako_engine::codegen::ParametersProvider<
+                ::namako_engine::codegen::Spanned<'s>
             > for #ty {
                 type Item = char;
                 type Value = &'static str;
 
                 fn get(
                     &self,
-                    input: &::namako::codegen::Spanned<'s>,
+                    input: &::namako_engine::codegen::Spanned<'s>,
                 ) -> ::std::option::Option<Self::Value> {
                     #( if *input.fragment() == #custom_par {
                         ::std::option::Option::Some(
-                            <#custom_par_ty as ::namako::Parameter>::REGEX,
+                            <#custom_par_ty as ::namako_engine::Parameter>::REGEX,
                         )
                     } else )* {
                         ::std::option::Option::None

@@ -127,7 +127,7 @@ impl Definition {
 
         quote! {
             #[automatically_derived]
-            impl #impl_gens ::namako::codegen::WorldInventory
+            impl #impl_gens ::namako_engine::codegen::WorldInventory
                  for #world #ty_gens
                  #where_clause
             {
@@ -178,16 +178,16 @@ impl Definition {
 
         quote! {
             #[automatically_derived]
-            impl #impl_gens ::namako::World for #world #ty_gens
+            impl #impl_gens ::namako_engine::World for #world #ty_gens
                  #where_clause
             {
-                type Error = ::namako::codegen::anyhow::Error;
+                type Error = ::namako_engine::codegen::anyhow::Error;
 
                 type MutCtx<'a> = #mut_ctx_ty where Self: 'a;
                 type RefCtx<'a> = #ref_ctx_ty where Self: 'a;
 
                 async fn new() -> ::std::result::Result<Self, Self::Error> {
-                    use ::namako::codegen::{
+                    use ::namako_engine::codegen::{
                         IntoWorldResult as _, ToWorldFuture as _,
                     };
 
@@ -290,7 +290,7 @@ impl Definition {
 
                         return Some(quote! {
                             #[automatically_derived]
-                            impl ::namako::codegen::StepContext for #base_path {
+                            impl ::namako_engine::codegen::StepContext for #base_path {
                                 type World = #world #world_ty_gens;
                             }
                         });
@@ -300,7 +300,7 @@ impl Definition {
                 // No generics - generate simple impl
                 Some(quote! {
                     #[automatically_derived]
-                    impl ::namako::codegen::StepContext for #path {
+                    impl ::namako_engine::codegen::StepContext for #path {
                         type World = #world #world_ty_gens;
                     }
                 })
@@ -326,7 +326,7 @@ impl Definition {
                     #[doc(hidden)]
                     #world_vis struct #ty {
                         #[doc(hidden)]
-                        #world_vis loc: ::namako::step::Location,
+                        #world_vis loc: ::namako_engine::step::Location,
 
                         // NPAP v1 metadata fields
                         #[doc(hidden)]
@@ -356,27 +356,27 @@ impl Definition {
                         #world_vis source_symbol: &'static str,
 
                         #[doc(hidden)]
-                        #world_vis regex: ::namako::codegen::LazyRegex,
+                        #world_vis regex: ::namako_engine::codegen::LazyRegex,
 
                         #[doc(hidden)]
-                        #world_vis func: ::namako::Step<#world>,
+                        #world_vis func: ::namako_engine::Step<#world>,
                     }
 
                     #[automatically_derived]
                     impl #impl_gens
-                         ::namako::codegen::StepConstructor<#world #ty_gens>
+                         ::namako_engine::codegen::StepConstructor<#world #ty_gens>
                          for #ty #where_clause
                     {
                         fn inner(&self) -> (
-                            ::namako::step::Location,
-                            ::namako::codegen::LazyRegex,
-                            ::namako::Step<#world>,
+                            ::namako_engine::step::Location,
+                            ::namako_engine::codegen::LazyRegex,
+                            ::namako_engine::Step<#world>,
                         ) {
                             (self.loc, self.regex, self.func)
                         }
 
-                        fn npap_metadata(&self) -> ::namako::codegen::NpapBindingMetadata {
-                            ::namako::codegen::NpapBindingMetadata {
+                        fn npap_metadata(&self) -> ::namako_engine::codegen::NpapBindingMetadata {
+                            ::namako_engine::codegen::NpapBindingMetadata {
                                 binding_id: self.binding_id,
                                 expression: self.expression,
                                 kind: self.kind,
@@ -390,7 +390,7 @@ impl Definition {
                     }
 
                     #[automatically_derived]
-                    ::namako::codegen::collect!(#ty);
+                    ::namako_engine::codegen::collect!(#ty);
                 }
             })
             .collect()

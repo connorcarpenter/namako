@@ -1,6 +1,6 @@
 use std::{cell::Cell, fs, io::Read as _};
 
-use namako::{
+use namako_engine::{
     World as _, WriterExt as _, cli,
     given, then, when, writer,
 };

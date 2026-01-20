@@ -15,8 +15,8 @@ use gherkin::{Feature, GherkinEnv, Rule, Scenario};
 use serde::Serialize;
 use walkdir::WalkDir;
 
-use namako::engine::ResolutionEngine;
-use namako::npap::{SemanticStepRegistry, HASH_CONTRACT_VERSION};
+use namako_engine::engine::ResolutionEngine;
+use namako_engine::npap::{SemanticStepRegistry, HASH_CONTRACT_VERSION};
 
 /// Arguments for the review command.
 #[derive(Args, Debug)]
@@ -289,7 +289,7 @@ fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
         }
     } else {
         // Compute partial identity
-        let feature_hash = namako::npap::compute_feature_fingerprint(feature_refs.into_iter());
+        let feature_hash = namako_engine::npap::compute_feature_fingerprint(feature_refs.into_iter());
         IdentityCurrent {
             hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
             feature_fingerprint_hash: feature_hash,

@@ -13,8 +13,8 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use walkdir::WalkDir;
 
-use namako::engine::ResolutionEngine;
-use namako::npap::{
+use namako_engine::engine::ResolutionEngine;
+use namako_engine::npap::{
     Certification, CertificationIdentity, CertificationMetadata,
     RunReport, SemanticStepRegistry, ScenarioStatus,
     HASH_CONTRACT_VERSION, NPAP_VERSION,

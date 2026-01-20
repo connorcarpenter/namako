@@ -74,7 +74,7 @@ impl Definition {
 
         quote! {
             #[automatically_derived]
-            impl #impl_gens ::namako::Parameter for #ty #ty_gens
+            impl #impl_gens ::namako_engine::Parameter for #ty #ty_gens
                  #where_clause
             {
                 const REGEX: &'static str = #regex;
@@ -98,7 +98,7 @@ mod spec {
 
         let output = quote! {
             #[automatically_derived]
-            impl ::namako::Parameter for Parameter {
+            impl ::namako_engine::Parameter for Parameter {
                 const REGEX: &'static str = "cat|dog";
                 const NAME: &'static str = "custom";
             }
@@ -119,7 +119,7 @@ mod spec {
 
         let output = quote! {
             #[automatically_derived]
-            impl ::namako::Parameter for Animal {
+            impl ::namako_engine::Parameter for Animal {
                 const REGEX: &'static str = "cat|dog";
                 const NAME: &'static str = "animal";
             }
@@ -140,7 +140,7 @@ mod spec {
 
         let output = quote! {
             #[automatically_derived]
-            impl ::namako::Parameter for Animal {
+            impl ::namako_engine::Parameter for Animal {
                 const REGEX: &'static str = "(cat)|(dog)";
                 const NAME: &'static str = "animal";
             }
@@ -161,7 +161,7 @@ mod spec {
 
         let output = quote! {
             #[automatically_derived]
-            impl<T> ::namako::Parameter for Parameter<T> {
+            impl<T> ::namako_engine::Parameter for Parameter<T> {
                 const REGEX: &'static str = "cat|dog";
                 const NAME: &'static str = "custom";
             }
@@ -182,7 +182,7 @@ mod spec {
 
         let output = quote! {
             #[automatically_derived]
-            impl<T> ::namako::Parameter for Parameter<T> {
+            impl<T> ::namako_engine::Parameter for Parameter<T> {
                 const REGEX: &'static str = "cat|dog(?:s)?";
                 const NAME: &'static str = "custom";
             }

@@ -13,8 +13,8 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use walkdir::WalkDir;
 
-use namako::engine::ResolutionEngine;
-use namako::npap::{
+use namako_engine::engine::ResolutionEngine;
+use namako_engine::npap::{
     Certification, CertificationIdentity, RunReport, SemanticStepRegistry,
     ScenarioStatus, HASH_CONTRACT_VERSION,
 };
@@ -63,7 +63,7 @@ pub fn run(args: VerifyArgs) -> Result<()> {
         if scenario.status != ScenarioStatus::Passed {
             let mut failure_msg = format!("FAILED: {}", scenario.scenario_key);
             for (i, step) in scenario.steps.iter().enumerate() {
-                if step.status != namako::npap::StepStatus::Passed {
+                if step.status != namako_engine::npap::StepStatus::Passed {
                     if let Some(ref msg) = step.error_message {
                         failure_msg.push_str(&format!("\n    Step {}: {}", i + 1, msg));
                     } else {

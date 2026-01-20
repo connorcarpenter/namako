@@ -2,7 +2,7 @@ mod test_utils;
 
 use std::{fmt, io};
 
-use namako::{
+use namako_engine::{
     StatsWriter, World as _, WriterExt as _, given, then, when, writer,
 };
 

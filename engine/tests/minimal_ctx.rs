@@ -1,6 +1,6 @@
 mod test_utils;
 
-use namako::{given, then};
+use namako_engine::{given, then};
 
 #[allow(unused_imports)]
 use test_utils::World; // Required for step macro expansion
