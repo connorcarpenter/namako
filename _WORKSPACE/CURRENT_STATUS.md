@@ -39,10 +39,23 @@ v1.7 implements the autonomous Product Loop where Tesaki orchestrates a coding a
 | Gate Outcome Classification | ✅ | `tesaki/src/gate.rs` - GateOutcome + UpdateCertInvoker |
 | Update-Cert Governance | ✅ | Automatic update-cert for verify-only failures, bounded by `--max-cert-updates` |
 | Retry Logic | ✅ | Retry loop for retryable failures, bounded by `--max-retries` |
+| **Config Discovery** | ✅ | `tesaki/src/config.rs` - `.tesaki/config.toml` auto-discovery |
+| **Dev Shim Scripts** | ✅ | `scripts/tesaki` + `scripts/install-tesaki-dev-shim` |
 
 **Current state:** Implementation complete. Ready for end-to-end testing.
 
-**Usage:**
+**Usage (with config discovery — zero flags):**
+```bash
+# One-time setup: install dev shim
+./scripts/install-tesaki-dev-shim
+
+# Create .tesaki/config.toml in target repo (e.g., naia/)
+# Then run from anywhere in the repo:
+tesaki run
+tesaki config print
+```
+
+**Usage (explicit flags):**
 ```bash
 # From namako/ directory:
 cargo run -p tesaki -- run \
@@ -77,7 +90,12 @@ cargo run -p tesaki -- next \
   -a "cargo run --manifest-path ../naia/test/npa/Cargo.toml --" \
   --max-cert-updates 3
 
-# v1.7: `tesaki run` — single-command entrypoint (IMPLEMENTED)
+# v1.7: `tesaki run` — single-command entrypoint (with config discovery)
+# After installing dev shim and creating .tesaki/config.toml:
+tesaki run
+tesaki config print
+
+# Or with explicit flags:
 cargo run -p tesaki -- run \
   -s ../naia/test/specs \
   -a "cargo run --manifest-path ../naia/test/npa/Cargo.toml --" \
@@ -91,7 +109,7 @@ cargo run -p tesaki -- run \
 | `namako gate` | ✅ PASS | lint+run+verify all pass (baseline refreshed) |
 | `namako gate --determinism` | ✅ PASS | Evidence bundle now includes status.json + review.json |
 | `cargo test -p namako-cli` | ✅ PASS | 29 unit tests pass (includes 8 gate tests) |
-| `cargo test -p tesaki` | ✅ PASS | 48 unit tests pass (gate, stop_reason, mission, runner, workspace) |
+| `cargo test -p tesaki` | ✅ PASS | 54 unit tests pass (gate, stop_reason, mission, runner, workspace, config) |
 | `cargo build -p namako-cli` | ✅ PASS | All warnings are cosmetic |
 | Stub exclusion | ✅ VERIFIED | 0 promotion candidates (5 stubs excluded) |
 

@@ -1596,7 +1596,23 @@ Tesaki creates a deterministic Mission Bundle directory for each mission:
 
 ### 10.7.6 Mission Size Budgets (Prevent Giant Wandering Missions)
 
-Tesaki enforces budgets to prevent runaway missions. These are defaults; each can be overridden in `tesaki.toml`.
+Tesaki enforces budgets to prevent runaway missions. These are defaults; each can be overridden in `.tesaki/config.toml`.
+
+**Configuration file location:** `.tesaki/config.toml` in the target repository (e.g., naia/.tesaki/config.toml). Tesaki discovers this file by walking up from the current directory.
+
+**Example `.tesaki/config.toml`:**
+```toml
+# Required
+specs_dir = "test/specs"
+adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
+
+# Optional overrides
+runner = "mock"           # mock, cmd, or claude
+max_retries = 2
+max_cert_updates = 3
+max_runtime_seconds = 600
+max_files_changed = 10
+```
 
 | Budget | Default | Description |
 |--------|---------|-------------|
@@ -1652,7 +1668,9 @@ Tesaki MUST emit a structured stop reason when halting.
 This is the canonical flow for `tesaki run`:
 
 ```
-1. User runs `tesaki run`
+0. (One-time setup) Create .tesaki/config.toml in target repo
+
+1. User runs `tesaki run` (with zero flags when config exists)
 
 2. Tesaki measures via Namako packets:
    - namako status --json
@@ -1679,6 +1697,20 @@ This is the canonical flow for `tesaki run`:
    - If success: clean up mission bundle, loop to step 2
    - If failure: preserve mission bundle at .tesaki/failed/, emit stop reason
    - If budget reached: stop with explicit reason
+```
+
+**Development setup (one-time):**
+```bash
+# Install dev shim for tesaki command
+./scripts/install-tesaki-dev-shim
+
+# Create config in target repo
+mkdir -p naia/.tesaki
+cat > naia/.tesaki/config.toml << 'EOF'
+specs_dir = "test/specs"
+adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
+runner = "mock"
+EOF
 ```
 
 **User repeats `tesaki run`** to continue development. Each invocation is atomic and safe.

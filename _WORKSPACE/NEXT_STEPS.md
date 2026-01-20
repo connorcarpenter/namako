@@ -27,7 +27,9 @@
 | 0.6 | Gate Classification | GateOutcome + UpdateCertInvoker | ✅ `gate.rs` |
 | 0.7 | Update-Cert Governance | Auto update-cert for verify-only failures | ✅ `main.rs` |
 | 0.8 | Retry Logic | Retry loop for retryable failures | ✅ `stop_reason.rs` + `main.rs` |
-| 0.9 | End-to-End Test | Verify full loop with controlled mission | ✅ 48 tests |
+| 0.9 | End-to-End Test | Verify full loop with controlled mission | ✅ 54 tests |
+| 0.10 | **Config Discovery** | `.tesaki/config.toml` for zero-flag UX | ✅ `config.rs` |
+| 0.11 | **Dev Shim Scripts** | `scripts/tesaki` + install helper | ✅ `scripts/` |
 
 ### Exit Criteria for Phase 0 — All Satisfied
 
@@ -37,7 +39,9 @@
 - [x] At least one successful autonomous mission cycle demonstrated (mock-backed)
 - [x] Update-cert governance: only FailVerifyOnly triggers update-cert, bounded by `--max-cert-updates`
 - [x] Retry logic: only retryable failures retry, bounded by `--max-retries`
-- [x] 48 unit tests covering gate classification, governance, and retry logic
+- [x] 54 unit tests covering gate classification, governance, retry logic, and config discovery
+- [x] Config discovery: `tesaki run` works with zero flags when `.tesaki/config.toml` exists
+- [x] Dev shim: `scripts/tesaki` runs from any directory; `scripts/install-tesaki-dev-shim` installs to PATH
 
 ---
 
@@ -189,7 +193,9 @@ For each harness enhancement:
 - ✅ Claude Code runner backend (`ClaudeCodeRunner`)
 - ✅ `tesaki run` command (`tesaki/src/main.rs`)
 - ✅ Stop condition detection (`tesaki/src/stop_reason.rs`)
-- ✅ End-to-end tests (23 tests passing)
+- ✅ Config discovery (`tesaki/src/config.rs`)
+- ✅ Dev shim scripts (`scripts/tesaki`, `scripts/install-tesaki-dev-shim`)
+- ✅ 54 tests passing
 
 **Next priority:** Transition to CONSUMPTION mode (Phase 1)
 
@@ -197,7 +203,9 @@ For each harness enhancement:
 - Gate outcome classification (`gate.rs`): Pass, FailVerifyOnly, FailOther
 - Update-cert governance: Only FailVerifyOnly outcomes trigger update-cert
 - Retry logic: Only RunnerFailed, NoProgress, GateFailed are retryable
-- 48 tests now passing (up from 23)
+- Config discovery: `.tesaki/config.toml` enables zero-flag `tesaki run`
+- Dev shim: `scripts/install-tesaki-dev-shim` for PATH installation
+- 54 tests now passing (up from 48)
 
 ### For AI Agent (After v1.7 — CONSUMPTION Mode)
 

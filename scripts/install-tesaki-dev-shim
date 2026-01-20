@@ -51,7 +51,7 @@ if [[ -L "$LINK_PATH" ]]; then
     echo "Location: $LINK_PATH"
     echo "Points to: $SHIM_PATH"
     echo ""
-    
+
     # Check if the bin directory is in PATH
     if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
         echo "⚠️  $BIN_DIR is not in your PATH."
