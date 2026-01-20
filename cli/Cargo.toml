@@ -37,6 +37,9 @@ anyhow = "1.0"
 # Timestamps
 chrono = "0.4"
 
+# Temp directories for gate determinism
+tempfile = "3.2"
+
 # Process execution for adapter invocation
 [target.'cfg(unix)'.dependencies]
 # Unix-specific process handling if needed

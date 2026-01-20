@@ -9,11 +9,13 @@
 //! - `namako review` — Work backlog packet for Tesaki (v2)
 //! - `namako explain` — Scenario fidelity packet for Tesaki (v2)
 //! - `namako stub` — Generate placeholder scenarios for orphan bindings (v1.5)
+//! - `namako gate` — Single entrypoint for CI: lint → run → verify (+ optional determinism)
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod explain;
+mod gate;
 mod lint;
 mod review;
 mod status;
@@ -48,6 +50,8 @@ pub enum Commands {
     Explain(explain::ExplainArgs),
     /// Generate placeholder scenarios for orphan bindings (v1.5).
     Stub(stub::StubArgs),
+    /// Single CI gate: lint → run → verify (+ optional determinism check).
+    Gate(gate::GateArgs),
 }
 
 fn main() -> Result<()> {
@@ -61,5 +65,6 @@ fn main() -> Result<()> {
         Commands::Review(args) => review::run(args),
         Commands::Explain(args) => explain::run(args),
         Commands::Stub(args) => stub::run(args),
+        Commands::Gate(args) => gate::run(args),
     }
 }

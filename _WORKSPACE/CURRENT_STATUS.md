@@ -27,11 +27,16 @@
 ### Commands
 
 ```bash
-# Primary CI gate (lint → run → verify)
-bash naia/test/specs/scripts/namako_ci.sh
+# Primary CI gate (lint → run → verify) — SINGLE RUST-NATIVE ENTRYPOINT
+cargo run -p namako-cli -- gate \
+  -s naia/test/specs \
+  -a "cargo run --manifest-path naia/test/npa/Cargo.toml --"
 
-# Determinism check (runs twice, compares bytes)
-bash naia/test/specs/scripts/determinism_check.sh
+# Determinism check (runs twice, compares stable evidence)
+cargo run -p namako-cli -- gate \
+  -s naia/test/specs \
+  -a "cargo run --manifest-path naia/test/npa/Cargo.toml --" \
+  --determinism
 
 # Tesaki orchestrator (from namako/ directory)
 cargo run -p tesaki -- next \
@@ -44,8 +49,8 @@ cargo run -p tesaki -- next \
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| `namako lint` | ✅ PASS | 31 scenarios, 134 steps resolved |
-| `cargo test -p namako-cli` | ✅ PASS | 21 unit tests pass |
+| `namako gate` | ✅ PASS (lint+run) | Verify blocked by baseline drift (expected) |
+| `cargo test -p namako-cli` | ✅ PASS | 28 unit tests pass (includes 7 gate tests) |
 | `cargo test -p tesaki` | ✅ PASS | 5 unit tests pass (includes stub exclusion) |
 | `cargo build -p namako-cli` | ✅ PASS | All warnings are cosmetic |
 | Stub exclusion | ✅ VERIFIED | 0 promotion candidates (5 stubs excluded) |
@@ -96,6 +101,7 @@ cargo run -p tesaki -- next \
 | `namako review` | Work backlog packet (promotion candidates) | ✅ |
 | `namako explain` | Scenario fidelity packet | ✅ |
 | `namako stub` | Generate @Deferred stubs for orphan bindings | ✅ |
+| `namako gate` | Single CI entrypoint: lint → run → verify (+ optional determinism) | ✅ |
 
 ### Part 5.5: Namako v1.5 Enhancements — ✅ COMPLETE
 
@@ -215,6 +221,7 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 | Commit | Description |
 |--------|-------------|
+| *(pending)* | Add `namako gate` command — single Rust-native CI entrypoint |
 | `d8faace` | Mission 001 checkpoint (Named trait refactoring for ProtocolMismatch) |
 | `d26e76e` | CONSUMPTION mode documentation updates |
 | `a1accdf` | CLAUDE.md, SYSTEM.md SSoT policy, blocker classification, mode-aware filtering |
@@ -237,6 +244,7 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 | Commit | Description |
 |--------|-------------|
+| *(pending)* | Delete `namako_ci.sh` — replaced by `namako gate` |
 | `59efef07` | Refactor message handling and protocol management |
 | `5e4bf6d9` | Implement trace event system for deterministic operation ordering |
 | `726d8f36` | Add operation result tracking for error handling |
