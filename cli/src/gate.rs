@@ -24,6 +24,9 @@ use namako::npap::{
     SemanticStepRegistry, HASH_CONTRACT_VERSION,
 };
 
+use crate::status::{self, StatusArgs};
+use crate::review::{self, ReviewArgs};
+
 /// Arguments for the gate command.
 #[derive(Args, Debug)]
 pub struct GateArgs {
@@ -320,6 +323,8 @@ fn run_with_determinism(args: &GateArgs, num_runs: usize) -> Result<()> {
 fn run_single_for_determinism(args: &GateArgs, artifact_root: &PathBuf) -> Result<()> {
     let resolved_plan_path = artifact_root.join("resolved_plan.json");
     let run_report_path = artifact_root.join("run_report.json");
+    let status_path = artifact_root.join("status.json");
+    let review_path = artifact_root.join("review.json");
 
     // Phase 1: Lint
     if !args.json {
@@ -347,6 +352,12 @@ fn run_single_for_determinism(args: &GateArgs, artifact_root: &PathBuf) -> Resul
     if !args.json {
         eprintln!("  verify: PASS");
     }
+
+    // Generate status.json for determinism evidence
+    generate_status(args, &run_report_path, &status_path)?;
+
+    // Generate review.json for determinism evidence
+    generate_review(args, &review_path)?;
 
     Ok(())
 }
@@ -500,6 +511,33 @@ fn run_verify(args: &GateArgs, run_report_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Generate status.json for determinism evidence
+fn generate_status(args: &GateArgs, run_report_path: &PathBuf, output_path: &PathBuf) -> Result<()> {
+    let status_args = StatusArgs {
+        specs_dir: args.specs_dir.clone(),
+        adapter_cmd: args.adapter_cmd.clone(),
+        certification: args.certification.clone(),
+        run_report: run_report_path.clone(),
+        out: Some(output_path.clone()),
+        json: true,
+        verbose: false,
+    };
+    status::run(status_args)
+}
+
+/// Generate review.json for determinism evidence
+fn generate_review(args: &GateArgs, output_path: &PathBuf) -> Result<()> {
+    let review_args = ReviewArgs {
+        specs_dir: args.specs_dir.clone(),
+        adapter_cmd: args.adapter_cmd.clone(),
+        out: output_path.clone(),
+        top: 25,
+        include_deferred: true,
+        verbose: false,
+    };
+    review::run(review_args)
+}
+
 // ============================================================================
 // Evidence collection and comparison for determinism
 // ============================================================================
@@ -509,7 +547,7 @@ fn collect_evidence_bundle(run_dir: &PathBuf) -> Result<EvidenceBundle> {
     let mut contents = BTreeMap::new();
 
     // Evidence files to collect
-    let evidence_files = ["resolved_plan.json", "run_report.json"];
+    let evidence_files = ["resolved_plan.json", "run_report.json", "status.json", "review.json"];
 
     for filename in &evidence_files {
         let path = run_dir.join(filename);
@@ -883,5 +921,29 @@ mod tests {
         let mismatches = compare_bundles(&[bundle1, bundle2]).unwrap();
         assert_eq!(mismatches.len(), 1);
         assert!(mismatches[0].file.contains("test.json"));
+    }
+
+    #[test]
+    fn test_evidence_bundle_includes_all_required_files() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let run_dir = temp_dir.path().to_path_buf();
+
+        // Create all evidence files
+        fs::write(run_dir.join("resolved_plan.json"), r#"{"test": 1}"#).unwrap();
+        fs::write(run_dir.join("run_report.json"), r#"{"test": 2}"#).unwrap();
+        fs::write(run_dir.join("status.json"), r#"{"test": 3}"#).unwrap();
+        fs::write(run_dir.join("review.json"), r#"{"test": 4}"#).unwrap();
+
+        let bundle = collect_evidence_bundle(&run_dir).unwrap();
+
+        // Verify all four files are included
+        assert!(bundle.contents.contains_key("resolved_plan.json"));
+        assert!(bundle.contents.contains_key("run_report.json"));
+        assert!(bundle.contents.contains_key("status.json"));
+        assert!(bundle.contents.contains_key("review.json"));
+        assert_eq!(bundle.contents.len(), 4);
     }
 }

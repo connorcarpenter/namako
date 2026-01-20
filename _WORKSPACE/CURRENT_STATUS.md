@@ -49,8 +49,9 @@ cargo run -p tesaki -- next \
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| `namako gate` | ✅ PASS (lint+run) | Verify blocked by baseline drift (expected) |
-| `cargo test -p namako-cli` | ✅ PASS | 28 unit tests pass (includes 7 gate tests) |
+| `namako gate` | ✅ PASS | lint+run+verify all pass (baseline refreshed) |
+| `namako gate --determinism` | ✅ PASS | Evidence bundle now includes status.json + review.json |
+| `cargo test -p namako-cli` | ✅ PASS | 29 unit tests pass (includes 8 gate tests) |
 | `cargo test -p tesaki` | ✅ PASS | 5 unit tests pass (includes stub exclusion) |
 | `cargo build -p namako-cli` | ✅ PASS | All warnings are cosmetic |
 | Stub exclusion | ✅ VERIFIED | 0 promotion candidates (5 stubs excluded) |
@@ -257,9 +258,9 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 ---
 
-## 7. Current Identity (Pending Certification)
+## 7. Current Identity (Certified — Baseline Refreshed)
 
-**Note:** Identity hashes changed due to `source_symbol` field addition. Run `namako update-cert` to establish new baseline.
+**Note:** Baseline refreshed with `namako update-cert` after `source_symbol` field addition. Determinism gate now includes status.json + review.json in evidence bundle.
 
 | Field | Hash |
 |-------|------|
@@ -298,11 +299,11 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 ### CONSUMPTION Transition Steps
 
-**Blocking step:** `namako update-cert` is required to establish the new baseline after `source_symbol` addition.
+**All gates green. Ready to flip to CONSUMPTION mode.**
 
 To begin CONSUMPTION mode:
 1. ✅ Verify `@Stub` exclusion from promotion candidates — **DONE** (2026-01-20)
-2. [ ] Run `namako update-cert` to establish baseline (hashes changed)
+2. ✅ Run `namako update-cert` to establish baseline — **DONE** (2026-01-20)
 3. [ ] Update this file: `MODE: CONSUMPTION`
 4. [ ] Select first CORE work item (per GOLD_PLAN §2.7 First CONSUMPTION Mission Template)
 5. [ ] Drive through Tesaki Product FSM
