@@ -1,0 +1,89 @@
+[package]
+name = "namako"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = """\
+    Namako testing framework for Rust, with async support. \
+    Fully native, no external test runners or dependencies.\
+    """
+readme = "README.md"
+include = [
+    "/src/",
+    "/tests/libtest.rs",
+    "/tests/tracing.rs",
+    "/README.md",
+]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["macros"]
+# Enables compatibility with Rust libtest (like outputting in its JSON format).
+libtest = ["dep:serde", "dep:serde_json", "timestamps"]
+# Enables step attributes and auto-wiring.
+macros = [
+    "dep:anyhow",
+    "dep:namako-codegen",
+    "dep:cucumber-expressions",
+    "dep:inventory",
+]
+# Enables timestamps collecting for all events.
+timestamps = []
+# Enables integraion with `tracing` crate.
+tracing = ["dep:crossbeam-utils", "dep:tracing", "dep:tracing-subscriber"]
+# Enables NPAP hashing and canonical encoding for Namako v1 pipeline.
+npap = ["dep:blake3", "dep:unicode-normalization", "dep:serde", "dep:serde_json"]
+
+[dependencies]
+clap = { version = "4.3.2", features = ["derive", "env", "wrap_help"] }
+console = "0.16"
+derive_more = { version = "2.0", features = ["as_ref", "debug", "deref", "deref_mut", "display", "error", "from", "from_str", "into"] }
+either = "1.6"
+futures = "0.3.17"
+gherkin = "0.15"
+globwalk = "0.9"
+humantime = "2.1"
+itertools = "0.14"
+linked-hash-map = "0.5.3"
+pin-project = "1.0"
+ref-cast = "1.0.16"
+regex = "1.9"
+sealed = "0.6"
+smart-default = "0.7.1"
+
+# "npap" feature dependencies (hashing/canonical encoding for NPAP protocol).
+blake3 = { version = "1.5", optional = true }
+unicode-normalization = { version = "0.1", optional = true }
+
+# "macros" feature dependencies.
+anyhow = { version = "1.0.58", optional = true }
+namako-codegen = { version = "=0.1.0", path = "../codegen", optional = true }
+cucumber-expressions = { version = "0.5", features = ["into-regex"], optional = true }
+inventory = { version = "0.3", optional = true }
+
+# "libtest" and "npap" features dependencies.
+serde = { version = "1.0.157", features = ["derive"], optional = true }
+serde_json = { version = "1.0.18", optional = true }
+
+# "tracing" feature dependencies.
+crossbeam-utils = { version = "0.8.14", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3.16", optional = true }
+
+[dev-dependencies]
+rand = "0.9"
+serial_test = "3.0"
+tempfile = "3.2"
+tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[[test]]
+name = "libtest"
+required-features = ["libtest"]
+
+[[test]]
+name = "tracing"
+required-features = ["tracing"]
+harness = false

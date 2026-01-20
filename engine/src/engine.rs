@@ -890,6 +890,7 @@ mod tests {
                 accepts_datatable: false,
             },
             impl_hash: "test_hash".to_string(),
+            source_symbol: None,
         }
     }
 

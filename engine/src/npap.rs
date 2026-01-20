@@ -1118,6 +1118,7 @@ mod tests {
                 accepts_datatable: false,
             },
             impl_hash: "def456".to_string(),
+            source_symbol: None,
         };
 
         let json = canonical_json_encode(&binding).unwrap();
@@ -1138,6 +1139,7 @@ mod tests {
                     accepts_datatable: false,
                 },
                 impl_hash: "hash1".to_string(),
+                source_symbol: None,
             },
             SemanticBinding {
                 binding_id: "aaa".to_string(),
@@ -1149,6 +1151,7 @@ mod tests {
                     accepts_datatable: false,
                 },
                 impl_hash: "hash2".to_string(),
+                source_symbol: None,
             },
         ];
 
