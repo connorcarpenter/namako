@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Tesaki - AI-friendly task orchestrator for Namako spec-driven development"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "tesaki"
 path = "src/main.rs"

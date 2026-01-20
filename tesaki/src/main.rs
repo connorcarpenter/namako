@@ -16,12 +16,14 @@
 //! When `-s` or `-a` flags are omitted, Tesaki searches for `.tesaki/config.toml` in the
 //! current directory and parent directories. See `tesaki config print` for details.
 
-pub mod config;
-pub mod gate;
-pub mod mission;
-pub mod runner;
-pub mod stop_reason;
-pub mod workspace;
+mod config;
+mod gate;
+mod mission;
+mod runner;
+mod claude_code_runner;
+mod runner_test;
+mod stop_reason;
+mod workspace;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -1242,7 +1244,9 @@ fn run_run(
     current_status: Option<PathBuf>,
 ) -> Result<()> {
     use crate::mission::{MissionBundle, MissionBudgets, MissionInputs, MissionTask};
-    use crate::runner::{Runner, RunnerConfig, MockRunner, CommandRunner, ClaudeCodeRunner, OutcomeClassification};
+    use crate::runner::{Runner, RunnerConfig, OutcomeClassification};
+    use crate::runner_test::MockRunner;
+    use crate::claude_code_runner::ClaudeCodeRunner;
     use crate::stop_reason::{StopReason, RunResult};
     use crate::workspace::Workspace;
     use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker};
@@ -1318,12 +1322,6 @@ fn run_run(
                 return Ok(());
             }
             Box::new(ClaudeCodeRunner::new(runner_cmd)?)
-        }
-        "cmd" => {
-            let cmd = runner_cmd.ok_or_else(|| {
-                anyhow::anyhow!("--runner-cmd is required when using --runner=cmd")
-            })?;
-            Box::new(CommandRunner::new(cmd))
         }
         _ => anyhow::bail!("Unknown runner: {}", runner_name),
     };
