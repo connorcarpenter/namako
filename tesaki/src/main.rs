@@ -11,6 +11,7 @@
 //! With v1.7, Tesaki can orchestrate an autonomous coding agent (runner) via `tesaki run`.
 //! The runner operates on the specs repository only - it never edits Namako/Tesaki code.
 
+pub mod gate;
 pub mod mission;
 pub mod runner;
 pub mod stop_reason;
@@ -1042,7 +1043,9 @@ fn generate_next_task(
 /// 3. Create mission bundle
 /// 4. Invoke runner backend
 /// 5. Validate via namako gate --json
-/// 6. Transition or stop
+/// 6. Apply update-cert governance (if verify-only failure)
+/// 7. Retry if failure is retryable and attempts remain
+/// 8. Transition or stop
 #[allow(clippy::too_many_arguments)]
 fn run_run(
     spec_root: &PathBuf,
@@ -1061,6 +1064,7 @@ fn run_run(
     use crate::runner::{Runner, RunnerConfig, MockRunner, CommandRunner, ClaudeCodeRunner, OutcomeClassification};
     use crate::stop_reason::{StopReason, RunResult};
     use crate::workspace::Workspace;
+    use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker};
 
     // Canonicalize spec_root
     let spec_root = fs::canonicalize(spec_root)
@@ -1301,91 +1305,217 @@ fn run_run(
 
     eprintln!("  Selected: {}", task.name);
 
-    // Step 4: Create mission bundle
-    eprintln!("[4/6] Creating mission bundle...");
+    // Tracking for governance
+    let mut attempts_made: u32 = 0;
+    let mut cert_updates_made: u32 = 0;
+    let invoker = ProcessInvoker;
 
-    let tesaki_dir = spec_root.join(".tesaki");
-    fs::create_dir_all(&tesaki_dir)?;
+    // Retry loop per TODO.md §B2
+    loop {
+        attempts_made += 1;
+        eprintln!("\n--- Attempt {}/{} ---", attempts_made, max_retries + 1);
 
-    let inputs = MissionInputs {
-        status_json: status_json.clone(),
-        review_json: review_json.clone(),
-        gate_json: gate_json.clone(),
-        explain_json: None,
-        workspace_json: workspace.to_json()?,
-    };
+        // Step 4: Create mission bundle (includes attempt_index in NEXT_TASK.md)
+        eprintln!("[4/6] Creating mission bundle...");
 
-    let mission = MissionBundle::create(&tesaki_dir, &task, &inputs, budgets.clone(), mode)?;
-    eprintln!("  Mission: {}", mission.id);
-    eprintln!("  Path: {}", mission.path.display());
+        let tesaki_dir = spec_root.join(".tesaki");
+        fs::create_dir_all(&tesaki_dir)?;
 
-    // Step 5: Invoke runner
-    eprintln!("[5/6] Invoking runner ({})...", runner.name());
+        let inputs = MissionInputs {
+            status_json: status_json.clone(),
+            review_json: review_json.clone(),
+            gate_json: gate_json.clone(),
+            explain_json: None,
+            workspace_json: workspace.to_json()?,
+        };
 
-    let runner_config = RunnerConfig {
-        max_runtime_seconds,
-        working_dir: workspace.working_dir().to_path_buf(),
-        mode: mode.to_string(),
-    };
+        // Create task with attempt metadata
+        let task_with_attempt = MissionTask {
+            name: if attempts_made > 1 {
+                format!("{} (attempt {})", task.name, attempts_made)
+            } else {
+                task.name.clone()
+            },
+            ..task.clone()
+        };
 
-    let outcome = runner.run(&mission.path, &runner_config)?;
-    eprintln!("  Outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
-        outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
+        let mission = MissionBundle::create(&tesaki_dir, &task_with_attempt, &inputs, budgets.clone(), mode)?;
+        eprintln!("  Mission: {}", mission.id);
+        eprintln!("  Path: {}", mission.path.display());
 
-    if outcome.classification == OutcomeClassification::Timeout {
-        let failed_path = mission.preserve_failed()?;
-        let result = RunResult::error(StopReason::Budget, "Runner exceeded time budget")
-            .with_mission_path(failed_path.display().to_string());
-        emit_run_result(&result, &spec_root)?;
-        eprintln!("STOP: BUDGET - Runner timeout");
-        return Ok(());
-    }
+        // Step 5: Invoke runner
+        eprintln!("[5/6] Invoking runner ({})...", runner.name());
 
-    // Step 6: Validate via namako gate --json
-    eprintln!("[6/6] Validating (namako gate --json)...");
+        let runner_config = RunnerConfig {
+            max_runtime_seconds,
+            working_dir: workspace.working_dir().to_path_buf(),
+            mode: mode.to_string(),
+        };
 
-    let post_gate_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
-    mission.write_gate_result(&post_gate_json)?;
+        let outcome = runner.run(&mission.path, &runner_config)?;
+        eprintln!("  Outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
+            outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
 
-    let post_gate: serde_json::Value = serde_json::from_str(&post_gate_json)?;
-    let post_gate_passes = post_gate.get("lint")
-        .and_then(|l| l.get("status"))
-        .and_then(|s| s.as_str()) == Some("pass")
-        && post_gate.get("run")
-            .and_then(|r| r.get("status"))
-            .and_then(|s| s.as_str()) == Some("pass")
-        && post_gate.get("verify")
-            .and_then(|v| v.get("status"))
-            .and_then(|s| s.as_str()) == Some("pass");
+        // Determine stop reason from runner outcome
+        let runner_stop = match outcome.classification {
+            OutcomeClassification::Ok => None,
+            OutcomeClassification::Failed => Some(StopReason::RunnerFailed),
+            OutcomeClassification::Timeout => Some(StopReason::Budget),
+            OutcomeClassification::EnvironmentError => Some(StopReason::EnvironmentError),
+        };
 
-    if post_gate_passes {
-        eprintln!("  Gate: PASS");
-        let result = RunResult::done(1, 0)
-            .with_mission_path(mission.path.display().to_string());
-        emit_run_result(&result, &spec_root)?;
-        eprintln!("\nSUCCESS: Mission completed, gate passes");
-        eprintln!("Mission bundle: {}", mission.path.display());
-    } else {
-        // Check if only verify failed (might need update-cert)
-        let verify_status = post_gate.get("verify")
-            .and_then(|v| v.get("status"))
-            .and_then(|s| s.as_str());
-
-        if verify_status == Some("fail") && max_cert_updates > 0 {
-            eprintln!("  Verify failed - attempting update-cert...");
-            // TODO: Implement update-cert logic with governance
-            // For now, just fail
+        // If runner failed, check if retryable
+        if let Some(stop) = runner_stop {
+            if !stop.is_retryable() || attempts_made > max_retries {
+                let failed_path = mission.preserve_failed()?;
+                let result = RunResult::error(stop.clone(), format!("Runner failed: {:?}", outcome.classification))
+                    .with_mission_path(failed_path.display().to_string())
+                    .with_missions(attempts_made);
+                emit_run_result(&result, &spec_root)?;
+                eprintln!("STOP: {} - After {} attempt(s)", stop, attempts_made);
+                eprintln!("Failed mission preserved at: {}", failed_path.display());
+                return Ok(());
+            }
+            // Retryable and attempts remain
+            eprintln!("  Runner failed but retryable. {} attempts remaining.", max_retries + 1 - attempts_made);
+            let _ = mission.preserve_failed()?;
+            continue;
         }
 
-        let failed_path = mission.preserve_failed()?;
-        let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed")
-            .with_mission_path(failed_path.display().to_string());
-        emit_run_result(&result, &spec_root)?;
-        eprintln!("\nSTOP: GATE_FAILED - Post-run validation failed");
-        eprintln!("Failed mission preserved at: {}", failed_path.display());
-    }
+        // Step 6: Validate via namako gate --json
+        eprintln!("[6/6] Validating (namako gate --json)...");
 
-    Ok(())
+        let post_gate_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
+        mission.write_gate_result(&post_gate_json)?;
+
+        let gate_outcome = GateOutcome::from_json_str(&post_gate_json);
+        eprintln!("  Gate outcome: {:?}", gate_outcome);
+
+        match gate_outcome {
+            GateOutcome::Pass => {
+                // Success!
+                let result = RunResult::done(attempts_made, cert_updates_made)
+                    .with_mission_path(mission.path.display().to_string());
+                emit_run_result(&result, &spec_root)?;
+                eprintln!("\nSUCCESS: Mission completed after {} attempt(s)", attempts_made);
+                eprintln!("Mission bundle: {}", mission.path.display());
+                return Ok(());
+            }
+
+            GateOutcome::FailVerifyOnly => {
+                // Per TODO.md §A3: Check if update-cert is allowed
+                if cert_updates_made >= max_cert_updates {
+                    eprintln!("  Verify failed but update-cert limit reached ({}/{})",
+                        cert_updates_made, max_cert_updates);
+                    // Treat as GATE_FAILED, check if retryable
+                } else {
+                    eprintln!("  Verify-only failure - attempting update-cert ({}/{} used)...",
+                        cert_updates_made, max_cert_updates);
+
+                    // Paths for update-cert
+                    let run_report_path = spec_root.join("target/namako_artifacts/run_report.json");
+                    let cert_path = spec_root.join("certification.json");
+
+                    // Read old identity for logging
+                    let old_identity = read_certification_identity(&cert_path);
+
+                    // Run update-cert
+                    let update_result = invoker.run_update_cert(
+                        &namako,
+                        &adapter,
+                        &spec_root,
+                        &run_report_path,
+                        &cert_path,
+                    );
+
+                    if update_result.success {
+                        cert_updates_made += 1;
+                        eprintln!("  ✓ Update-cert succeeded");
+
+                        // Log the update
+                        let new_identity = read_certification_identity(&cert_path);
+                        if let Some(new_id) = new_identity {
+                            let log_entry = UpdateCertLogEntry {
+                                timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                                old_identity,
+                                new_identity: new_id,
+                                reason: "VERIFY_ONLY_FAIL".to_string(),
+                                updates_this_run: cert_updates_made,
+                                max_updates_allowed: max_cert_updates,
+                            };
+                            let log_path = spec_root.join("target/namako_artifacts/tesaki").join(UPDATE_CERT_LOG);
+                            append_to_log(&log_path, &log_entry);
+                        }
+
+                        // Re-gate to confirm
+                        eprintln!("  Re-validating after update-cert...");
+                        let recheck_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
+
+                        // Write gate_result_after_update_cert.json per TODO.md §A4
+                        let after_cert_path = mission.path.join("OUTPUT").join("gate_result_after_update_cert.json");
+                        fs::write(&after_cert_path, &recheck_json)?;
+
+                        let recheck_outcome = GateOutcome::from_json_str(&recheck_json);
+
+                        if recheck_outcome.is_pass() {
+                            eprintln!("  ✓ Gate passes after update-cert");
+                            let result = RunResult::done(attempts_made, cert_updates_made)
+                                .with_mission_path(mission.path.display().to_string());
+                            emit_run_result(&result, &spec_root)?;
+                            eprintln!("\nSUCCESS: Mission completed after {} attempt(s), {} cert update(s)",
+                                attempts_made, cert_updates_made);
+                            return Ok(());
+                        } else {
+                            eprintln!("  ✗ Gate still failing after update-cert: {:?}", recheck_outcome);
+                            // Fall through to GATE_FAILED handling
+                        }
+                    } else {
+                        eprintln!("  ✗ Update-cert failed: {}", update_result.stderr);
+                        // Fall through to GATE_FAILED handling
+                    }
+                }
+
+                // GATE_FAILED - check if retryable
+                if StopReason::GateFailed.is_retryable() && attempts_made <= max_retries {
+                    eprintln!("  Gate failed but retryable. {} attempts remaining.",
+                        max_retries + 1 - attempts_made);
+                    let _ = mission.preserve_failed()?;
+                    continue;
+                }
+
+                let failed_path = mission.preserve_failed()?;
+                let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed (verify-only after update-cert)")
+                    .with_mission_path(failed_path.display().to_string())
+                    .with_missions(attempts_made)
+                    .with_cert_updates(cert_updates_made);
+                emit_run_result(&result, &spec_root)?;
+                eprintln!("\nSTOP: GATE_FAILED - Verify still failing after update-cert");
+                eprintln!("Failed mission preserved at: {}", failed_path.display());
+                return Ok(());
+            }
+
+            GateOutcome::FailOther => {
+                // lint or run failed - NO update-cert attempt per TODO.md §A3
+                eprintln!("  Gate failed (lint or run) - no update-cert attempt");
+
+                if StopReason::GateFailed.is_retryable() && attempts_made <= max_retries {
+                    eprintln!("  Gate failed but retryable. {} attempts remaining.",
+                        max_retries + 1 - attempts_made);
+                    let _ = mission.preserve_failed()?;
+                    continue;
+                }
+
+                let failed_path = mission.preserve_failed()?;
+                let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed (lint or run)")
+                    .with_mission_path(failed_path.display().to_string())
+                    .with_missions(attempts_made);
+                emit_run_result(&result, &spec_root)?;
+                eprintln!("\nSTOP: GATE_FAILED - Post-run validation failed");
+                eprintln!("Failed mission preserved at: {}", failed_path.display());
+                return Ok(());
+            }
+        }
+    }
 }
 
 /// Run namako gate --json and return the JSON output.

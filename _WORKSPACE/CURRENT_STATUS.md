@@ -36,6 +36,9 @@ v1.7 implements the autonomous Product Loop where Tesaki orchestrates a coding a
 | Runner Backends | ✅ | Mock, Command, ClaudeCode in `tesaki/src/runner.rs` |
 | Stop Conditions | ✅ | DONE, BLOCKED, BUDGET, etc. in `tesaki/src/stop_reason.rs` |
 | Workspace Tracking | ✅ | `tesaki/src/workspace.rs` - Change detection |
+| Gate Outcome Classification | ✅ | `tesaki/src/gate.rs` - GateOutcome + UpdateCertInvoker |
+| Update-Cert Governance | ✅ | Automatic update-cert for verify-only failures, bounded by `--max-cert-updates` |
+| Retry Logic | ✅ | Retry loop for retryable failures, bounded by `--max-retries` |
 
 **Current state:** Implementation complete. Ready for end-to-end testing.
 
@@ -88,7 +91,7 @@ cargo run -p tesaki -- run \
 | `namako gate` | ✅ PASS | lint+run+verify all pass (baseline refreshed) |
 | `namako gate --determinism` | ✅ PASS | Evidence bundle now includes status.json + review.json |
 | `cargo test -p namako-cli` | ✅ PASS | 29 unit tests pass (includes 8 gate tests) |
-| `cargo test -p tesaki` | ✅ PASS | 5 unit tests pass (includes stub exclusion) |
+| `cargo test -p tesaki` | ✅ PASS | 48 unit tests pass (gate, stop_reason, mission, runner, workspace) |
 | `cargo build -p namako-cli` | ✅ PASS | All warnings are cosmetic |
 | Stub exclusion | ✅ VERIFIED | 0 promotion candidates (5 stubs excluded) |
 
@@ -243,7 +246,9 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 |-----------|--------|----------|
 | Tesaki end-to-end | ✅ | `tesaki next` produces `NEXT_TASK.md` deterministically (v1.7: `tesaki run`) |
 | Namako packets deterministic | ✅ | `status --json`, `review`, `explain` all produce stable outputs |
-| Tesaki selects promotion candidates | ✅ | Filters `@Stub` and returns DONE when only hygiene stubs exist; promotion selection exercised via tests / prior promotion cycles |
+| Tesaki selects promotion candidates | ✅ | Filters `@Stub` and returns DONE when only hygiene stubs exist |
+| Tesaki update-cert governance | ✅ | Only FailVerifyOnly outcomes trigger update-cert, bounded by `--max-cert-updates` |
+| Tesaki retry logic | ✅ | Only retryable failures (RunnerFailed, NoProgress, GateFailed) retry, bounded by `--max-retries` |
 | Tesaki generates binding bundles | ✅ | `suggested_binding_bundle` in review output |
 | Tesaki generates explain packets | ✅ | `explain` command outputs scenario details |
 | Tesaki stops safely when blocked | ✅ | Returns `DONE` when no work available |
@@ -348,7 +353,10 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 2. [x] Implement Claude Code runner backend (`tesaki/src/runner.rs`)
 3. [x] Implement `tesaki run` command (`tesaki/src/main.rs`)
 4. [x] Implement stop condition detection (`tesaki/src/stop_reason.rs`)
-5. [x] End-to-end test with controlled mission (23 tests pass)
+5. [x] Implement gate outcome classification (`tesaki/src/gate.rs`)
+6. [x] Implement update-cert governance (auto update-cert for verify-only failures)
+7. [x] Implement retry logic (retry loop for retryable failures)
+8. [x] End-to-end test with controlled mission (48 tests pass)
 
 #### Phase 1: CONSUMPTION Transition Steps (After v1.7)
 

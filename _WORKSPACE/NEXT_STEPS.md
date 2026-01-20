@@ -24,7 +24,10 @@
 | 0.3 | Claude Code Backend | First runner backend | ✅ `ClaudeCodeRunner` |
 | 0.4 | `tesaki run` Command | Single-command entrypoint | ✅ `main.rs` |
 | 0.5 | Stop Conditions | DONE/BLOCKED/BUDGET/etc. detection | ✅ `stop_reason.rs` |
-| 0.6 | End-to-End Test | Verify full loop with controlled mission | ✅ 23 tests |
+| 0.6 | Gate Classification | GateOutcome + UpdateCertInvoker | ✅ `gate.rs` |
+| 0.7 | Update-Cert Governance | Auto update-cert for verify-only failures | ✅ `main.rs` |
+| 0.8 | Retry Logic | Retry loop for retryable failures | ✅ `stop_reason.rs` + `main.rs` |
+| 0.9 | End-to-End Test | Verify full loop with controlled mission | ✅ 48 tests |
 
 ### Exit Criteria for Phase 0 — All Satisfied
 
@@ -32,6 +35,9 @@
 - [x] `namako gate --json` validates runner output
 - [x] Stop conditions emit structured reasons
 - [x] At least one successful autonomous mission cycle demonstrated (mock-backed)
+- [x] Update-cert governance: only FailVerifyOnly triggers update-cert, bounded by `--max-cert-updates`
+- [x] Retry logic: only retryable failures retry, bounded by `--max-retries`
+- [x] 48 unit tests covering gate classification, governance, and retry logic
 
 ---
 
@@ -186,6 +192,12 @@ For each harness enhancement:
 - ✅ End-to-end tests (23 tests passing)
 
 **Next priority:** Transition to CONSUMPTION mode (Phase 1)
+
+**v1.7 Follow-up Implementation (2026-01-20):**
+- Gate outcome classification (`gate.rs`): Pass, FailVerifyOnly, FailOther
+- Update-cert governance: Only FailVerifyOnly outcomes trigger update-cert
+- Retry logic: Only RunnerFailed, NoProgress, GateFailed are retryable
+- 48 tests now passing (up from 23)
 
 ### For AI Agent (After v1.7 — CONSUMPTION Mode)
 

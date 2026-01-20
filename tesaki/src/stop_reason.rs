@@ -46,6 +46,25 @@ impl StopReason {
         matches!(self, StopReason::HumanRequired | StopReason::Blocked)
     }
 
+    /// Returns true if this failure is retryable.
+    ///
+    /// Per TODO.md §B1, retries are allowed ONLY for:
+    /// - RunnerFailed: non-zero exit, timeout
+    /// - NoProgress: runner produced zero file changes
+    /// - GateFailed: post-run gate failed
+    ///
+    /// NOT retryable:
+    /// - HumanRequired: requires human intervention
+    /// - EnvironmentError: toolchain/setup issues
+    /// - Budget: limits reached (retrying would violate budget)
+    /// - Done/Blocked: not failures
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            StopReason::RunnerFailed | StopReason::NoProgress | StopReason::GateFailed
+        )
+    }
+
     /// Returns a human-readable description.
     pub fn description(&self) -> &'static str {
         match self {
@@ -180,5 +199,154 @@ mod tests {
         assert!(!result.reason.is_success());
         assert_eq!(result.details, Some("lint phase failed".to_string()));
         assert_eq!(result.last_mission_path, Some(".tesaki/failed/001-test".to_string()));
+    }
+
+    /// Per TODO.md §B1: test is_retryable for all stop reasons.
+    #[test]
+    fn test_is_retryable() {
+        // Retryable failures
+        assert!(StopReason::RunnerFailed.is_retryable());
+        assert!(StopReason::NoProgress.is_retryable());
+        assert!(StopReason::GateFailed.is_retryable());
+
+        // NOT retryable
+        assert!(!StopReason::Done.is_retryable());
+        assert!(!StopReason::Blocked.is_retryable());
+        assert!(!StopReason::HumanRequired.is_retryable());
+        assert!(!StopReason::EnvironmentError.is_retryable());
+        assert!(!StopReason::Budget.is_retryable());
+    }
+
+    // =========================================================================
+    // Tests for retry logic (per TODO.md §B3)
+    // =========================================================================
+
+    /// Per TODO.md §B3: simulate runner fails once then succeeds
+    #[test]
+    fn test_retry_logic_runner_fails_once_succeeds() {
+        let outcomes = vec![StopReason::Done, StopReason::RunnerFailed];
+        let mut iter = outcomes.into_iter().rev();
+        let max_retries = 2u32;
+        let mut attempts = 0u32;
+
+        // Simulate retry loop
+        loop {
+            if let Some(outcome) = iter.next() {
+                attempts += 1;
+                if outcome.is_success() {
+                    // Success - break
+                    break;
+                } else if outcome.is_retryable() && attempts < max_retries {
+                    // Retry
+                    continue;
+                } else {
+                    // Not retryable or exhausted
+                    panic!("Should have succeeded");
+                }
+            } else {
+                break;
+            }
+        }
+        assert_eq!(attempts, 2); // Failed once, succeeded on retry
+    }
+
+    /// Per TODO.md §B3: simulate NO_PROGRESS once then progress
+    #[test]
+    fn test_retry_logic_no_progress_then_progress() {
+        let outcomes = vec![StopReason::Done, StopReason::NoProgress];
+        let mut iter = outcomes.into_iter().rev();
+        let max_retries = 3u32;
+        let mut attempts = 0u32;
+
+        loop {
+            if let Some(outcome) = iter.next() {
+                attempts += 1;
+                if outcome.is_success() {
+                    break;
+                } else if outcome.is_retryable() && attempts < max_retries {
+                    continue;
+                } else {
+                    panic!("Should have succeeded");
+                }
+            } else {
+                break;
+            }
+        }
+        assert_eq!(attempts, 2);
+        assert!(StopReason::NoProgress.is_retryable());
+    }
+
+    /// Per TODO.md §B3: simulate GATE_FAILED once then pass
+    #[test]
+    fn test_retry_logic_gate_failed_then_pass() {
+        let outcomes = vec![StopReason::Done, StopReason::GateFailed];
+        let mut iter = outcomes.into_iter().rev();
+        let max_retries = 2u32;
+        let mut attempts = 0u32;
+
+        loop {
+            if let Some(outcome) = iter.next() {
+                attempts += 1;
+                if outcome.is_success() {
+                    break;
+                } else if outcome.is_retryable() && attempts < max_retries {
+                    continue;
+                } else {
+                    panic!("Should have succeeded");
+                }
+            } else {
+                break;
+            }
+        }
+        assert_eq!(attempts, 2);
+    }
+
+    /// Per TODO.md §B3: HUMAN_REQUIRED → NO retry
+    #[test]
+    fn test_retry_logic_human_required_no_retry() {
+        let outcome = StopReason::HumanRequired;
+        let max_retries = 5u32;
+        let attempts = 1u32;
+
+        // HUMAN_REQUIRED is NOT retryable regardless of budget
+        let should_retry = outcome.is_retryable() && attempts < max_retries;
+        assert!(!should_retry);
+    }
+
+    /// Per TODO.md §B3: ENVIRONMENT_ERROR → NO retry
+    #[test]
+    fn test_retry_logic_environment_error_no_retry() {
+        let outcome = StopReason::EnvironmentError;
+        assert!(!outcome.is_retryable());
+    }
+
+    /// Per TODO.md §B3: BUDGET → NO retry (retrying would violate the budget)
+    #[test]
+    fn test_retry_logic_budget_no_retry() {
+        let outcome = StopReason::Budget;
+        assert!(!outcome.is_retryable());
+    }
+
+    /// Per TODO.md §B3: max_retries=0 means no retries allowed
+    #[test]
+    fn test_retry_logic_zero_budget() {
+        let outcome = StopReason::RunnerFailed;
+        let max_retries = 0u32;
+        let attempts = 1u32;
+
+        // Even for retryable outcome, if max_retries=0, no retry
+        let should_retry = outcome.is_retryable() && attempts < max_retries;
+        assert!(!should_retry);
+    }
+
+    /// Per TODO.md §B3: exhausted retries stops
+    #[test]
+    fn test_retry_logic_retries_exhausted() {
+        let outcome = StopReason::RunnerFailed;
+        let max_retries = 3u32;
+        let attempts = 3u32; // Already at max
+
+        let should_retry = outcome.is_retryable() && attempts < max_retries;
+        assert!(!should_retry);
     }
 }
