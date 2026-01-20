@@ -1,7 +1,7 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
 **Last Updated:** 2026-01-20
-**MODE:** BOOTSTRAP (v1.5 COMPLETE, ready for CONSUMPTION transition)
+**MODE:** BOOTSTRAP (v1.5 COMPLETE; awaiting update-cert baseline refresh before CONSUMPTION)
 
 ---
 
@@ -200,7 +200,7 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 |-----------|--------|----------|
 | Tesaki end-to-end | ✅ | `tesaki next` produces `NEXT_TASK.md` deterministically |
 | Namako packets deterministic | ✅ | `status --json`, `review`, `explain` all produce stable outputs |
-| Tesaki selects promotion candidates | ✅ | `reuse_score` computed for @Deferred scenarios |
+| Tesaki selects promotion candidates | ✅ | Filters `@Stub` and returns DONE when only hygiene stubs exist; promotion selection exercised via tests / prior promotion cycles |
 | Tesaki generates binding bundles | ✅ | `suggested_binding_bundle` in review output |
 | Tesaki generates explain packets | ✅ | `explain` command outputs scenario details |
 | Tesaki stops safely when blocked | ✅ | Returns `DONE` when no work available |
@@ -289,6 +289,8 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 | Sprint 4 | Enhanced `namako explain` + `status` | ✅ COMPLETE |
 
 ### CONSUMPTION Transition Steps
+
+**Blocking step:** `namako update-cert` is required to establish the new baseline after `source_symbol` addition.
 
 To begin CONSUMPTION mode:
 1. ✅ Verify `@Stub` exclusion from promotion candidates — **DONE** (2026-01-20)
