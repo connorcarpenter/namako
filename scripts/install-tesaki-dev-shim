@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# install-tesaki-dev-shim - Install the tesaki dev shim to user's PATH
+#
+# This script creates a symlink to the tesaki dev shim in ~/.local/bin
+# (or $XDG_BIN_HOME if set), allowing you to run `tesaki` from anywhere.
+#
+# Usage:
+#   ./scripts/install-tesaki-dev-shim
+#
+# After installation:
+#   tesaki run
+#   tesaki config print
+#
+
+set -euo pipefail
+
+# Determine the directory where this script lives
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The tesaki shim we want to symlink
+SHIM_PATH="$SCRIPT_DIR/tesaki"
+
+# Check the shim exists and is executable
+if [[ ! -x "$SHIM_PATH" ]]; then
+    echo "Error: tesaki shim not found or not executable at $SHIM_PATH" >&2
+    echo "" >&2
+    echo "Please run this script from the namako repository root." >&2
+    exit 1
+fi
+
+# Determine target bin directory
+BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+
+# Create the bin directory if it doesn't exist
+if [[ ! -d "$BIN_DIR" ]]; then
+    echo "Creating $BIN_DIR..."
+    mkdir -p "$BIN_DIR"
+fi
+
+# Create the symlink (force overwrite if exists)
+LINK_PATH="$BIN_DIR/tesaki"
+echo "Creating symlink: $LINK_PATH -> $SHIM_PATH"
+ln -sf "$SHIM_PATH" "$LINK_PATH"
+
+# Verify the symlink was created
+if [[ -L "$LINK_PATH" ]]; then
+    echo ""
+    echo "✓ Installed successfully!"
+    echo ""
+    echo "Location: $LINK_PATH"
+    echo "Points to: $SHIM_PATH"
+    echo ""
+    
+    # Check if the bin directory is in PATH
+    if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+        echo "⚠️  $BIN_DIR is not in your PATH."
+        echo ""
+        echo "Add this to your ~/.bashrc or ~/.zshrc:"
+        echo ""
+        echo "  export PATH=\"$BIN_DIR:\$PATH\""
+        echo ""
+        echo "Then restart your shell or run:"
+        echo ""
+        echo "  source ~/.bashrc  # or ~/.zshrc"
+        echo ""
+    else
+        echo "You can now run 'tesaki' from anywhere!"
+        echo ""
+        echo "Try:"
+        echo "  tesaki --help"
+        echo "  tesaki config print"
+    fi
+else
+    echo "Error: Failed to create symlink" >&2
+    exit 1
+fi

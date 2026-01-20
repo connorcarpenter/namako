@@ -10,7 +10,13 @@
 //!
 //! With v1.7, Tesaki can orchestrate an autonomous coding agent (runner) via `tesaki run`.
 //! The runner operates on the specs repository only - it never edits Namako/Tesaki code.
+//!
+//! # Configuration Discovery
+//!
+//! When `-s` or `-a` flags are omitted, Tesaki searches for `.tesaki/config.toml` in the
+//! current directory and parent directories. See `tesaki config print` for details.
 
+pub mod config;
 pub mod gate;
 pub mod mission;
 pub mod runner;
@@ -59,13 +65,13 @@ struct Cli {
 enum Commands {
     /// Generate the next task based on current Namako state
     Next {
-        /// Path to the specs root directory
+        /// Path to the specs root directory (uses config discovery if omitted)
         #[arg(short = 's', long)]
-        spec_root: PathBuf,
+        spec_root: Option<PathBuf>,
 
-        /// Adapter command (e.g., "cargo run --manifest-path ../npa/Cargo.toml --")
+        /// Adapter command (uses config discovery if omitted)
         #[arg(short = 'a', long)]
-        adapter: String,
+        adapter: Option<String>,
 
         /// Output directory for artifacts (default: <spec_root>/target/namako_artifacts/tesaki/)
         #[arg(short = 'o', long)]
@@ -76,8 +82,8 @@ enum Commands {
         namako_cli: Option<String>,
 
         /// Maximum number of autonomous update-cert operations per run (0 to disable)
-        #[arg(long, default_value = "3", value_parser = clap::value_parser!(u32).range(0..=999))]
-        max_cert_updates: u32,
+        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=999))]
+        max_cert_updates: Option<u32>,
 
         /// Path to CURRENT_STATUS.md for mode-aware filtering (optional)
         /// If provided, CORE blockers will be filtered in BOOTSTRAP mode.
@@ -90,50 +96,62 @@ enum Commands {
     /// Creates a mission bundle, invokes the runner, and validates results.
     /// The runner operates on the specs repository only.
     Run {
-        /// Path to the specs root directory
+        /// Path to the specs root directory (uses config discovery if omitted)
         #[arg(short = 's', long)]
-        spec_root: PathBuf,
+        spec_root: Option<PathBuf>,
 
-        /// Adapter command (e.g., "cargo run --manifest-path ../npa/Cargo.toml --")
+        /// Adapter command (uses config discovery if omitted)
         #[arg(short = 'a', long)]
-        adapter: String,
+        adapter: Option<String>,
 
         /// Path to the namako CLI (default: searches in parent workspace)
         #[arg(long)]
         namako_cli: Option<String>,
 
         /// Maximum number of autonomous update-cert operations per session (0 to disable)
-        #[arg(long, default_value = "3", value_parser = clap::value_parser!(u32).range(0..=999))]
-        max_cert_updates: u32,
+        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=999))]
+        max_cert_updates: Option<u32>,
 
         /// Runner backend to use
-        #[arg(long, default_value = "mock", value_parser = ["mock", "claude", "cmd"])]
-        runner: String,
+        #[arg(long, value_parser = ["mock", "claude", "cmd"])]
+        runner: Option<String>,
 
         /// Command template for cmd runner (use {mission_dir} placeholder)
         #[arg(long)]
         runner_cmd: Option<String>,
 
         /// Maximum runtime in seconds per mission
-        #[arg(long, default_value = "600", value_parser = clap::value_parser!(u32).range(1..=3600))]
-        max_runtime_seconds: u32,
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=3600))]
+        max_runtime_seconds: Option<u32>,
 
         /// Maximum files the runner may change per mission
-        #[arg(long, default_value = "10", value_parser = clap::value_parser!(u32).range(1..=100))]
-        max_files_changed: u32,
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
+        max_files_changed: Option<u32>,
 
         /// Maximum retry attempts on runner failure
-        #[arg(long, default_value = "2", value_parser = clap::value_parser!(u32).range(0..=10))]
-        max_retries: u32,
+        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=10))]
+        max_retries: Option<u32>,
 
         /// Operating mode (auto-detected from CURRENT_STATUS.md if not specified)
-        #[arg(long, default_value = "BOOTSTRAP", value_parser = ["BOOTSTRAP", "CONSUMPTION"])]
-        mode: String,
+        #[arg(long, value_parser = ["BOOTSTRAP", "CONSUMPTION"])]
+        mode: Option<String>,
 
         /// Path to CURRENT_STATUS.md for mode detection (optional)
         #[arg(long)]
         current_status: Option<PathBuf>,
     },
+
+    /// Configuration management
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Print the resolved configuration (exits non-zero if none found)
+    Print,
 }
 
 /// Status JSON structure from `namako status --json`
@@ -271,7 +289,18 @@ fn main() -> Result<()> {
             namako_cli,
             max_cert_updates,
             current_status,
-        } => run_next(&spec_root, &adapter, out, namako_cli, max_cert_updates, current_status),
+        } => {
+            // Resolve config: CLI flags override config file values
+            let resolved = resolve_config_or_flags(spec_root, adapter, max_cert_updates, None, None, None, None, None)?;
+            run_next(
+                &resolved.specs_dir,
+                &resolved.adapter_cmd,
+                out,
+                namako_cli,
+                resolved.max_cert_updates.unwrap_or(3),
+                current_status,
+            )
+        },
 
         Commands::Run {
             spec_root,
@@ -285,19 +314,171 @@ fn main() -> Result<()> {
             max_retries,
             mode,
             current_status,
-        } => run_run(
-            &spec_root,
-            &adapter,
-            namako_cli,
+        } => {
+            // Resolve config: CLI flags override config file values
+            let resolved = resolve_config_or_flags(
+                spec_root,
+                adapter,
+                max_cert_updates,
+                runner,
+                runner_cmd,
+                max_retries,
+                max_runtime_seconds.map(|v| v as u64),
+                max_files_changed.map(|v| v as usize),
+            )?;
+            run_run(
+                &resolved.specs_dir,
+                &resolved.adapter_cmd,
+                namako_cli,
+                resolved.max_cert_updates.unwrap_or(3),
+                &resolved.runner.unwrap_or_else(|| "mock".to_string()),
+                resolved.runner_cmd,
+                resolved.max_runtime_seconds.unwrap_or(600) as u32,
+                resolved.max_files_changed.unwrap_or(10) as u32,
+                resolved.max_retries.unwrap_or(2),
+                &mode.unwrap_or_else(|| "BOOTSTRAP".to_string()),
+                current_status,
+            )
+        },
+
+        Commands::Config { action } => {
+            match action {
+                ConfigAction::Print => run_config_print(),
+            }
+        },
+    }
+}
+
+/// Resolved configuration from CLI flags and/or config file
+struct ResolvedArgs {
+    specs_dir: PathBuf,
+    adapter_cmd: String,
+    max_cert_updates: Option<u32>,
+    runner: Option<String>,
+    runner_cmd: Option<String>,
+    max_retries: Option<u32>,
+    max_runtime_seconds: Option<u64>,
+    max_files_changed: Option<usize>,
+}
+
+/// Resolve configuration from CLI flags, falling back to config file if flags are missing.
+/// CLI flags always override config file values.
+fn resolve_config_or_flags(
+    spec_root: Option<PathBuf>,
+    adapter: Option<String>,
+    max_cert_updates: Option<u32>,
+    runner: Option<String>,
+    runner_cmd: Option<String>,
+    max_retries: Option<u32>,
+    max_runtime_seconds: Option<u64>,
+    max_files_changed: Option<usize>,
+) -> Result<ResolvedArgs> {
+    // If both required flags are provided, use them directly
+    if let (Some(spec_root), Some(adapter)) = (&spec_root, &adapter) {
+        let spec_root = fs::canonicalize(spec_root)
+            .with_context(|| format!("Failed to canonicalize spec_root: {}", spec_root.display()))?;
+        let adapter = canonicalize_adapter_cmd(adapter)?;
+        return Ok(ResolvedArgs {
+            specs_dir: spec_root,
+            adapter_cmd: adapter,
             max_cert_updates,
-            &runner,
+            runner,
             runner_cmd,
+            max_retries,
             max_runtime_seconds,
             max_files_changed,
-            max_retries,
-            &mode,
-            current_status,
-        ),
+        });
+    }
+
+    // Try to discover config
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let discovery = config::discover_config(&cwd)?;
+
+    match discovery {
+        config::ConfigDiscoveryResult::Found(cfg) => {
+            eprintln!("Using config: {}", cfg.config_path.display());
+
+            // CLI flags override config values
+            let specs_dir = spec_root
+                .map(|p| fs::canonicalize(&p).unwrap_or(p))
+                .unwrap_or(cfg.specs_dir);
+            let adapter_cmd = adapter
+                .map(|a| canonicalize_adapter_cmd(&a).unwrap_or(a))
+                .unwrap_or(cfg.adapter_cmd);
+
+            Ok(ResolvedArgs {
+                specs_dir,
+                adapter_cmd,
+                max_cert_updates: max_cert_updates.or(cfg.max_cert_updates),
+                runner: runner.or(cfg.runner),
+                runner_cmd: runner_cmd.or(cfg.runner_cmd),
+                max_retries: max_retries.or(cfg.max_retries),
+                max_runtime_seconds: max_runtime_seconds.or(cfg.max_runtime_seconds),
+                max_files_changed: max_files_changed.or(cfg.max_files_changed),
+            })
+        }
+        config::ConfigDiscoveryResult::NotFound { .. } => {
+            // Check if we have at least partial flags
+            if spec_root.is_some() || adapter.is_some() {
+                anyhow::bail!(
+                    "Both -s/--spec-root and -a/--adapter are required when no config file is found.\n\n\
+                    Create .tesaki/config.toml or provide both flags."
+                );
+            }
+
+            config::print_config_error();
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Run `tesaki config print`
+fn run_config_print() -> Result<()> {
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let discovery = config::discover_config(&cwd)?;
+
+    match discovery {
+        config::ConfigDiscoveryResult::Found(cfg) => {
+            println!("Config file: {}", cfg.config_path.display());
+            println!("Config root: {}", cfg.config_root.display());
+            println!();
+            println!("Resolved values:");
+            println!("  specs_dir: {}", cfg.specs_dir.display());
+            println!("  adapter_cmd: {}", cfg.adapter_cmd);
+            if let Some(ref runner) = cfg.runner {
+                println!("  runner: {}", runner);
+            }
+            if let Some(ref runner_cmd) = cfg.runner_cmd {
+                println!("  runner_cmd: {}", runner_cmd);
+            }
+            if let Some(max_retries) = cfg.max_retries {
+                println!("  max_retries: {}", max_retries);
+            }
+            if let Some(max_cert_updates) = cfg.max_cert_updates {
+                println!("  max_cert_updates: {}", max_cert_updates);
+            }
+            if let Some(max_runtime_seconds) = cfg.max_runtime_seconds {
+                println!("  max_runtime_seconds: {}", max_runtime_seconds);
+            }
+            if let Some(max_files_changed) = cfg.max_files_changed {
+                println!("  max_files_changed: {}", max_files_changed);
+            }
+            Ok(())
+        }
+        config::ConfigDiscoveryResult::NotFound { searched_dirs } => {
+            eprintln!("No config file found.");
+            eprintln!();
+            eprintln!("Searched directories:");
+            for dir in searched_dirs.iter().take(5) {
+                eprintln!("  - {}", dir.display());
+            }
+            if searched_dirs.len() > 5 {
+                eprintln!("  ... and {} more", searched_dirs.len() - 5);
+            }
+            eprintln!();
+            config::print_config_error();
+            std::process::exit(1);
+        }
     }
 }
 

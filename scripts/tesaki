@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#
+# tesaki - Dev shim for running Tesaki from the local checkout
+#
+# This script allows you to run Tesaki from anywhere while using the
+# current local checkout. It's intended for development and iteration.
+#
+# Usage:
+#   /path/to/namako/scripts/tesaki run
+#   /path/to/namako/scripts/tesaki next -s specs -a "adapter"
+#   /path/to/namako/scripts/tesaki config print
+#
+# After running scripts/install-tesaki-dev-shim, you can simply use:
+#   tesaki run
+#
+
+set -euo pipefail
+
+# Capture the original working directory for config discovery
+ORIGINAL_CWD="$(pwd)"
+
+# Determine the directory where this script lives
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The repository root is the parent of scripts/
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Check if cargo is available
+if ! command -v cargo &> /dev/null; then
+    echo "Error: cargo is not installed or not in PATH" >&2
+    echo "" >&2
+    echo "Install Rust and Cargo from: https://rustup.rs" >&2
+    exit 1
+fi
+
+# Check if the tesaki crate exists
+if [[ ! -f "$REPO_ROOT/tesaki/Cargo.toml" ]]; then
+    echo "Error: tesaki crate not found at $REPO_ROOT/tesaki/" >&2
+    echo "" >&2
+    echo "This script must be run from within the namako repository." >&2
+    exit 1
+fi
+
+# Build tesaki first (from repo root for workspace resolution)
+cd "$REPO_ROOT"
+cargo build -p tesaki -q
+
+# Run tesaki from the ORIGINAL directory for correct config discovery
+cd "$ORIGINAL_CWD"
+exec "$REPO_ROOT/target/debug/tesaki" "$@"
