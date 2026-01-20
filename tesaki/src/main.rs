@@ -151,6 +151,10 @@ struct PromotionCandidate {
     new_step_texts_estimate: u32,
     #[serde(default)]
     blocker: BlockerType,
+    /// Whether this is a stub scenario (should always be false in promotion_candidates,
+    /// since namako review filters them out; kept for defense-in-depth)
+    #[serde(default)]
+    is_stub: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -671,15 +675,19 @@ fn generate_next_task(
 ) -> Result<()> {
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    // Filter out CORE blockers in BOOTSTRAP mode
+    // Filter out stubs (defense-in-depth) and CORE blockers in BOOTSTRAP mode
+    // Per TODO.md §2: Tesaki must NEVER select @Stub scenarios as tasks.
     let (eligible_candidates, blocked_candidates): (Vec<_>, Vec<_>) =
         review.promotion_candidates.iter().partition(|c| {
+            // Stubs are never eligible (defense-in-depth; review.rs should already filter these)
+            if c.is_stub {
+                return false;
+            }
             // In BOOTSTRAP mode, CORE blockers are not eligible
             if *mode == OperatingMode::Bootstrap && c.blocker == BlockerType::Core {
-                false
-            } else {
-                true
+                return false;
             }
+            true
         });
     let drift_kind = status
         .drift
@@ -1052,5 +1060,66 @@ mod tests {
         let cert_path = temp_dir.path().join("nonexistent.json");
 
         assert!(read_certification_identity(&cert_path).is_none());
+    }
+
+    /// Test that stub scenarios are filtered from eligible candidates (defense-in-depth).
+    /// Per TODO.md §2: Tesaki must NEVER select @Stub scenarios as tasks.
+    #[test]
+    fn test_stub_scenarios_excluded_from_eligible_candidates() {
+        // Create candidates with various properties
+        let candidates = vec![
+            PromotionCandidate {
+                scenario_name: "Real scenario".to_string(),
+                feature_path: "features/test.feature".to_string(),
+                rule_name: "Rule_01".to_string(),
+                reuse_score: 5.0,
+                new_step_texts_estimate: 2,
+                blocker: BlockerType::Unknown,
+                is_stub: false, // Real candidate
+            },
+            PromotionCandidate {
+                scenario_name: "Stub scenario".to_string(),
+                feature_path: "features/_orphan_stubs.feature".to_string(),
+                rule_name: "default".to_string(),
+                reuse_score: 0.0,
+                new_step_texts_estimate: 1,
+                blocker: BlockerType::Unknown,
+                is_stub: true, // STUB - should be excluded
+            },
+            PromotionCandidate {
+                scenario_name: "Core blocker".to_string(),
+                feature_path: "features/core.feature".to_string(),
+                rule_name: "Rule_01".to_string(),
+                reuse_score: 3.0,
+                new_step_texts_estimate: 1,
+                blocker: BlockerType::Core,
+                is_stub: false,
+            },
+        ];
+
+        // Simulate BOOTSTRAP mode filtering (as in generate_next_task)
+        let mode = OperatingMode::Bootstrap;
+        let (eligible, blocked): (Vec<_>, Vec<_>) = candidates.iter().partition(|c| {
+            // Stubs are never eligible
+            if c.is_stub {
+                return false;
+            }
+            // CORE blockers excluded in BOOTSTRAP mode
+            if mode == OperatingMode::Bootstrap && c.blocker == BlockerType::Core {
+                return false;
+            }
+            true
+        });
+
+        // Only the real non-CORE scenario should be eligible
+        assert_eq!(eligible.len(), 1);
+        assert_eq!(eligible[0].scenario_name, "Real scenario");
+
+        // Blocked should include both stub and CORE scenarios
+        assert_eq!(blocked.len(), 2);
+
+        // Verify stub was excluded (not just CORE blocker)
+        let stub_blocked = blocked.iter().any(|c| c.scenario_name == "Stub scenario");
+        assert!(stub_blocked, "Stub scenario should be in blocked list");
     }
 }

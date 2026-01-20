@@ -463,6 +463,15 @@ pub struct SemanticBinding {
     pub signature: BindingSignature,
     /// Implementation hash for drift detection
     pub impl_hash: String,
+    /// Source symbol: stable identifier for the binding implementation.
+    ///
+    /// Format: `crate::module::function_name` (uses `module_path!()` + function ident).
+    /// This is more stable than file:line:column for AI navigation and doesn't
+    /// introduce refactor-noise into certification identity.
+    ///
+    /// Per TODO.md §3: Truthful source location for explain output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_symbol: Option<String>,
 }
 
 /// Signature metadata for a binding per GOLD_PLAN §4.4.

@@ -498,15 +498,20 @@ fn build_explain_steps(
         let binding = registry.bindings.iter()
             .find(|b| b.binding_id == step.binding_id);
 
-        let (expression, impl_hash) = if let Some(b) = binding {
-            (b.expression.clone(), b.impl_hash.clone())
+        let (expression, impl_hash, source_symbol) = if let Some(b) = binding {
+            (
+                b.expression.clone(),
+                b.impl_hash.clone(),
+                b.source_symbol.clone(),
+            )
         } else {
-            ("UNKNOWN".to_string(), "UNKNOWN".to_string())
+            ("UNKNOWN".to_string(), "UNKNOWN".to_string(), None)
         };
 
-        // Source location: use binding_id prefix as hint (not available in current schema)
-        // Full source location would require adapter to provide this
-        let source_location = format!("binding:{}:0", &step.binding_id[..16.min(step.binding_id.len())]);
+        // Source location: use source_symbol if available (per TODO.md §3),
+        // otherwise fall back to binding_id prefix
+        let source_location = source_symbol
+            .unwrap_or_else(|| format!("binding:{}:0", &step.binding_id[..16.min(step.binding_id.len())]));
 
         steps.push(ExplainStep {
             step_kind: step.effective_kind.clone(),

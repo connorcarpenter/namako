@@ -350,6 +350,11 @@ impl Definition {
                         #[doc(hidden)]
                         #world_vis accepts_datatable: bool,
 
+                        /// Source symbol: stable identifier for the binding.
+                        /// Format: `module::path::function_name` (via module_path!())
+                        #[doc(hidden)]
+                        #world_vis source_symbol: &'static str,
+
                         #[doc(hidden)]
                         #world_vis regex: ::namako::codegen::LazyRegex,
 
@@ -379,6 +384,7 @@ impl Definition {
                                 captures_arity: self.captures_arity,
                                 accepts_docstring: self.accepts_docstring,
                                 accepts_datatable: self.accepts_datatable,
+                                source_symbol: self.source_symbol,
                             }
                         }
                     }

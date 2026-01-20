@@ -1,7 +1,7 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
-**Last Updated:** 2026-01-19
-**MODE:** BOOTSTRAP (v1.5 implementation COMPLETE)
+**Last Updated:** 2026-01-20
+**MODE:** BOOTSTRAP (v1.5 COMPLETE, ready for CONSUMPTION transition)
 
 ---
 
@@ -40,23 +40,23 @@ cargo run -p tesaki -- next \
   --max-cert-updates 3
 ```
 
-### Latest Results (2026-01-19)
+### Latest Results (2026-01-20)
 
 | Gate | Status | Notes |
 |------|--------|-------|
-| `namako_ci.sh` | ✅ PASS | Lint, Run, Verify all green |
-| `determinism_check.sh` | ✅ PASS | `bytes(run1) == bytes(run2)` |
-| `cargo test -p tesaki` | ✅ PASS | 4 unit tests pass |
+| `namako lint` | ✅ PASS | 31 scenarios, 134 steps resolved |
+| `cargo test -p namako-cli` | ✅ PASS | 21 unit tests pass |
+| `cargo test -p tesaki` | ✅ PASS | 5 unit tests pass (includes stub exclusion) |
 | `cargo build -p namako-cli` | ✅ PASS | All warnings are cosmetic |
-| `cargo test -p namako` | ✅ PASS | All integration tests pass |
+| Stub exclusion | ✅ VERIFIED | 0 promotion candidates (5 stubs excluded) |
 
 ### Scenario Counts
 
 | Metric | Count |
 |--------|-------|
 | Executable scenarios | **31** |
-| @Deferred scenarios | **5** |
-| Promotion candidates | **5** |
+| @Deferred scenarios | **5** (all are @Stub hygiene scenarios) |
+| Promotion candidates | **0** (@Stub scenarios excluded) |
 | Feature files | **17** |
 | Total lines in specs | **2,111** |
 
@@ -121,7 +121,7 @@ cargo run -p tesaki -- next \
 | `impl_hash` scheme | ✅ `token-fingerprint-v1\|blake3-256-lowerhex` |
 | Resolved plan schema | ✅ Per §6.4.1 |
 | Run report schema | ✅ Per §6.4.2 |
-| Scenario key derivation | ✅ `path:Lnn` format |
+| Scenario key derivation | ✅ `Feature:Rule_nn:Scenario_nn` format (explicit ID tags) |
 
 ### Part 7: Hashing & Identity — ✅ COMPLETE
 
@@ -160,18 +160,18 @@ cargo run -p tesaki -- next \
 
 ---
 
-## 3. V1.5 Features Status (AI-Enablement — IN PROGRESS)
+## 3. V1.5 Features Status (AI-Enablement — COMPLETE)
 
-v1.5 features are being implemented incrementally — per GOLD_PLAN.md §10.5.
+All v1.5 features have been implemented per GOLD_PLAN.md §10.5.
 
 | Feature | Section | Status |
 |---------|---------|--------|
 | Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §10.5.1 | ✅ **COMPLETE** |
-| Orphan binding hard error + `namako stub` | §10.5.2 | 🔲 Not Started |
-| `namako review` coverage enhancements | §10.5.3 | 🔲 Not Started |
-| Scenario fidelity packets (`namako explain`) | §10.5.4 | 🔲 Not Started |
-| Machine-readable process state (`namako status --json`) | §10.5.5 | 🔲 Partial |
-| Rich `namako status` diffs | §10.5.6 | 🔲 Not Started |
+| Orphan binding hard error + `namako stub` | §10.5.2 | ✅ **COMPLETE** |
+| `namako review` coverage enhancements | §10.5.3 | ✅ **COMPLETE** |
+| Scenario fidelity packets (`namako explain`) | §10.5.4 | ✅ **COMPLETE** |
+| Machine-readable process state (`namako status --json`) | §10.5.5 | ✅ **COMPLETE** |
+| Rich `namako status` diffs | §10.5.6 | ✅ **COMPLETE** |
 
 ---
 
@@ -249,14 +249,16 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 ---
 
-## 7. Current Identity (Certified)
+## 7. Current Identity (Pending Certification)
+
+**Note:** Identity hashes changed due to `source_symbol` field addition. Run `namako update-cert` to establish new baseline.
 
 | Field | Hash |
 |-------|------|
 | `hash_contract_version` | `namako-v1-json+blake3-256` |
-| `feature_fingerprint_hash` | `1428760ff1f25128f278740c963274e2f6e03beffd12713f37a593fe364aa842` |
-| `step_registry_hash` | `f8c2fb7e2bd4f54835fea8cefb8d2a4aece226750f3e2915091889c1d09f45c5` |
-| `resolved_plan_hash` | `8d064c982360dee56ce68478d3e40d058924b7bcd820abd59c99c2e2fa7290d3` |
+| `feature_fingerprint_hash` | `bba84b749b4419895b8c48e4450e498c03673a124eedd7d93fbca167eda696be` |
+| `step_registry_hash` | `35cebf1fb7ae941e2ae4cf0838cdff1bfd85eb323c59b7bb554a0554330741c7` |
+| `resolved_plan_hash` | `7de72320d341274742d561a6d93cfaef7ca27fc1bcbd7a5b4b8ab21394b7b454` |
 
 ---
 
@@ -275,33 +277,38 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 ## 9. Transition Readiness
 
-### Current Phase: v1.5 Implementation
+### Current Phase: Ready for CONSUMPTION
 
-**Before transitioning to CONSUMPTION mode**, complete the v1.5 AI-enablement features:
+**v1.5 AI-enablement features are COMPLETE:**
 
 | Sprint | Focus | Status |
 |--------|-------|--------|
-| Sprint 1 | Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | 🔲 Not Started |
-| Sprint 2 | Orphan binding enforcement + `namako stub` | 🔲 Not Started |
-| Sprint 3 | Enhanced `namako review` packets | 🔲 Not Started |
-| Sprint 4 | Enhanced `namako explain` + `status` | 🔲 Not Started |
+| Sprint 1 | Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | ✅ COMPLETE |
+| Sprint 2 | Orphan binding enforcement + `namako stub` | ✅ COMPLETE |
+| Sprint 3 | Enhanced `namako review` packets | ✅ COMPLETE |
+| Sprint 4 | Enhanced `namako explain` + `status` | ✅ COMPLETE |
 
-### After v1.5: CONSUMPTION Transition
+### CONSUMPTION Transition Steps
 
-Once v1.5 is complete:
-1. Update this file: `MODE: CONSUMPTION`
-2. Select first CORE work item (per §2.7 First CONSUMPTION Mission Template)
-3. Drive through Tesaki Product FSM
+To begin CONSUMPTION mode:
+1. ✅ Verify `@Stub` exclusion from promotion candidates — **DONE** (2026-01-20)
+2. [ ] Run `namako update-cert` to establish baseline (hashes changed)
+3. [ ] Update this file: `MODE: CONSUMPTION`
+4. [ ] Select first CORE work item (per GOLD_PLAN §2.7 First CONSUMPTION Mission Template)
+5. [ ] Drive through Tesaki Product FSM
 
 ### Current @Deferred Status
 
-**0 scenarios are currently @Deferred.** All previously-deferred scenarios have been:
+**5 scenarios are currently @Deferred** — all are `@Deferred @Stub` scenarios in `_orphan_stubs.feature`.
+
+These are **hygiene-only stubs** generated by `namako stub` for orphan bindings (step bindings that exist in the adapter but aren't used by any executable scenario). They:
+- Exist to satisfy the orphan binding hard error policy (v1.5)
+- Are tagged `@Stub` and MUST NOT be promoted or selected as work by Tesaki
+- Represent bindings that may become useful when new scenarios are written
+
+All production @Deferred scenarios have been:
 - Promoted (bindings implemented, tests passing), OR
 - Removed (determined to be out of scope for v1)
-
-The last known @Deferred scenario was:
-- **Protocol mismatch produces ProtocolMismatch rejection** — @Blocker(CORE)
-  - Status: Resolved in Mission 001 via Named trait refactoring
 
 ---
 

@@ -123,6 +123,13 @@ pub struct NpapBindingMetadata {
     pub accepts_docstring: bool,
     /// Whether binding accepts a DataTable per §4.4.4.
     pub accepts_datatable: bool,
+    /// Source symbol: stable identifier for the binding implementation.
+    ///
+    /// Format: `crate::module::function_name` (uses `module_path!()` + function ident).
+    /// This is more stable than file:line:column for AI navigation.
+    ///
+    /// Per TODO.md §3: Truthful source location for explain output.
+    pub source_symbol: &'static str,
 }
 
 // =============================================================================

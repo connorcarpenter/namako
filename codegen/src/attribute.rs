@@ -292,6 +292,13 @@ impl Step {
                     captures_arity: #captures_arity,
                     accepts_docstring: #accepts_docstring,
                     accepts_datatable: #accepts_datatable,
+                    // Source symbol: stable identifier per TODO.md §3
+                    // Uses module_path!() + function name for AI-friendly navigation
+                    source_symbol: ::std::concat!(
+                        ::std::module_path!(),
+                        "::",
+                        ::std::stringify!(#func_name)
+                    ),
                     regex: || {
                         #allow_trivial_regex_attr
                         static LAZY: ::std::sync::LazyLock<

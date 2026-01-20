@@ -1,7 +1,7 @@
 # NEXT_STEPS.md — Strategic Development Process for Spec-Driven AI Development
 
 **Created:** 2026-01-19
-**Updated:** 2026-01-19
+**Updated:** 2026-01-20
 **Author:** Architecture Review
 **Purpose:** Define the optimal path forward for using Namako + Tesaki to drive autonomous spec-driven development
 
@@ -19,15 +19,17 @@
 - ✅ CI gates green (namako_ci.sh, determinism_check.sh)
 - ✅ All Bootstrap Exit Criteria satisfied
 
-### What's Next: Namako v1.5
+### What's Next: CONSUMPTION Mode Activation
 
-**v1.5 is the immediate next milestone.** Before entering CONSUMPTION mode to build Naia, we will implement the AI-enablement features that make Tesaki truly autonomous.
+**Namako v1.5 is COMPLETE.** All AI-enablement features have been implemented. The next step is to transition to CONSUMPTION mode and begin using the toolchain to develop Naia.
+
+**Safety check before CONSUMPTION:** Ensure `@Stub` scenarios are excluded from promotion candidates and Tesaki task selection (see Phase 0.5 below).
 
 ---
 
-## Phase 0: Namako v1.5 — AI-Enablement Features (IMMEDIATE PRIORITY)
+## Phase 0: Namako v1.5 — AI-Enablement Features (COMPLETE)
 
-**Goal:** Implement the v1.5 feature set defined in GOLD_PLAN.md §10.5 to enable robust AI-driven development.
+**Goal:** Implement the v1.5 feature set defined in GOLD_PLAN.md §10.5 to enable robust AI-driven development. **ACHIEVED.**
 
 ### v1.5 Feature Set
 
@@ -243,29 +245,21 @@ For each harness enhancement:
 
 ### For Connor (Human Operator)
 
-- [ ] Review and commit the comprehensive `CURRENT_STATUS.md`
-- [ ] Review and commit `NEXT_STEPS.md`
-- [ ] Review updated `GOLD_PLAN.md` with v1.5 section
-- [ ] Begin v1.5 Sprint 1: Explicit ID Tags
+- [ ] Review changes from TODO.md execution (see OUTPUT.md)
+- [ ] Commit all changes (namako and naia repos)
+- [ ] Run `namako update-cert` to establish new baseline (hashes changed due to source_symbol)
+- [ ] Update `CURRENT_STATUS.md`: Set `MODE: CONSUMPTION`
+- [ ] Select first CONSUMPTION mission target
 
-### For AI Agent (v1.5 Implementation)
+### For AI Agent (Pre-CONSUMPTION Safety Check) — COMPLETE
 
-**Current Phase: v1.5 Sprint 1 — Explicit ID Tags [COMPLETE]**
-✅ Completed 2026-01-19:
-- ✅ Created id_tags.rs module with parsing logic
-- ✅ Updated engine.rs to extract and validate ID tags
-- ✅ Modified scenario_key derivation to use `Feature:Rule_nn:Scenario_nn` format
-- ✅ Added 6 new error types for ID validation
-- ✅ Migrated 3 executable feature files (31 scenarios)
-- ✅ All gates passing
+**@Stub exclusion verified (2026-01-20):**
+1. ✅ `namako review` excludes `@Stub` scenarios from promotion candidates
+2. ✅ Tesaki filters `@Stub` scenarios (defense-in-depth)
+3. ✅ Unit tests added for stub exclusion logic
+4. ✅ Smoke test: 0 promotion candidates (5 stubs correctly excluded)
 
-**Next Phase: v1.5 Sprint 2 — Orphan Binding Enforcement**
-1. Enhance `namako lint` to detect orphan bindings (hard error)
-2. Implement `namako stub` command for generating stubs
-3. Update tests to verify orphan detection
-4. Document new behavior in migration guide
-
-### For AI Agent (After v1.5, CONSUMPTION Mode)
+### For AI Agent (CONSUMPTION Mode)
 
 Once MODE = CONSUMPTION:
 1. Run `tesaki next` to get current task
@@ -278,16 +272,17 @@ Once MODE = CONSUMPTION:
 
 ## Success Metrics
 
-### v1.5 Completion (Next 1-2 Weeks)
+### v1.5 Completion — ACHIEVED
 
-| Metric | Target |
-|--------|--------|
-| Explicit ID tags | All 16 feature files have @Feature/@Rule_nn/@Scenario_nn |
-| Orphan enforcement | `namako lint` fails on orphans |
-| Review packets | All 5 sections implemented |
-| Explain packets | Full fidelity output |
-| Status enhancements | JSON + rich diffs complete |
-| Gates | All green |
+| Metric | Target | Status |
+|--------|--------|--------|
+| Explicit ID tags | All 17 feature files have @Feature/@Rule_nn/@Scenario_nn | ✅ DONE |
+| Orphan enforcement | `namako lint` fails on orphans | ✅ DONE |
+| Review packets | All 5 sections implemented | ✅ DONE |
+| Explain packets | Full fidelity output with source_symbol | ✅ DONE |
+| Status enhancements | JSON + rich diffs complete | ✅ DONE |
+| Stub exclusion | @Stub scenarios excluded from promotion | ✅ DONE |
+| Gates | All green | ✅ DONE |
 
 ### Short-term (Next 2-4 Weeks, Post-v1.5)
 
@@ -340,15 +335,16 @@ Once MODE = CONSUMPTION:
 
 ## Conclusion
 
-The Namako v1 toolchain is operational. **v1.5 is the immediate next milestone** — implementing AI-enablement features that will make Tesaki truly autonomous:
+The Namako v1.5 toolchain is **COMPLETE and ready for CONSUMPTION mode**. All AI-enablement features have been implemented:
 
-1. **Explicit ID tags** — Refactor-stable identity for all specs
-2. **Orphan enforcement** — Clean binding registry
-3. **Enhanced packets** — Rich work items for AI task selection
-4. **Fidelity packets** — AI-assisted spec review
-5. **Rich status** — Better debugging and automation
+1. **Explicit ID tags** — ✅ Refactor-stable identity for all specs
+2. **Orphan enforcement** — ✅ Clean binding registry with `namako stub`
+3. **Enhanced packets** — ✅ Rich work items for AI task selection
+4. **Fidelity packets** — ✅ AI-assisted spec review with source_symbol
+5. **Rich status** — ✅ Better debugging and automation
+6. **Stub exclusion** — ✅ @Stub scenarios cannot be selected as tasks
 
-**After v1.5 is complete**, transition to CONSUMPTION mode and begin autonomous AI-driven development of Naia through the Tesaki FSM.
+**Next step:** Connor reviews changes, runs `namako update-cert`, sets MODE: CONSUMPTION, and selects first mission target. The Tesaki FSM is ready to drive autonomous AI-driven development of Naia.
 
 ---
 
