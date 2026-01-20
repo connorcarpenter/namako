@@ -5,6 +5,16 @@
 //! - Generates NEXT_TASK.md with specific, actionable instructions
 //! - Never modifies source files (only writes to artifact directories)
 //! - May run update-cert up to --max-cert-updates times per run (governed by CLI flag)
+//!
+//! # v1.7 Runner Integration
+//!
+//! With v1.7, Tesaki can orchestrate an autonomous coding agent (runner) via `tesaki run`.
+//! The runner operates on the specs repository only - it never edits Namako/Tesaki code.
+
+pub mod mission;
+pub mod runner;
+pub mod stop_reason;
+pub mod workspace;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -70,6 +80,56 @@ enum Commands {
 
         /// Path to CURRENT_STATUS.md for mode-aware filtering (optional)
         /// If provided, CORE blockers will be filtered in BOOTSTRAP mode.
+        #[arg(long)]
+        current_status: Option<PathBuf>,
+    },
+
+    /// Run the autonomous development loop (v1.7)
+    ///
+    /// Creates a mission bundle, invokes the runner, and validates results.
+    /// The runner operates on the specs repository only.
+    Run {
+        /// Path to the specs root directory
+        #[arg(short = 's', long)]
+        spec_root: PathBuf,
+
+        /// Adapter command (e.g., "cargo run --manifest-path ../npa/Cargo.toml --")
+        #[arg(short = 'a', long)]
+        adapter: String,
+
+        /// Path to the namako CLI (default: searches in parent workspace)
+        #[arg(long)]
+        namako_cli: Option<String>,
+
+        /// Maximum number of autonomous update-cert operations per session (0 to disable)
+        #[arg(long, default_value = "3", value_parser = clap::value_parser!(u32).range(0..=999))]
+        max_cert_updates: u32,
+
+        /// Runner backend to use
+        #[arg(long, default_value = "mock", value_parser = ["mock", "claude", "cmd"])]
+        runner: String,
+
+        /// Command template for cmd runner (use {mission_dir} placeholder)
+        #[arg(long)]
+        runner_cmd: Option<String>,
+
+        /// Maximum runtime in seconds per mission
+        #[arg(long, default_value = "600", value_parser = clap::value_parser!(u32).range(1..=3600))]
+        max_runtime_seconds: u32,
+
+        /// Maximum files the runner may change per mission
+        #[arg(long, default_value = "10", value_parser = clap::value_parser!(u32).range(1..=100))]
+        max_files_changed: u32,
+
+        /// Maximum retry attempts on runner failure
+        #[arg(long, default_value = "2", value_parser = clap::value_parser!(u32).range(0..=10))]
+        max_retries: u32,
+
+        /// Operating mode (auto-detected from CURRENT_STATUS.md if not specified)
+        #[arg(long, default_value = "BOOTSTRAP", value_parser = ["BOOTSTRAP", "CONSUMPTION"])]
+        mode: String,
+
+        /// Path to CURRENT_STATUS.md for mode detection (optional)
         #[arg(long)]
         current_status: Option<PathBuf>,
     },
@@ -211,6 +271,32 @@ fn main() -> Result<()> {
             max_cert_updates,
             current_status,
         } => run_next(&spec_root, &adapter, out, namako_cli, max_cert_updates, current_status),
+
+        Commands::Run {
+            spec_root,
+            adapter,
+            namako_cli,
+            max_cert_updates,
+            runner,
+            runner_cmd,
+            max_runtime_seconds,
+            max_files_changed,
+            max_retries,
+            mode,
+            current_status,
+        } => run_run(
+            &spec_root,
+            &adapter,
+            namako_cli,
+            max_cert_updates,
+            &runner,
+            runner_cmd,
+            max_runtime_seconds,
+            max_files_changed,
+            max_retries,
+            &mode,
+            current_status,
+        ),
     }
 }
 
@@ -287,7 +373,7 @@ fn run_next(
     // Determine namako CLI command
     let namako = namako_cli.unwrap_or_else(|| {
         // Try to find namako-cli in parent workspace
-        // spec_root is like .../naia/test/specs, so go up 3 levels and find namako
+        // Try to find namako-cli in a sibling directory
         let namako_root = spec_root
             .parent()
             .and_then(|p| p.parent())
@@ -792,7 +878,7 @@ fn generate_next_task(
 
             content.push_str("### Instructions\n\n");
             content.push_str("1. Uncomment/enable the top candidate scenarios in their `.feature` files\n");
-            content.push_str("2. Implement missing step bindings in `naia/test/tests/src/steps/`\n");
+            content.push_str("2. Implement missing step bindings in the test harness\n");
             content.push_str("3. Run `bash scripts/namako_ci.sh` until green\n");
             content.push_str("4. Run `bash scripts/determinism_check.sh` to verify determinism\n");
             content.push_str("5. If baseline drift is detected, request `update-cert` approval\n\n");
@@ -819,7 +905,7 @@ fn generate_next_task(
 
             content.push_str("### Instructions\n\n");
             content.push_str("1. Review the lint errors\n");
-            content.push_str("2. Implement missing step bindings in `naia/test/tests/src/steps/`\n");
+            content.push_str("2. Implement missing step bindings in the test harness\n");
             content.push_str("3. Run `bash scripts/namako_ci.sh` to verify fix\n");
             content.push_str("4. Repeat until lint passes\n\n");
         }
@@ -941,6 +1027,405 @@ fn generate_next_task(
     content.push_str("*Generated by tesaki — Tesaki v2 (--max-cert-updates governance)*\n");
 
     fs::write(path, content)?;
+    Ok(())
+}
+
+// ============================================================================
+// v1.7 Runner Integration: `tesaki run` command
+// ============================================================================
+
+/// Run the autonomous development loop (v1.7).
+///
+/// This implements the canonical UX flow per GOLD_PLAN.md §10.7.9:
+/// 1. Measure via Namako packets
+/// 2. Select next task from packets (or enter stop condition)
+/// 3. Create mission bundle
+/// 4. Invoke runner backend
+/// 5. Validate via namako gate --json
+/// 6. Transition or stop
+#[allow(clippy::too_many_arguments)]
+fn run_run(
+    spec_root: &PathBuf,
+    adapter: &str,
+    namako_cli: Option<String>,
+    max_cert_updates: u32,
+    runner_name: &str,
+    runner_cmd: Option<String>,
+    max_runtime_seconds: u32,
+    max_files_changed: u32,
+    max_retries: u32,
+    mode: &str,
+    current_status: Option<PathBuf>,
+) -> Result<()> {
+    use crate::mission::{MissionBundle, MissionBudgets, MissionInputs, MissionTask};
+    use crate::runner::{Runner, RunnerConfig, MockRunner, CommandRunner, ClaudeCodeRunner, OutcomeClassification};
+    use crate::stop_reason::{StopReason, RunResult};
+    use crate::workspace::Workspace;
+
+    // Canonicalize spec_root
+    let spec_root = fs::canonicalize(spec_root)
+        .context("Failed to canonicalize spec_root path")?;
+
+    // Canonicalize adapter command
+    let adapter = canonicalize_adapter_cmd(adapter)?;
+
+    // Determine operating mode
+    let mode = if let Some(ref status_path) = current_status {
+        match read_current_status_mode(status_path) {
+            OperatingMode::Bootstrap => "BOOTSTRAP",
+            OperatingMode::Consumption => "CONSUMPTION",
+            OperatingMode::Unknown => mode,
+        }
+    } else {
+        mode
+    };
+
+    // Set up budgets
+    let budgets = MissionBudgets {
+        max_files_changed,
+        max_scenarios_promoted: 3,
+        max_runtime_seconds,
+        max_retries,
+        max_cert_updates,
+    };
+
+    // Set up workspace
+    let workspace = Workspace::from_specs_dir(&spec_root, &adapter, mode, budgets.clone())?;
+
+    // Check workspace is clean
+    let workspace_state = workspace.check_clean()?;
+    if !workspace_state.is_clean {
+        let result = RunResult::error(
+            StopReason::HumanRequired,
+            format!(
+                "Workspace has uncommitted changes. Please commit or stash before running.\nDirty files: {:?}",
+                workspace_state.dirty_files
+            ),
+        );
+        emit_run_result(&result, &spec_root)?;
+        eprintln!("STOP: {}", result.reason);
+        eprintln!("Details: {}", result.details.as_deref().unwrap_or(""));
+        return Ok(());
+    }
+
+    // Determine namako CLI command
+    let namako = namako_cli.unwrap_or_else(|| {
+        let namako_root = spec_root
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .map(|p| p.join("namako"))
+            .unwrap_or_else(|| PathBuf::from("/home/ccarpenter/Personal/specops/namako"));
+        format!(
+            "cargo run -p namako-cli --manifest-path {}/Cargo.toml -q --",
+            namako_root.display()
+        )
+    });
+
+    // Create the runner backend
+    let runner: Box<dyn Runner> = match runner_name {
+        "mock" => Box::new(MockRunner::success()),
+        "claude" => {
+            if let Err(e) = ClaudeCodeRunner::check_available() {
+                let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
+                emit_run_result(&result, &spec_root)?;
+                eprintln!("STOP: {}", result.reason);
+                return Ok(());
+            }
+            Box::new(ClaudeCodeRunner::new(runner_cmd)?)
+        }
+        "cmd" => {
+            let cmd = runner_cmd.ok_or_else(|| {
+                anyhow::anyhow!("--runner-cmd is required when using --runner=cmd")
+            })?;
+            Box::new(CommandRunner::new(cmd))
+        }
+        _ => anyhow::bail!("Unknown runner: {}", runner_name),
+    };
+
+    eprintln!("=== Tesaki v1.7 Run ===");
+    eprintln!("Spec root: {}", spec_root.display());
+    eprintln!("Mode: {}", mode);
+    eprintln!("Runner: {}", runner.name());
+    eprintln!();
+
+    // Step 1: Measure via Namako packets
+    eprintln!("[1/6] Running namako gate --json (pre-mission state)...");
+    let gate_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
+    let gate_result: serde_json::Value = serde_json::from_str(&gate_json)
+        .context("Failed to parse gate JSON")?;
+
+    // Check if gate passes
+    let gate_passes = gate_result.get("lint")
+        .and_then(|l| l.get("status"))
+        .and_then(|s| s.as_str()) == Some("pass")
+        && gate_result.get("run")
+            .and_then(|r| r.get("status"))
+            .and_then(|s| s.as_str()) == Some("pass")
+        && gate_result.get("verify")
+            .and_then(|v| v.get("status"))
+            .and_then(|s| s.as_str()) == Some("pass");
+
+    if gate_passes {
+        eprintln!("  Gate: PASS (all phases green)");
+    } else {
+        eprintln!("  Gate: Some phases not passing");
+    }
+
+    // Step 2: Get status and review packets
+    eprintln!("[2/6] Running namako status/review...");
+    let out_dir = spec_root.join("target/namako_artifacts/tesaki");
+    fs::create_dir_all(&out_dir)?;
+
+    let status_path = out_dir.join("status.json");
+    let review_path = out_dir.join("review.json");
+    let run_report_path = spec_root.join("target/namako_artifacts/run_report.json");
+
+    let run_report_opt = if run_report_path.exists() {
+        Some(&run_report_path)
+    } else {
+        None
+    };
+
+    run_namako_status(&namako, &adapter, &spec_root, &status_path, run_report_opt)?;
+    run_namako_review(&namako, &adapter, &spec_root, &review_path)?;
+
+    let status_json = fs::read_to_string(&status_path)?;
+    let review_json = fs::read_to_string(&review_path)?;
+
+    let status: StatusJson = serde_json::from_str(&status_json)?;
+    let review: ReviewJson = serde_json::from_str(&review_json)?;
+
+    let action = &status.recommended_next_action;
+    eprintln!("  Status action: {}", action);
+    eprintln!("  Promotion candidates: {}", review.promotion_candidates.len());
+
+    // Step 3: Select task or enter stop condition
+    eprintln!("[3/6] Selecting task...");
+
+    // Filter candidates based on mode
+    let operating_mode = if mode == "BOOTSTRAP" {
+        OperatingMode::Bootstrap
+    } else {
+        OperatingMode::Consumption
+    };
+
+    let eligible_candidates: Vec<&PromotionCandidate> = review.promotion_candidates.iter()
+        .filter(|c| {
+            // Stubs are never eligible
+            if c.is_stub {
+                return false;
+            }
+            // CORE blockers excluded in BOOTSTRAP
+            if operating_mode == OperatingMode::Bootstrap && c.blocker == BlockerType::Core {
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    // If gate passes and no eligible candidates, we're DONE
+    if gate_passes && eligible_candidates.is_empty() {
+        let result = RunResult::done(0, 0);
+        emit_run_result(&result, &spec_root)?;
+        eprintln!("STOP: DONE - All gates pass, no promotion candidates");
+        return Ok(());
+    }
+
+    // If only blocked candidates remain
+    if eligible_candidates.is_empty() && !review.promotion_candidates.is_empty() {
+        let result = RunResult::blocked("Only blocked candidates remain (CORE blockers in BOOTSTRAP mode)");
+        emit_run_result(&result, &spec_root)?;
+        eprintln!("STOP: BLOCKED - Only blocked candidates remain");
+        return Ok(());
+    }
+
+    // Select first eligible candidate (or handle FIX_* actions)
+    let task = if action == "FIX_RUN" && !status.last_run_failures.is_empty() {
+        // Focus on fixing the first failure
+        let failure = &status.last_run_failures[0];
+        MissionTask {
+            name: format!("Fix: {}", failure.scenario_name),
+            feature_path: failure.scenario_key.split(':').next().unwrap_or("unknown").to_string(),
+            rule_name: "Fix failing scenario".to_string(),
+            description: format!(
+                "Fix the failing scenario: {}\n\nFailure: {} ({})",
+                failure.scenario_name, failure.failure_kind, failure.scenario_key
+            ),
+            missing_bindings: vec![],
+            expected_postconditions: vec![
+                format!("Scenario '{}' passes", failure.scenario_name),
+                "namako gate --json shows all phases pass".to_string(),
+            ],
+        }
+    } else if let Some(candidate) = eligible_candidates.first() {
+        // Promote the top candidate
+        let missing = review.missing_bindings_for_top_candidates.iter()
+            .find(|m| m.candidate_name == candidate.scenario_name)
+            .map(|m| m.missing_step_texts.clone())
+            .unwrap_or_default();
+
+        MissionTask {
+            name: format!("Promote: {}", candidate.scenario_name),
+            feature_path: candidate.feature_path.clone(),
+            rule_name: candidate.rule_name.clone(),
+            description: format!(
+                "Promote scenario '{}' from @Deferred to executable.\n\n\
+                Feature: {}\n\
+                Rule: {}\n\
+                Reuse score: {:.1}\n\
+                New steps needed: {}",
+                candidate.scenario_name,
+                candidate.feature_path,
+                candidate.rule_name,
+                candidate.reuse_score,
+                candidate.new_step_texts_estimate
+            ),
+            missing_bindings: missing,
+            expected_postconditions: vec![
+                format!("Scenario '{}' is executable (not @Deferred)", candidate.scenario_name),
+                "namako gate --json shows all phases pass".to_string(),
+            ],
+        }
+    } else {
+        // No specific task, just run the gate
+        MissionTask {
+            name: "Run gate".to_string(),
+            feature_path: "N/A".to_string(),
+            rule_name: "N/A".to_string(),
+            description: format!("Action: {}. Run the gate and address any issues.", action),
+            missing_bindings: vec![],
+            expected_postconditions: vec!["namako gate --json shows all phases pass".to_string()],
+        }
+    };
+
+    eprintln!("  Selected: {}", task.name);
+
+    // Step 4: Create mission bundle
+    eprintln!("[4/6] Creating mission bundle...");
+
+    let tesaki_dir = spec_root.join(".tesaki");
+    fs::create_dir_all(&tesaki_dir)?;
+
+    let inputs = MissionInputs {
+        status_json: status_json.clone(),
+        review_json: review_json.clone(),
+        gate_json: gate_json.clone(),
+        explain_json: None,
+        workspace_json: workspace.to_json()?,
+    };
+
+    let mission = MissionBundle::create(&tesaki_dir, &task, &inputs, budgets.clone(), mode)?;
+    eprintln!("  Mission: {}", mission.id);
+    eprintln!("  Path: {}", mission.path.display());
+
+    // Step 5: Invoke runner
+    eprintln!("[5/6] Invoking runner ({})...", runner.name());
+
+    let runner_config = RunnerConfig {
+        max_runtime_seconds,
+        working_dir: workspace.working_dir().to_path_buf(),
+        mode: mode.to_string(),
+    };
+
+    let outcome = runner.run(&mission.path, &runner_config)?;
+    eprintln!("  Outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
+        outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
+
+    if outcome.classification == OutcomeClassification::Timeout {
+        let failed_path = mission.preserve_failed()?;
+        let result = RunResult::error(StopReason::Budget, "Runner exceeded time budget")
+            .with_mission_path(failed_path.display().to_string());
+        emit_run_result(&result, &spec_root)?;
+        eprintln!("STOP: BUDGET - Runner timeout");
+        return Ok(());
+    }
+
+    // Step 6: Validate via namako gate --json
+    eprintln!("[6/6] Validating (namako gate --json)...");
+
+    let post_gate_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
+    mission.write_gate_result(&post_gate_json)?;
+
+    let post_gate: serde_json::Value = serde_json::from_str(&post_gate_json)?;
+    let post_gate_passes = post_gate.get("lint")
+        .and_then(|l| l.get("status"))
+        .and_then(|s| s.as_str()) == Some("pass")
+        && post_gate.get("run")
+            .and_then(|r| r.get("status"))
+            .and_then(|s| s.as_str()) == Some("pass")
+        && post_gate.get("verify")
+            .and_then(|v| v.get("status"))
+            .and_then(|s| s.as_str()) == Some("pass");
+
+    if post_gate_passes {
+        eprintln!("  Gate: PASS");
+        let result = RunResult::done(1, 0)
+            .with_mission_path(mission.path.display().to_string());
+        emit_run_result(&result, &spec_root)?;
+        eprintln!("\nSUCCESS: Mission completed, gate passes");
+        eprintln!("Mission bundle: {}", mission.path.display());
+    } else {
+        // Check if only verify failed (might need update-cert)
+        let verify_status = post_gate.get("verify")
+            .and_then(|v| v.get("status"))
+            .and_then(|s| s.as_str());
+
+        if verify_status == Some("fail") && max_cert_updates > 0 {
+            eprintln!("  Verify failed - attempting update-cert...");
+            // TODO: Implement update-cert logic with governance
+            // For now, just fail
+        }
+
+        let failed_path = mission.preserve_failed()?;
+        let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed")
+            .with_mission_path(failed_path.display().to_string());
+        emit_run_result(&result, &spec_root)?;
+        eprintln!("\nSTOP: GATE_FAILED - Post-run validation failed");
+        eprintln!("Failed mission preserved at: {}", failed_path.display());
+    }
+
+    Ok(())
+}
+
+/// Run namako gate --json and return the JSON output.
+fn run_namako_gate_json(namako: &str, adapter: &str, spec_root: &PathBuf) -> Result<String> {
+    let args: Vec<&str> = namako.split_whitespace().collect();
+    let (program, namako_args) = args.split_first().context("Empty namako command")?;
+
+    let output = Command::new(program)
+        .args(namako_args)
+        .arg("gate")
+        .arg("-s")
+        .arg(".")
+        .arg("-a")
+        .arg(adapter)
+        .arg("--json")
+        .current_dir(spec_root)
+        .output()
+        .context("Failed to run namako gate --json")?;
+
+    // gate --json outputs to stdout even on failure (with status in JSON)
+    let stdout = String::from_utf8(output.stdout)
+        .context("namako gate output is not valid UTF-8")?;
+
+    // If stdout is empty but we have stderr, the command itself failed
+    if stdout.trim().is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("namako gate --json produced no output. stderr: {}", stderr);
+    }
+
+    Ok(stdout)
+}
+
+/// Emit the run result to .tesaki/last_run.json.
+fn emit_run_result(result: &stop_reason::RunResult, spec_root: &PathBuf) -> Result<()> {
+    let tesaki_dir = spec_root.join(".tesaki");
+    fs::create_dir_all(&tesaki_dir)?;
+
+    let json = serde_json::to_string_pretty(result)?;
+    fs::write(tesaki_dir.join("last_run.json"), &json)?;
+
     Ok(())
 }
 

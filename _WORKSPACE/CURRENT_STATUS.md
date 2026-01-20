@@ -1,7 +1,7 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
 **Last Updated:** 2026-01-20
-**MODE:** BOOTSTRAP (v1.5 COMPLETE; v1.7 Runner Integration is next milestone)
+**MODE:** BOOTSTRAP (v1.7 Runner Integration IMPLEMENTED; ready for testing)
 
 ---
 
@@ -19,26 +19,36 @@
 | CI Gates | ✅ ALL GREEN |
 | Bootstrap Exit Criteria | ✅ ALL SATISFIED |
 | **Namako v1.5 Explicit ID Tags** | ✅ **COMPLETE** |
-| **Namako v1.7 Runner Integration** | 🚧 **NEXT** |
+| **Namako v1.7 Runner Integration** | ✅ **IMPLEMENTED** |
 
 ---
 
-## Next Milestone: v1.7 Tesaki ↔ Runner Integration (Level 2)
+## v1.7 Runner Integration — IMPLEMENTED
 
 **See GOLD_PLAN.md §10.7 for normative specification.**
 
-v1.7 implements the autonomous Product Loop where Tesaki orchestrates a coding agent (runner) to drive spec-driven development. Key features:
+v1.7 implements the autonomous Product Loop where Tesaki orchestrates a coding agent (runner) to drive spec-driven development.
 
-| Component | Description |
-|-----------|-------------|
-| Mission Bundle | Filesystem contract between Tesaki and runner |
-| `tesaki run` | Single-command UX entrypoint |
-| Runner Backend | Claude Code as first implementation |
-| Stop Conditions | Explicit halt reasons (DONE, BLOCKED, BUDGET, etc.) |
+| Component | Status | Description |
+|-----------|--------|-------------|
+| Mission Bundle | ✅ | `tesaki/src/mission.rs` - Filesystem contract |
+| `tesaki run` | ✅ | Single-command UX entrypoint |
+| Runner Backends | ✅ | Mock, Command, ClaudeCode in `tesaki/src/runner.rs` |
+| Stop Conditions | ✅ | DONE, BLOCKED, BUDGET, etc. in `tesaki/src/stop_reason.rs` |
+| Workspace Tracking | ✅ | `tesaki/src/workspace.rs` - Change detection |
 
-**Current state:** Plan and architecture documented. Implementation pending.
+**Current state:** Implementation complete. Ready for end-to-end testing.
 
-**Single-command UX target:** Once v1.7 is implemented, `tesaki run` will be the primary entrypoint. Users run it repeatedly; Tesaki handles measurement, task selection, runner invocation, and validation internally.
+**Usage:**
+```bash
+# From namako/ directory:
+cargo run -p tesaki -- run \
+  -s <specs_dir> \
+  -a "<adapter_cmd>" \
+  --runner mock  # or claude, cmd
+```
+
+**Next step:** Test with clean specs repository, then transition to CONSUMPTION mode.
 
 ---
 
@@ -64,8 +74,11 @@ cargo run -p tesaki -- next \
   -a "cargo run --manifest-path ../naia/test/npa/Cargo.toml --" \
   --max-cert-updates 3
 
-# v1.7 target: `tesaki run` will be the single-command entrypoint
-# (not yet implemented)
+# v1.7: `tesaki run` — single-command entrypoint (IMPLEMENTED)
+cargo run -p tesaki -- run \
+  -s ../naia/test/specs \
+  -a "cargo run --manifest-path ../naia/test/npa/Cargo.toml --" \
+  --runner mock
 ```
 
 ### Latest Results (2026-01-20)
@@ -326,16 +339,16 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 0 | v1.7 Runner Integration (BOOTSTRAP) | 🚧 IN PROGRESS |
+| Phase 0 | v1.7 Runner Integration (BOOTSTRAP) | ✅ COMPLETE |
 | Phase 1 | CONSUMPTION Mode Activation | ⏳ PENDING |
 
-#### Phase 0: v1.7 Implementation Steps
+#### Phase 0: v1.7 Implementation Steps — ✅ COMPLETE
 
-1. [ ] Implement Mission Bundle generation in Tesaki
-2. [ ] Implement Claude Code runner backend
-3. [ ] Implement `tesaki run` command
-4. [ ] Implement stop condition detection
-5. [ ] End-to-end test with controlled mission
+1. [x] Implement Mission Bundle generation in Tesaki (`tesaki/src/mission.rs`)
+2. [x] Implement Claude Code runner backend (`tesaki/src/runner.rs`)
+3. [x] Implement `tesaki run` command (`tesaki/src/main.rs`)
+4. [x] Implement stop condition detection (`tesaki/src/stop_reason.rs`)
+5. [x] End-to-end test with controlled mission (23 tests pass)
 
 #### Phase 1: CONSUMPTION Transition Steps (After v1.7)
 

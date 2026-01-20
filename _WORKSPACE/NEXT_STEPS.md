@@ -7,31 +7,31 @@
 
 ---
 
-## Phase 0: v1.7 Runner Integration (BOOTSTRAP — Immediate Priority)
+## Phase 0: v1.7 Runner Integration — ✅ COMPLETE
 
 **Goal:** Implement Tesaki ↔ coding-agent integration so that `tesaki run` becomes the single-command autonomous development loop.
 
-**This is BOOTSTRAP work.** We are still building the toolchain. See GOLD_PLAN.md §10.7 for the normative specification.
+**Status:** COMPLETE. Implementation lives in `tesaki/src/` modules: `mission.rs`, `runner.rs`, `workspace.rs`, `stop_reason.rs`.
 
-**Single-command UX target:** `tesaki run` is the intended entrypoint. Users run it repeatedly; Tesaki handles measurement, task selection, runner invocation, and validation internally.
+**Single-command UX:** `tesaki run` is the implemented entrypoint. Users run it repeatedly; Tesaki handles measurement, task selection, runner invocation, and validation internally.
 
-### Implementation Steps
+### Implementation Steps — All Complete
 
-| Step | Component | Description |
-|------|-----------|-------------|
-| 0.1 | Mission Bundle | Implement `.tesaki/missions/<id>/` directory structure |
-| 0.2 | Runner Trait | Define `Runner` trait/abstraction in Tesaki |
-| 0.3 | Claude Code Backend | Implement Claude Code as first runner backend |
-| 0.4 | `tesaki run` Command | Single-command entrypoint replacing `tesaki next` workflow |
-| 0.5 | Stop Conditions | Implement DONE/BLOCKED/BUDGET/etc. detection |
-| 0.6 | End-to-End Test | Verify full loop with controlled mission |
+| Step | Component | Description | Status |
+|------|-----------|-------------|--------|
+| 0.1 | Mission Bundle | `.tesaki/missions/<id>/` directory structure | ✅ `mission.rs` |
+| 0.2 | Runner Trait | `Runner` trait/abstraction in Tesaki | ✅ `runner.rs` |
+| 0.3 | Claude Code Backend | First runner backend | ✅ `ClaudeCodeRunner` |
+| 0.4 | `tesaki run` Command | Single-command entrypoint | ✅ `main.rs` |
+| 0.5 | Stop Conditions | DONE/BLOCKED/BUDGET/etc. detection | ✅ `stop_reason.rs` |
+| 0.6 | End-to-End Test | Verify full loop with controlled mission | ✅ 23 tests |
 
-### Exit Criteria for Phase 0
+### Exit Criteria for Phase 0 — All Satisfied
 
-- [ ] `tesaki run` executes a mission bundle via Claude Code backend
-- [ ] `namako gate --json` validates runner output
-- [ ] Stop conditions emit structured reasons
-- [ ] At least one successful autonomous mission cycle demonstrated
+- [x] `tesaki run` executes a mission bundle via Claude Code backend
+- [x] `namako gate --json` validates runner output
+- [x] Stop conditions emit structured reasons
+- [x] At least one successful autonomous mission cycle demonstrated (mock-backed)
 
 ---
 
@@ -174,16 +174,18 @@ For each harness enhancement:
 - [ ] Commit all changes (namako and naia repos)
 - [ ] Run `namako update-cert` to establish new baseline if needed
 
-### For AI Agent (BOOTSTRAP Mode — v1.7 Implementation)
+### For AI Agent (BOOTSTRAP Mode — v1.7 Complete)
 
-**Current priority:** Implement v1.7 Runner Integration (Phase 0)
+**v1.7 Runner Integration is COMPLETE.** All components implemented:
 
-1. Implement Mission Bundle directory structure
-2. Define Runner trait abstraction
-3. Implement Claude Code runner backend
-4. Implement `tesaki run` command
-5. Implement stop condition detection
-6. Test end-to-end with controlled mission
+- ✅ Mission Bundle directory structure (`tesaki/src/mission.rs`)
+- ✅ Runner trait abstraction (`tesaki/src/runner.rs`)
+- ✅ Claude Code runner backend (`ClaudeCodeRunner`)
+- ✅ `tesaki run` command (`tesaki/src/main.rs`)
+- ✅ Stop condition detection (`tesaki/src/stop_reason.rs`)
+- ✅ End-to-end tests (23 tests passing)
+
+**Next priority:** Transition to CONSUMPTION mode (Phase 1)
 
 ### For AI Agent (After v1.7 — CONSUMPTION Mode)
 

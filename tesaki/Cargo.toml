@@ -22,6 +22,9 @@ anyhow = "1.0"
 # File system operations
 chrono = { version = "0.4", features = ["serde"] }
 
+# Hashing for mission IDs
+blake3 = "1.5"
+
 [dev-dependencies]
 # For temporary file handling in tests
 tempfile = "3.15"
