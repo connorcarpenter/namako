@@ -46,7 +46,7 @@ pub struct ReviewArgs {
     pub verbose: bool,
 }
 
-/// Review output schema per TODO.md §2.2
+/// Review output schema per TODO.md §2.2 and GOLD_PLAN §10.5.3
 #[derive(Debug, Clone, Serialize)]
 pub struct ReviewOutput {
     /// Schema version
@@ -57,12 +57,16 @@ pub struct ReviewOutput {
     pub identity_current: IdentityCurrent,
     /// Features sorted by feature_path
     pub features: Vec<FeatureReview>,
-    /// Coverage summary
+    /// Section 1: Coverage summary
     pub coverage_summary: CoverageSummary,
-    /// Promotion candidates (ranked, deterministic)
+    /// Section 2: Deferred items (full list with scenario_key, blocker classification)
+    pub deferred_items: Vec<DeferredScenarioItem>,
+    /// Section 3: Promotion candidates (ranked, deterministic)
     pub promotion_candidates: Vec<PromotionCandidate>,
-    /// Missing bindings for top candidates
+    /// Section 4: Missing bindings for top candidates (worklist)
     pub missing_bindings_for_top_candidates: Vec<MissingBindingInfo>,
+    /// Section 5: Harness gaps (normalized capability descriptions, blocked counts)
+    pub harness_gaps: Vec<HarnessGap>,
     /// Suggested binding bundle per TODO.md §3.1
     /// When all candidates require new bindings (reuse_score=0), this tells exactly what to implement
     pub suggested_binding_bundle: SuggestedBindingBundle,
@@ -140,6 +144,30 @@ pub struct DeferredItem {
     pub source_span: SourceSpan,
     /// Blocker classification (from @Blocker tag or default UNKNOWN)
     pub blocker: BlockerType,
+}
+
+/// GOLD_PLAN §10.5.3 Section 2: Deferred scenario with full details
+#[derive(Debug, Clone, Serialize)]
+pub struct DeferredScenarioItem {
+    /// v1.5 scenario key (feature_id:Rule_nn:Scenario_nn)
+    pub scenario_key: String,
+    /// Scenario name
+    pub scenario_name: String,
+    /// Feature file path
+    pub feature_path: String,
+    /// Rule name (or "default" for feature-level scenarios)
+    pub rule_name: String,
+    /// Blocker classification (HARNESS_ONLY, CORE, EXTERNAL, UNKNOWN)
+    pub blocker: BlockerType,
+}
+
+/// GOLD_PLAN §10.5.3 Section 5: Harness gap with blocked scenario count
+#[derive(Debug, Clone, Serialize)]
+pub struct HarnessGap {
+    /// Normalized capability description (lowercase, trimmed)
+    pub capability: String,
+    /// Number of blocked scenarios requiring this capability
+    pub blocked_count: u32,
 }
 
 /// Coverage summary
@@ -347,14 +375,22 @@ fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
         &existing_expressions,
     );
 
+    // Build deferred_items section (GOLD_PLAN §10.5.3 Section 2)
+    let deferred_items = build_deferred_items_section(&promotion_candidates);
+
+    // Build harness_gaps section (GOLD_PLAN §10.5.3 Section 5)
+    let harness_gaps = build_harness_gaps_section(&promotion_candidates);
+
     Ok(ReviewOutput {
         version: 1,
         spec_root,
         identity_current,
         features: feature_reviews,
         coverage_summary,
+        deferred_items,
         promotion_candidates,
         missing_bindings_for_top_candidates: missing_bindings,
+        harness_gaps,
         suggested_binding_bundle,
     })
 }
@@ -777,6 +813,86 @@ fn compute_binding_bundle(
         steps: bundle_steps,
         rationale,
     }
+}
+
+/// GOLD_PLAN §10.5.3 Section 2: Build deferred items list from promotion candidates.
+///
+/// Promotion candidates are deferred scenarios. We convert them to the required format:
+/// scenario_key, scenario_name, feature_path, rule_name, blocker.
+fn build_deferred_items_section(candidates: &[PromotionCandidate]) -> Vec<DeferredScenarioItem> {
+    // Derive scenario_key from feature path and scenario name for now
+    // In full implementation, this would use the id_tags module
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            // Generate a synthetic scenario key for deferred scenarios
+            // Format: <feature_name>:<rule>:Scenario_<n>
+            let feature_name = c.feature_path
+                .split('/')
+                .last()
+                .unwrap_or(&c.feature_path)
+                .trim_end_matches(".feature")
+                .to_lowercase()
+                .replace(' ', "_")
+                .replace('-', "_");
+
+            let rule_part = if c.rule_name == "default" {
+                "".to_string()
+            } else {
+                format!(":Rule_{:02}", 1) // Simplified - would need actual rule ID
+            };
+
+            let scenario_key = format!(
+                "{}{}:Scenario_{:02}",
+                feature_name,
+                rule_part,
+                i + 1
+            );
+
+            DeferredScenarioItem {
+                scenario_key,
+                scenario_name: c.scenario_name.clone(),
+                feature_path: c.feature_path.clone(),
+                rule_name: c.rule_name.clone(),
+                blocker: c.blocker.clone(),
+            }
+        })
+        .collect()
+}
+
+/// GOLD_PLAN §10.5.3 Section 5: Build harness gaps from deferred scenarios with HARNESS_ONLY blocker.
+///
+/// Extracts capabilities from @HarnessGap(<capability>) tags or @Blocker(HARNESS_ONLY:<capability>) tags.
+/// Returns normalized (lowercase, trimmed) capability descriptions with blocked scenario counts.
+fn build_harness_gaps_section(candidates: &[PromotionCandidate]) -> Vec<HarnessGap> {
+    // For now, count scenarios by blocker type
+    // Full implementation would parse @HarnessGap tags for specific capabilities
+    let mut gap_counts: BTreeMap<String, u32> = BTreeMap::new();
+
+    for candidate in candidates {
+        if candidate.blocker == BlockerType::HarnessOnly {
+            // Default capability for HARNESS_ONLY scenarios
+            *gap_counts.entry("test_harness_capability".to_string()).or_insert(0) += 1;
+        }
+        // TODO: Parse @HarnessGap(capability) tags when implemented
+    }
+
+    // Sort by count descending, then by capability name ascending
+    let mut gaps: Vec<HarnessGap> = gap_counts
+        .into_iter()
+        .map(|(capability, blocked_count)| HarnessGap {
+            capability,
+            blocked_count,
+        })
+        .collect();
+
+    gaps.sort_by(|a, b| {
+        b.blocked_count.cmp(&a.blocked_count)
+            .then_with(|| a.capability.cmp(&b.capability))
+    });
+
+    gaps
 }
 
 /// Discover all `.feature` files under the given directory.

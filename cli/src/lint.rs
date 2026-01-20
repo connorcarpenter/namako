@@ -34,6 +34,11 @@ pub struct LintArgs {
     #[arg(short, long, default_value = "resolved_plan.json")]
     pub output: PathBuf,
 
+    /// Show orphan bindings (bindings not used by any scenario).
+    /// Orphans are always a hard error; this flag provides extra detail.
+    #[arg(long, default_value = "false")]
+    pub show_orphans: bool,
+
     /// Print verbose output.
     #[arg(short, long, default_value = "false")]
     pub verbose: bool,
@@ -103,6 +108,46 @@ pub fn run(args: LintArgs) -> Result<()> {
     }
 
     let plan = result.plan.expect("No errors but no plan - this is a bug");
+
+    // Step 6.5: Check for orphan bindings (v1.5 hard error per GOLD_PLAN §10.5.2)
+    if !result.orphan_bindings.is_empty() {
+        eprintln!(
+            "✗ Lint failed: {} orphan binding(s) detected.",
+            result.orphan_bindings.len()
+        );
+        eprintln!("\nOrphan bindings are bindings in the registry not used by any scenario.");
+        eprintln!("This is a hard error in v1.5 per GOLD_PLAN §10.5.2.\n");
+
+        eprintln!("Orphan bindings (sorted by binding_id):");
+        let mut orphans: Vec<_> = result.orphan_bindings.iter().collect();
+        orphans.sort_by(|a, b| a.binding_id.cmp(&b.binding_id));
+
+        for orphan in &orphans {
+            eprintln!(
+                "  - {} \"{}\" (id: {}...)",
+                orphan.kind,
+                orphan.expression,
+                &orphan.binding_id[..16.min(orphan.binding_id.len())]
+            );
+        }
+
+        if args.show_orphans {
+            eprintln!("\nFull orphan binding details:");
+            for orphan in &orphans {
+                eprintln!("  binding_id: {}", orphan.binding_id);
+                eprintln!("      kind: {}", orphan.kind);
+                eprintln!("      expression: \"{}\"", orphan.expression);
+                eprintln!();
+            }
+        }
+
+        eprintln!("\nTo fix:");
+        eprintln!("  1. Use `namako stub --all` to generate placeholder scenarios for orphans");
+        eprintln!("  2. Or use `namako stub --binding <id> --feature <path>` for a single orphan");
+        eprintln!("  3. Or delete the unused step bindings from your test code");
+
+        bail!("Orphan bindings detected");
+    }
 
     // Write resolved_plan.json
     let json = serde_json::to_string_pretty(&plan)

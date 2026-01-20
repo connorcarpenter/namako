@@ -8,6 +8,7 @@
 //! - `namako status` — Deterministic JSON status for Tesaki FSM (v2)
 //! - `namako review` — Work backlog packet for Tesaki (v2)
 //! - `namako explain` — Scenario fidelity packet for Tesaki (v2)
+//! - `namako stub` — Generate placeholder scenarios for orphan bindings (v1.5)
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -16,6 +17,7 @@ mod explain;
 mod lint;
 mod review;
 mod status;
+mod stub;
 mod update_cert;
 mod verify;
 
@@ -44,6 +46,8 @@ pub enum Commands {
     Review(review::ReviewArgs),
     /// Generate scenario fidelity packet for Tesaki (v2).
     Explain(explain::ExplainArgs),
+    /// Generate placeholder scenarios for orphan bindings (v1.5).
+    Stub(stub::StubArgs),
 }
 
 fn main() -> Result<()> {
@@ -56,5 +60,6 @@ fn main() -> Result<()> {
         Commands::Status(args) => status::run(args),
         Commands::Review(args) => review::run(args),
         Commands::Explain(args) => explain::run(args),
+        Commands::Stub(args) => stub::run(args),
     }
 }

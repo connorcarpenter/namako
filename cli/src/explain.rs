@@ -41,24 +41,49 @@ pub struct ExplainArgs {
     pub verbose: bool,
 }
 
-/// Explain output schema per TODO.md §3.2
+/// Explain output schema per GOLD_PLAN §10.5.4
 #[derive(Debug, Clone, Serialize)]
 pub struct ExplainOutput {
     /// Schema version
     pub version: u32,
-    /// Spec root path
-    pub spec_root: String,
-    /// Scenario information
-    pub scenario: ScenarioInfo,
-    /// Contract context extracted from feature file
-    pub contract_context: ContractContext,
-    /// Resolution information
-    pub resolution: ResolutionInfo,
-    /// Notes and limitations
+    /// Scenario key (v1.5 format: feature_id:Rule_nn:Scenario_nn)
+    pub scenario_key: String,
+    /// Scenario name
+    pub scenario_name: String,
+    /// Feature file path
+    pub feature_path: String,
+    /// Rule name (null for feature-level scenarios)
+    pub rule_name: Option<String>,
+    /// Rule description (from Rule: line)
+    pub rule_description: Option<String>,
+    /// Steps with binding metadata
+    pub steps: Vec<ExplainStep>,
+    /// Combined tags from feature, rule, and scenario
+    pub related_tags: Vec<String>,
+    /// Contract excerpt (rule header + description + scenario header)
+    pub contract_excerpt: String,
+    /// Notes and limitations (for backward compat)
     pub notes: Notes,
 }
 
-/// Scenario info
+/// Step with binding metadata per GOLD_PLAN §10.5.4
+#[derive(Debug, Clone, Serialize)]
+pub struct ExplainStep {
+    /// Step kind: Given, When, Then
+    pub step_kind: String,
+    /// Actual step text from feature
+    pub step_text: String,
+    /// Binding ID
+    pub binding_id: String,
+    /// Binding expression (cucumber expression)
+    pub binding_expression: String,
+    /// Implementation hash
+    pub impl_hash: String,
+    /// Source location as "path/to/file.rs:123"
+    pub source_location: String,
+}
+
+/// Scenario info (kept for internal use)
 #[derive(Debug, Clone, Serialize)]
 pub struct ScenarioInfo {
     pub scenario_key: String,
@@ -145,20 +170,14 @@ pub fn run(args: ExplainArgs) -> Result<()> {
 
     if args.verbose {
         eprintln!("✓ Explain written to: {}", args.out.display());
-        eprintln!("  Scenario: {}", output.scenario.scenario_name);
-        eprintln!("  Steps: {}", output.scenario.steps.len());
-        eprintln!("  Bindings resolved: {}", output.resolution.binding_resolutions.len());
+        eprintln!("  Scenario: {}", output.scenario_name);
+        eprintln!("  Steps: {}", output.steps.len());
     }
 
     Ok(())
 }
 
 fn compute_explain(args: &ExplainArgs) -> Result<ExplainOutput> {
-    let spec_root = args.specs_dir.canonicalize()
-        .unwrap_or_else(|_| args.specs_dir.clone())
-        .to_string_lossy()
-        .to_string();
-
     // Parse scenario_key to get feature path and line
     let (feature_rel_path, target_line) = parse_scenario_key(&args.scenario_key)?;
 
@@ -218,18 +237,25 @@ fn compute_explain(args: &ExplainArgs) -> Result<ExplainOutput> {
         &args.scenario_key,
     )?;
 
-    // Extract contract context (normative sections) from feature
-    let contract_context = extract_contract_context(feature_source);
+    // Build ExplainStep list with binding metadata
+    let explain_steps = build_explain_steps(resolved_scenario, &registry)?;
 
-    // Build resolution info with binding details
-    let resolution = build_resolution_info(resolved_scenario, &registry)?;
+    // Extract tags from feature, rule, and scenario
+    let related_tags = extract_related_tags(&feature, &scenario_info);
+
+    // Build contract excerpt (Rule header + description + Scenario header)
+    let contract_excerpt = build_contract_excerpt(feature_source, &scenario_info);
 
     Ok(ExplainOutput {
         version: 1,
-        spec_root,
-        scenario: scenario_info,
-        contract_context,
-        resolution,
+        scenario_key: args.scenario_key.clone(),
+        scenario_name: scenario_info.scenario_name.clone(),
+        feature_path: feature_rel_path.clone(),
+        rule_name: scenario_info.rule_name.clone(),
+        rule_description: extract_rule_description(&feature, &scenario_info.rule_name),
+        steps: explain_steps,
+        related_tags,
+        contract_excerpt,
         notes: Notes {
             limitations: vec![
                 "Call graph not computed in v1".to_string(),
@@ -458,6 +484,158 @@ fn build_resolution_info(
     }
 
     Ok(ResolutionInfo { binding_resolutions })
+}
+
+/// Build ExplainStep list with binding metadata per GOLD_PLAN §10.5.4.
+fn build_explain_steps(
+    scenario: &namako::npap::ResolvedScenario,
+    registry: &SemanticStepRegistry,
+) -> Result<Vec<ExplainStep>> {
+    let mut steps = Vec::new();
+
+    for step in &scenario.steps {
+        // Find the binding in the registry
+        let binding = registry.bindings.iter()
+            .find(|b| b.binding_id == step.binding_id);
+
+        let (expression, impl_hash) = if let Some(b) = binding {
+            (b.expression.clone(), b.impl_hash.clone())
+        } else {
+            ("UNKNOWN".to_string(), "UNKNOWN".to_string())
+        };
+
+        // Source location: use binding_id prefix as hint (not available in current schema)
+        // Full source location would require adapter to provide this
+        let source_location = format!("binding:{}:0", &step.binding_id[..16.min(step.binding_id.len())]);
+
+        steps.push(ExplainStep {
+            step_kind: step.effective_kind.clone(),
+            step_text: step.step_text.clone(),
+            binding_id: step.binding_id.clone(),
+            binding_expression: expression,
+            impl_hash,
+            source_location,
+        });
+    }
+
+    Ok(steps)
+}
+
+/// Extract related tags from feature, rule, and scenario.
+fn extract_related_tags(feature: &Feature, scenario_info: &ScenarioInfo) -> Vec<String> {
+    let mut tags = Vec::new();
+
+    // Add feature tags (gherkin 0.15 uses String for tags)
+    for tag in &feature.tags {
+        if !tag.starts_with('@') {
+            tags.push(format!("@{}", tag));
+        } else {
+            tags.push(tag.clone());
+        }
+    }
+
+    // Add rule tags if present
+    if let Some(rule_name) = &scenario_info.rule_name {
+        for rule in &feature.rules {
+            if &rule.name == rule_name {
+                for tag in &rule.tags {
+                    if !tag.starts_with('@') {
+                        tags.push(format!("@{}", tag));
+                    } else {
+                        tags.push(tag.clone());
+                    }
+                }
+                // Also find scenario in this rule
+                for scenario in &rule.scenarios {
+                    if scenario.name == scenario_info.scenario_name {
+                        for tag in &scenario.tags {
+                            if !tag.starts_with('@') {
+                                tags.push(format!("@{}", tag));
+                            } else {
+                                tags.push(tag.clone());
+                            }
+                        }
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    } else {
+        // Feature-level scenario
+        for scenario in &feature.scenarios {
+            if scenario.name == scenario_info.scenario_name {
+                for tag in &scenario.tags {
+                    if !tag.starts_with('@') {
+                        tags.push(format!("@{}", tag));
+                    } else {
+                        tags.push(tag.clone());
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Sort for determinism
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+/// Extract rule description from feature.
+fn extract_rule_description(feature: &Feature, rule_name: &Option<String>) -> Option<String> {
+    if let Some(name) = rule_name {
+        for rule in &feature.rules {
+            if &rule.name == name {
+                // Rule description is the rule name in gherkin
+                // For additional description, we'd need to parse comments
+                return Some(rule.name.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Build contract excerpt: Rule header + description + Scenario header.
+fn build_contract_excerpt(source: &str, scenario_info: &ScenarioInfo) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+
+    // Find the scenario start line
+    let scenario_start = scenario_info.source_span.start_line as usize;
+    if scenario_start == 0 || scenario_start > lines.len() {
+        return String::new();
+    }
+
+    let mut excerpt_lines = Vec::new();
+
+    // Find rule header if present
+    if scenario_info.rule_name.is_some() {
+        // Search backwards for Rule: line
+        for i in (0..scenario_start).rev() {
+            let line = lines.get(i).unwrap_or(&"");
+            if line.trim().starts_with("Rule:") {
+                // Include rule line and up to 3 lines after (description)
+                for j in i..(i + 4).min(scenario_start) {
+                    if let Some(l) = lines.get(j) {
+                        excerpt_lines.push(*l);
+                    }
+                }
+                excerpt_lines.push(""); // blank line
+                break;
+            }
+        }
+    }
+
+    // Include scenario header (up to 5 lines starting from scenario)
+    let scenario_end = (scenario_start + 5).min(lines.len());
+    for i in (scenario_start - 1)..scenario_end {
+        if let Some(l) = lines.get(i) {
+            excerpt_lines.push(*l);
+        }
+    }
+
+    excerpt_lines.join("\n")
 }
 
 /// Discover all `.feature` files under the given directory.

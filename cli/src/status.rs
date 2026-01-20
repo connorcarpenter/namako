@@ -51,29 +51,57 @@ pub struct StatusArgs {
     pub verbose: bool,
 }
 
-/// Status output schema per TODO.md §1.2
+/// Status output schema per GOLD_PLAN §10.5.5
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusOutput {
     /// Schema version (starts at 1)
     pub version: u32,
     /// Absolute or normalized relative path to spec root
     pub spec_root: String,
-    /// RFC3339 timestamp (allowed to vary between runs)
-    pub timestamp_utc: String,
-    /// Gate status for lint/run/verify
-    pub gates: GateStatus,
-    /// Current identity computed from sources
-    pub identity_current: IdentityFields,
-    /// Baseline identity from certification.json (null if no baseline)
-    pub identity_baseline: Option<IdentityFields>,
-    /// Drift detection results
-    pub drift: DriftInfo,
     /// Recommended next action for Tesaki
     pub recommended_next_action: RecommendedAction,
-    /// Failures from last run report (per TODO.md §4.2)
-    /// Populated when recommended_next_action == FIX_RUN
+    /// Lint status: pass | fail | stale
+    pub lint_status: StatusValue,
+    /// Run status: pass | fail | stale | not_run
+    pub run_status: StatusValue,
+    /// Verify status: pass | fail | stale | not_run
+    pub verify_status: StatusValue,
+    /// Drift detection results
+    pub drift: DriftInfo,
+    /// Failures from last run report
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub last_run_failures: Vec<FailureRecord>,
+    /// Identity (current and baseline)
+    pub identity: IdentitySection,
+    /// Metadata (timestamp, version)
+    pub metadata: StatusMetadata,
+    /// Legacy gate status (deprecated, kept for compat)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gates: Option<GateStatus>,
+}
+
+/// Status value enum per GOLD_PLAN §10.5.5
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusValue {
+    Pass,
+    Fail,
+    Stale,
+    NotRun,
+}
+
+/// Identity section per GOLD_PLAN §10.5.5
+#[derive(Debug, Clone, Serialize)]
+pub struct IdentitySection {
+    pub current: IdentityFields,
+    pub baseline: Option<IdentityFields>,
+}
+
+/// Metadata section per GOLD_PLAN §10.5.5
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusMetadata {
+    pub timestamp: String,
+    pub namako_version: String,
 }
 
 /// Record of a single failed scenario for failure targeting (per TODO.md §4.2).
@@ -288,16 +316,29 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
     // or if run report exists and has failures
     let last_run_failures = load_run_failures(&args.run_report);
 
+    // Convert gates to status values
+    let lint_status = if gates.lint.ok { StatusValue::Pass } else { StatusValue::Fail };
+    let run_status = if gates.run.ok { StatusValue::Pass } else if gates.run.summary.as_ref().map(|s| s.contains("Cannot run")).unwrap_or(false) { StatusValue::NotRun } else { StatusValue::Fail };
+    let verify_status = if gates.verify.ok { StatusValue::Pass } else if gates.verify.summary.as_ref().map(|s| s.contains("Cannot verify") || s.contains("No baseline")).unwrap_or(false) { StatusValue::NotRun } else { StatusValue::Fail };
+
     Ok(StatusOutput {
         version: 1,
         spec_root,
-        timestamp_utc,
-        gates,
-        identity_current,
-        identity_baseline,
-        drift,
         recommended_next_action: recommended_action,
+        lint_status,
+        run_status,
+        verify_status,
+        drift,
         last_run_failures,
+        identity: IdentitySection {
+            current: identity_current,
+            baseline: identity_baseline,
+        },
+        metadata: StatusMetadata {
+            timestamp: timestamp_utc,
+            namako_version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        gates: Some(gates),
     })
 }
 
@@ -487,39 +528,57 @@ fn compute_drift(current: &IdentityFields, baseline: &CertificationIdentity) -> 
 }
 
 fn print_human_readable(status: &StatusOutput) {
-    println!("Namako Status Report");
-    println!("====================");
-    println!("Spec Root: {}", status.spec_root);
-    println!("Timestamp: {}", status.timestamp_utc);
-    println!();
-    println!("Gates:");
-    println!("  Lint:   {} ({})",
-        if status.gates.lint.ok { "✓" } else { "✗" },
-        status.gates.lint.summary.as_deref().unwrap_or(""));
-    println!("  Run:    {} ({})",
-        if status.gates.run.ok { "✓" } else { "✗" },
-        status.gates.run.summary.as_deref().unwrap_or(""));
-    println!("  Verify: {} ({})",
-        if status.gates.verify.ok { "✓" } else { "✗" },
-        status.gates.verify.summary.as_deref().unwrap_or(""));
-    println!();
-    println!("Drift: {:?}", status.drift.kind);
-    for detail in &status.drift.details {
-        println!("  {} changed", detail.field);
+    // Rich diff output per GOLD_PLAN §10.5.6
+    println!("=== Identity Status ===");
+
+    // Identity fields comparison
+    if let Some(baseline) = &status.identity.baseline {
+        let current = &status.identity.current;
+
+        // feature_fingerprint_hash
+        if current.feature_fingerprint_hash == baseline.feature_fingerprint_hash {
+            println!("✓ feature_fingerprint_hash: MATCH");
+        } else {
+            println!("✗ feature_fingerprint_hash: DRIFTED");
+            println!("  Baseline: {}", baseline.feature_fingerprint_hash);
+            println!("  Current:  {}", current.feature_fingerprint_hash);
+        }
+
+        // step_registry_hash
+        if current.step_registry_hash == baseline.step_registry_hash {
+            println!("✓ step_registry_hash: MATCH");
+        } else {
+            println!("✗ step_registry_hash: DRIFTED");
+            println!("  Baseline: {}", baseline.step_registry_hash);
+            println!("  Current:  {}", current.step_registry_hash);
+        }
+
+        // resolved_plan_hash
+        if current.resolved_plan_hash == baseline.resolved_plan_hash {
+            println!("✓ resolved_plan_hash: MATCH");
+        } else {
+            println!("✗ resolved_plan_hash: DRIFTED");
+            println!("  Baseline: {}", baseline.resolved_plan_hash);
+            println!("  Current:  {}", current.resolved_plan_hash);
+        }
+    } else {
+        println!("(no baseline certification found)");
+        println!("  Current feature_fingerprint: {}", status.identity.current.feature_fingerprint_hash);
+        println!("  Current step_registry: {}", status.identity.current.step_registry_hash);
+        println!("  Current resolved_plan: {}", status.identity.current.resolved_plan_hash);
     }
+
+    println!();
+    println!("=== Recommended Action ===");
+    println!("{:?}", status.recommended_next_action);
+
     if !status.last_run_failures.is_empty() {
         println!();
-        println!("Last Run Failures ({}):", status.last_run_failures.len());
-        for failure in &status.last_run_failures {
-            println!("  {} [{}]: {}",
-                failure.scenario_key,
-                failure.failure_kind,
-                failure.summary
-            );
+        println!("=== Recent Failures ===");
+        for (i, failure) in status.last_run_failures.iter().enumerate() {
+            println!("{}. {} — {}", i + 1, failure.scenario_key, failure.summary);
         }
     }
-    println!();
-    println!("Recommended Action: {:?}", status.recommended_next_action);
 }
 
 /// Discover all `.feature` files under the given directory.

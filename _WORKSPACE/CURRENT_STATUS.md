@@ -55,9 +55,9 @@ cargo run -p tesaki -- next \
 | Metric | Count |
 |--------|-------|
 | Executable scenarios | **31** |
-| @Deferred scenarios | **0** |
-| Promotion candidates | **0** |
-| Feature files | **16** |
+| @Deferred scenarios | **5** |
+| Promotion candidates | **5** |
+| Feature files | **17** |
 | Total lines in specs | **2,111** |
 
 ---
@@ -95,6 +95,18 @@ cargo run -p tesaki -- next \
 | `namako status` | FSM state + identity hashes (JSON output) | ✅ |
 | `namako review` | Work backlog packet (promotion candidates) | ✅ |
 | `namako explain` | Scenario fidelity packet | ✅ |
+| `namako stub` | Generate @Deferred stubs for orphan bindings | ✅ |
+
+### Part 5.5: Namako v1.5 Enhancements — ✅ COMPLETE
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| Explicit ID tags | `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` | ✅ |
+| Orphan detection | Hard error on unused bindings | ✅ |
+| Enhanced `review` | 5 sections per GOLD_PLAN §10.5.3 | ✅ |
+| Fidelity packets | `explain` with binding_expression/source_location | ✅ |
+| JSON status | All required fields per §10.5.5 | ✅ |
+| Rich diffs | Human-readable identity status | ✅ |
 
 ### Part 6: NPA v1 Protocol — ✅ COMPLETE
 

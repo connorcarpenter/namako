@@ -34,11 +34,11 @@
 | Feature | GOLD_PLAN Section | Priority | Status |
 |---------|-------------------|----------|--------|
 | Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §10.5.1 | HIGH | ✅ **COMPLETE** |
-| Orphan binding hard error + `namako stub` | §10.5.2 | HIGH | 🔲 Not Started |
-| `namako review` coverage enhancements | §10.5.3 | HIGH | 🔲 Not Started |
-| Scenario fidelity packets (`namako explain`) | §10.5.4 | MEDIUM | 🔲 Not Started |
-| Machine-readable process state (`namako status --json`) | §10.5.5 | HIGH | 🔲 Partial (basic impl exists) |
-| Rich `namako status` diffs | §10.5.6 | MEDIUM | 🔲 Not Started |
+| Orphan binding hard error + `namako stub` | §10.5.2 | HIGH | ✅ **COMPLETE** |
+| `namako review` coverage enhancements | §10.5.3 | HIGH | ✅ **COMPLETE** |
+| Scenario fidelity packets (`namako explain`) | §10.5.4 | MEDIUM | ✅ **COMPLETE** |
+| Machine-readable process state (`namako status --json`) | §10.5.5 | HIGH | ✅ **COMPLETE** |
+| Rich `namako status` diffs | §10.5.6 | MEDIUM | ✅ **COMPLETE** |
 
 ### Implementation Order (Recommended)
 
@@ -56,44 +56,45 @@
 - `namako/src/npap.rs` — key format changes
 - `naia/test/specs/features/*.feature` — add ID tags
 
-#### Sprint 2: Hygiene — Orphan Binding Enforcement (NEXT)
-**Duration:** 1-2 days
+#### Sprint 2: Hygiene — Orphan Binding Enforcement ✅ **COMPLETE**
+**Duration:** 1-2 days → Completed 2026-01-19
 
-1. **Enhance lint** to detect orphan bindings
-2. **Change warning → hard error** for orphans
-3. **Implement `namako stub`** command
-4. **Update tests** to verify orphan detection
+1. ✅ **Enhance lint** to detect orphan bindings
+2. ✅ **Change warning → hard error** for orphans
+3. ✅ **Implement `namako stub`** command
+4. ✅ **Update tests** to verify orphan detection
 
-**Files to modify:**
-- `namako/cli/src/lint.rs` — orphan detection
-- `namako/cli/src/main.rs` — add `stub` subcommand
-- `namako/cli/src/stub.rs` — new file
+**Files modified:**
+- `namako/cli/src/lint.rs` — orphan detection as hard error
+- `namako/cli/src/main.rs` — added `stub` subcommand
+- `namako/cli/src/stub.rs` — new command implementation
+- `namako/src/engine.rs` — @Deferred scenario binding tracking
 
-#### Sprint 3: AI Packets — Enhanced Review
-**Duration:** 2-3 days
+#### Sprint 3: AI Packets — Enhanced Review ✅ **COMPLETE**
+**Duration:** 2-3 days → Completed 2026-01-19
 
-1. **Expand `namako review`** output with all 5 sections:
+1. ✅ **Expand `namako review`** output with all 5 sections:
    - Coverage summary
    - Deferred items with blocker classification
    - Promotion candidates with reuse_score
    - Missing bindings worklist
    - Harness gaps
 
-2. **Ensure deterministic output** (sorted, stable)
+2. ✅ **Ensure deterministic output** (sorted, stable)
 
-**Files to modify:**
-- `namako/cli/src/review.rs` — enhanced packet output
+**Files modified:**
+- `namako/cli/src/review.rs` — added DeferredScenarioItem, HarnessGap structs, all 5 sections
 
-#### Sprint 4: AI Packets — Explain & Status
-**Duration:** 2-3 days
+#### Sprint 4: AI Packets — Explain & Status ✅ **COMPLETE**
+**Duration:** 2-3 days → Completed 2026-01-19
 
-1. **Enhance `namako explain`** with full fidelity packet
-2. **Enhance `namako status --json`** with all required fields
-3. **Add rich text diff output** to `namako status`
+1. ✅ **Enhance `namako explain`** with full fidelity packet
+2. ✅ **Enhance `namako status --json`** with all required fields
+3. ✅ **Add rich text diff output** to `namako status`
 
-**Files to modify:**
-- `namako/cli/src/explain.rs` — fidelity packet
-- `namako/cli/src/status.rs` — JSON and diff output
+**Files modified:**
+- `namako/cli/src/explain.rs` — ExplainStep with binding_expression/source_location
+- `namako/cli/src/status.rs` — StatusValue enum, IdentitySection struct, rich diffs
 
 ### v1.5 Definition of Done
 

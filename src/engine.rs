@@ -258,6 +258,22 @@ pub struct ResolutionResult {
     pub errors: Vec<ResolutionError>,
     /// Warnings (non-fatal)
     pub warnings: Vec<String>,
+    /// Orphan bindings (binding_id, kind, expression) — bindings in registry not used by any scenario
+    pub orphan_bindings: Vec<OrphanBinding>,
+    /// Binding IDs used by @Deferred scenarios (for orphan detection but not in executable plan)
+    pub deferred_binding_ids: Vec<String>,
+}
+
+/// An orphan binding — a binding in the registry that is not used by any scenario.
+/// Per GOLD_PLAN §10.5.2, orphans are a hard error in v1.5.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanBinding {
+    /// The binding ID
+    pub binding_id: String,
+    /// The step kind (Given, When, Then)
+    pub kind: String,
+    /// The cucumber expression
+    pub expression: String,
 }
 
 /// Compiled binding with parsed regex for matching.
@@ -277,6 +293,8 @@ pub struct ResolutionEngine {
     bindings_by_kind: HashMap<String, Vec<CompiledBinding>>,
     /// Step registry hash for inclusion in plan
     step_registry_hash: String,
+    /// All binding IDs in the registry (for orphan detection)
+    all_binding_ids: Vec<(String, String, String)>, // (binding_id, kind, expression)
 }
 
 impl std::fmt::Debug for CompiledBinding {
@@ -298,6 +316,13 @@ impl ResolutionEngine {
     pub fn new(registry: &SemanticStepRegistry) -> Result<Self, Vec<ResolutionError>> {
         let mut errors = Vec::new();
         let mut bindings_by_kind: HashMap<String, Vec<CompiledBinding>> = HashMap::new();
+
+        // Collect all binding IDs for orphan detection
+        let all_binding_ids: Vec<(String, String, String)> = registry
+            .bindings
+            .iter()
+            .map(|b| (b.binding_id.clone(), b.kind.clone(), b.expression.clone()))
+            .collect();
 
         for binding in &registry.bindings {
             // Convert cucumber expression to regex pattern
@@ -330,6 +355,7 @@ impl ResolutionEngine {
         Ok(Self {
             bindings_by_kind,
             step_registry_hash: registry.step_registry_hash.clone(),
+            all_binding_ids,
         })
     }
 
@@ -345,6 +371,7 @@ impl ResolutionEngine {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
         let mut resolved_scenarios = Vec::new();
+        let mut deferred_binding_ids: Vec<String> = Vec::new();
         let mut feature_files: Vec<(&str, &str)> = Vec::new();
 
         for (path, source) in features {
@@ -358,6 +385,7 @@ impl ResolutionEngine {
                         path,
                         &feature,
                         &mut resolved_scenarios,
+                        &mut deferred_binding_ids,
                         &mut errors,
                         &mut warnings,
                     );
@@ -376,6 +404,8 @@ impl ResolutionEngine {
                 plan: None,
                 errors,
                 warnings,
+                orphan_bindings: Vec::new(),
+                deferred_binding_ids: Vec::new(),
             };
         }
 
@@ -390,11 +420,47 @@ impl ResolutionEngine {
             resolved_scenarios,
         );
 
+        // Compute orphan bindings: bindings in registry not used by any scenario
+        // (including @Deferred scenarios for orphan detection purposes)
+        let orphan_bindings = self.compute_orphan_bindings(&plan, &deferred_binding_ids);
+
         ResolutionResult {
             plan: Some(plan),
             errors,
             warnings,
+            orphan_bindings,
+            deferred_binding_ids,
         }
+    }
+
+    /// Computes orphan bindings — bindings in the registry not used by any scenario.
+    ///
+    /// Per GOLD_PLAN §10.5.2, orphans are detected by comparing registry binding IDs
+    /// against binding IDs used in the resolved plan AND in @Deferred scenarios.
+    fn compute_orphan_bindings(&self, plan: &ResolvedPlan, deferred_binding_ids: &[String]) -> Vec<OrphanBinding> {
+        // Collect all used binding IDs from the resolved plan
+        let mut used_binding_ids: HashSet<&str> = plan
+            .scenarios
+            .iter()
+            .flat_map(|s| s.steps.iter())
+            .map(|step| step.binding_id.as_str())
+            .collect();
+
+        // Also include binding IDs from @Deferred scenarios
+        for bid in deferred_binding_ids {
+            used_binding_ids.insert(bid.as_str());
+        }
+
+        // Find bindings in registry not used by any scenario
+        self.all_binding_ids
+            .iter()
+            .filter(|(binding_id, _, _)| !used_binding_ids.contains(binding_id.as_str()))
+            .map(|(binding_id, kind, expression)| OrphanBinding {
+                binding_id: binding_id.clone(),
+                kind: kind.clone(),
+                expression: expression.clone(),
+            })
+            .collect()
     }
 
     /// Resolves a single feature file.
@@ -403,6 +469,7 @@ impl ResolutionEngine {
         path: &str,
         feature: &Feature,
         resolved_scenarios: &mut Vec<ResolvedScenario>,
+        deferred_binding_ids: &mut Vec<String>,
         errors: &mut Vec<ResolutionError>,
         _warnings: &mut Vec<String>,
     ) {
@@ -432,8 +499,10 @@ impl ResolutionEngine {
 
         // PHASE 2.2c: Process feature-level scenarios (no rule context)
         for scenario in &feature.scenarios {
-            // Skip deferred scenarios - they are excluded from the executable plan
+            // For @Deferred scenarios: resolve steps to get binding IDs for orphan detection
+            // but don't add to the executable plan
             if is_deferred_scenario(scenario) {
+                self.collect_deferred_binding_ids(scenario, path, deferred_binding_ids);
                 continue;
             }
 
@@ -527,8 +596,10 @@ impl ResolutionEngine {
             );
 
             for scenario in &rule.scenarios {
-                // Skip deferred scenarios - they are excluded from the executable plan
+                // For @Deferred scenarios: resolve steps to get binding IDs for orphan detection
+                // but don't add to the executable plan
                 if is_deferred_scenario(scenario) {
+                    self.collect_deferred_binding_ids(scenario, path, deferred_binding_ids);
                     continue;
                 }
 
@@ -587,6 +658,26 @@ impl ResolutionEngine {
                     scenario_name: scenario.name.clone(),
                     steps: resolved_steps,
                 });
+            }
+        }
+    }
+
+    /// Collects binding IDs from @Deferred scenario steps for orphan detection.
+    /// These bindings are considered "used" for orphan detection purposes,
+    /// but the scenarios themselves are not included in the executable plan.
+    fn collect_deferred_binding_ids(
+        &self,
+        scenario: &gherkin::Scenario,
+        path: &str,
+        deferred_binding_ids: &mut Vec<String>,
+    ) {
+        let mut last_keyword = "Given";
+        for step in &scenario.steps {
+            let effective_kind = resolve_effective_kind(&step.keyword, &mut last_keyword);
+            // Try to resolve the step - if it matches, collect the binding ID
+            // We ignore errors here since we're just collecting for orphan detection
+            if let Ok(planned) = self.resolve_step(step, path, &effective_kind) {
+                deferred_binding_ids.push(planned.binding_id);
             }
         }
     }
@@ -838,7 +929,10 @@ mod tests {
         let engine = ResolutionEngine::new(&registry).unwrap();
 
         let feature_source = r#"
+@Feature(simple_test)
 Feature: Simple test
+
+  @Scenario_01
   Scenario: Client connects
     Given a server is running
     When a client connects
@@ -874,7 +968,10 @@ Feature: Simple test
         let engine = ResolutionEngine::new(&registry).unwrap();
 
         let feature_source = r#"
+@Feature(and_but_test)
 Feature: And/But test
+
+  @Scenario_01
   Scenario: With And/But
     Given a server is running
     And the server is configured
@@ -904,7 +1001,10 @@ Feature: And/But test
         let engine = ResolutionEngine::new(&registry).unwrap();
 
         let feature_source = r#"
+@Feature(missing_step)
 Feature: Missing step
+
+  @Scenario_01
   Scenario: No binding
     Given a server is running
     When no binding exists for this
@@ -926,7 +1026,10 @@ Feature: Missing step
         let engine = ResolutionEngine::new(&registry).unwrap();
 
         let feature_source = r#"
+@Feature(captures)
 Feature: Captures
+
+  @Scenario_01
   Scenario: User
     Given a user named "Alice"
 "#;
@@ -948,7 +1051,10 @@ Feature: Captures
         let engine = ResolutionEngine::new(&registry).unwrap();
 
         let feature_source = r#"
+@Feature(signature_mismatch)
 Feature: Signature mismatch
+
+  @Scenario_01
   Scenario: Wrong arity
     Given a user named "Alice"
 "#;
@@ -973,5 +1079,70 @@ Feature: Signature mismatch
         assert!(regex.is_match("I have 5 apples"));
         // {int} may have multiple internal groups, just verify it works
         assert!(count >= 1, "expected at least 1 capture for {{int}}, got {count}");
+    }
+
+    #[test]
+    fn test_orphan_binding_detection() {
+        // Registry has 4 bindings, but only 3 are used
+        let registry = SemanticStepRegistry::new(vec![
+            make_binding("Given", "a server is running", 0),
+            make_binding("When", "a client connects", 0),
+            make_binding("Then", "the client is connected", 0),
+            make_binding("Then", "an orphan binding that is never used", 0), // orphan
+        ]);
+
+        let engine = ResolutionEngine::new(&registry).unwrap();
+
+        let feature_source = r#"
+@Feature(orphan_test)
+Feature: Simple test
+
+  @Scenario_01
+  Scenario: Client connects
+    Given a server is running
+    When a client connects
+    Then the client is connected
+"#;
+
+        let features = vec![("test.feature", feature_source)];
+        let result = engine.resolve(features.into_iter());
+
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert!(result.plan.is_some());
+
+        // Should detect 1 orphan binding
+        assert_eq!(result.orphan_bindings.len(), 1);
+        assert_eq!(
+            result.orphan_bindings[0].expression,
+            "an orphan binding that is never used"
+        );
+        assert_eq!(result.orphan_bindings[0].kind, "Then");
+    }
+
+    #[test]
+    fn test_no_orphans_when_all_used() {
+        // Registry has exactly the bindings used
+        let registry = SemanticStepRegistry::new(vec![
+            make_binding("Given", "a server is running", 0),
+            make_binding("When", "a client connects", 0),
+        ]);
+
+        let engine = ResolutionEngine::new(&registry).unwrap();
+
+        let feature_source = r#"
+@Feature(all_used)
+Feature: All used
+
+  @Scenario_01
+  Scenario: Both bindings used
+    Given a server is running
+    When a client connects
+"#;
+
+        let features = vec![("test.feature", feature_source)];
+        let result = engine.resolve(features.into_iter());
+
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert!(result.orphan_bindings.is_empty());
     }
 }
