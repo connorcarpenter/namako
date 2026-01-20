@@ -25,6 +25,16 @@
 9. [Tesaki: The AI Driver Layer (No Inference in Namako)](#part-9-tesaki-the-ai-driver-layer-no-inference-in-namako)
 10. [The Spec-Driven Development Loop (v1)](#part-10-the-spec-driven-development-loop-v1)
 10.5. [Namako v1.5 — AI-Enablement Features](#part-105-namako-v15--ai-enablement-features)
+10.7. [v1.7 Runner Integration (Level 2)](#part-107-v17-runner-integration-level-2--tesaki--coding-agent-integration)
+    - [10.7.1 Layers and Roles](#1071-layers-and-roles-bootstrap-vs-product-vs-runner)
+    - [10.7.2 Ownership Table](#1072-ownership-table-what-lives-where)
+    - [10.7.3 Tesaki Consumes Packets Only](#1073-tesaki-consumes-packets-only-invariant-anti-drift)
+    - [10.7.4 Runner Integration Model](#1074-runner-integration-model-runner-lives-inside-tesaki)
+    - [10.7.5 Mission Bundle Contract](#1075-mission-bundle-contract-filesystem-contract-boundary)
+    - [10.7.6 Mission Size Budgets](#1076-mission-size-budgets-prevent-giant-wandering-missions)
+    - [10.7.7 Success Criteria and Stop Conditions](#1077-success-criteria-next-step-selection-and-stop-conditions)
+    - [10.7.8 Runner Failure Modes](#1078-runner-failure-modes-deterministic-handling)
+    - [10.7.9 Canonical UX Flow](#1079-canonical-ux-flow-single-source-of-truth)
 11. [Namako v2+ — Armor Plating (Deferred Publish-Grade Features)](#part-11-namako-v2--armor-plating-deferred-publish-grade-features)
     - [11.11 Multi-Language Support](#1111-multi-language-support-language-neutral-engine-language-specific-adapters)
     - [11.12 Adapter SDKs](#1112-adapter-sdks-v2)
@@ -126,7 +136,7 @@ The loop that Opus/Claude follows **while building the Namako/Tesaki toolchain**
 1. Read CURRENT_STATUS.md + GOLD_PLAN.md
 2. Identify next toolchain gap (Namako CLI, Tesaki driver, harness, adapter)
 3. Implement minimal fix
-4. Run gates (`namako_ci.sh`, `determinism_check.sh`, `cargo test`)
+4. Run gates (`namako gate`, `namako gate --determinism`, `cargo test`)
 5. Update docs (CURRENT_STATUS.md, OUTPUT.md)
 6. Stop (human reviews diff)
 
@@ -176,7 +186,7 @@ All BOOTSTRAP surfaces, **plus** Naia product core — but ONLY when driven by a
 
 The system transitions from `MODE=BOOTSTRAP` to `MODE=CONSUMPTION` only when ALL of the following are satisfied:
 
-1. **Tesaki end-to-end:** `tesaki next` runs and produces `NEXT_TASK.md` deterministically
+1. **Tesaki end-to-end:** `tesaki next` runs and produces `NEXT_TASK.md` deterministically (v1.7 will replace with `tesaki run`)
 2. **Namako packets deterministic:** `status --json`, `review`, `explain` all produce stable, usable outputs
 3. **Tesaki autonomous capabilities:**
    - Can select promotion candidates when `reuse_score > 0`
@@ -185,7 +195,7 @@ The system transitions from `MODE=BOOTSTRAP` to `MODE=CONSUMPTION` only when ALL
    - Can update baseline (with governance)
    - Stops safely when blocked (no infinite loops)
 4. **Scenario fidelity workflow exists:** At least v1 depth via `namako explain`
-5. **CI green:** All gates pass (`namako_ci.sh`, `determinism_check.sh`, `cargo test -p tesaki`)
+5. **CI green:** All gates pass (`namako gate`, `namako gate --determinism`, `cargo test -p tesaki`)
 
 ### 2.6 Consumption Entry Criteria (Normative)
 
@@ -1145,7 +1155,11 @@ Baseline updates require controlled governance. The `tesaki` CLI provides this v
 
 **Command-Line Control:**
 ```bash
+# Current command (pre-v1.7):
 tesaki next --max-cert-updates N
+
+# v1.7 command (future):
+tesaki run --max-cert-updates N
 ```
 
 | `--max-cert-updates` | Behavior |
@@ -1479,6 +1493,195 @@ The v1.5 system is complete when:
 | **Status JSON complete** | All required fields present in `namako status --json` |
 | **Rich diffs implemented** | Text diff output shows clear diagnostics |
 | **Migration complete** | All existing `.feature` files have explicit ID tags |
+
+---
+
+## Part 10.7: v1.7 Runner Integration (Level 2) — Tesaki ↔ Coding-Agent Integration
+
+**v1.7 is BOOTSTRAP work.** This section defines how Tesaki orchestrates an external coding agent (runner) to autonomously drive spec-driven development. This is the **Product Loop** we are building.
+
+### 10.7.0 Non-Negotiable Invariants (Normative)
+
+These invariants MUST be maintained in all v1.7 design and implementation:
+
+1. **Tesaki is the ONLY orchestrator / state machine** in the Product Loop.
+2. **Namako is measurement + packet emission** (gate + status/review/explain). Tesaki consumes packets; it does not re-derive them.
+3. **Runner is an untrusted executor** (Claude Code today). Runner never decides "what next", never advances Tesaki state.
+4. **Assume context bleed is always possible.** Design around it via Mission Bundles + post-run gates; do not introduce "fresh session support" flags.
+5. **Mission Bundle is the unit of work** and the contract boundary between Tesaki and the runner.
+6. **Single-command UX target:** user runs `tesaki run` repeatedly. Tesaki runs Namako internally for measurement.
+
+### 10.7.1 Layers and Roles (Bootstrap vs Product vs Runner)
+
+Three layers exist and MUST remain strictly separated:
+
+| Layer | Name | Description |
+|-------|------|-------------|
+| **Layer A** | BOOTSTRAP | Connor + Opus building Namako/Tesaki (this project phase) |
+| **Layer B** | PRODUCT LOOP | Tesaki + Namako driving Naia development (the workflow we are building) |
+| **Layer C** | RUNNER | External coding agent process (Claude Code session) |
+
+**Critical Invariant:** Layer C (Runner) MUST NOT orchestrate Layer B (Product Loop). The runner receives a mission, executes it, and returns. It does not decide what happens next.
+
+### 10.7.2 Ownership Table (What Lives Where)
+
+**Tesaki owns:**
+- Task selection from Namako packets
+- Mission lifecycle + stop conditions
+- Invoking runner (Claude Code integration)
+- Post-run validation by running `namako gate --json`
+- Governance enforcement (cert update limits, retries, halts)
+
+**Namako owns:**
+- `namako gate` (lint → run → verify; determinism option)
+- `status --json`, `review`, `explain` packets
+- Certification baseline format + update-cert refusal rules
+- Deterministic artifact emission and schemas
+
+**Runner owns:**
+- Apply edits to satisfy mission prompt
+- Optional local iteration to converge
+- Emit an "attempt report" to OUTPUT (not authoritative for success)
+
+**Explicitly NOT owned by runner:**
+- Selecting next task
+- Calling Tesaki for orchestration (no `tesaki next` from runner)
+- Performing baseline updates unless Tesaki explicitly requests (and Tesaki still validates)
+
+### 10.7.3 "Tesaki Consumes Packets Only" Invariant (Anti-Drift)
+
+**Normative Statement:**
+- Tesaki MUST NOT replicate Namako logic by re-parsing or re-inferring semantics from raw artifacts.
+- Tesaki reads structured packets (`status --json`, `review`, `explain`, `gate --json`) and makes decisions based on their fields.
+- If Tesaki needs a new signal (e.g., "which scenarios are flaky"), it MUST be added to Namako packet outputs, not inferred by Tesaki.
+
+This prevents architectural drift where Tesaki becomes a shadow implementation of Namako.
+
+### 10.7.4 Runner Integration Model: Runner Lives Inside Tesaki
+
+**Connor preference:** Avoid "another CLI". Runner is NOT a separate CLI tool.
+
+**Model Definition:**
+- Runner is an internal Tesaki abstraction (Rust trait/module).
+- Claude Code is one concrete backend implementation.
+- Swapping runners later is done by implementing additional backends inside Tesaki (e.g., local LLM, different API, mock runner for testing).
+
+**No separate runner CLI:** Users run `tesaki run`, which internally manages runner invocation. The runner process receives a mission bundle and returns; it has no external CLI of its own.
+
+### 10.7.5 Mission Bundle Contract (Filesystem Contract Boundary)
+
+Tesaki creates a deterministic Mission Bundle directory for each mission:
+
+```
+.tesaki/missions/<mission_id>/
+├── NEXT_TASK.md          # Single prompt payload for the runner
+├── INPUTS/               # Namako packet snapshots relevant to mission
+│   ├── status.json       # namako status --json output
+│   ├── review.json       # namako review output
+│   ├── explain.json      # namako explain output (if relevant)
+│   └── gate.json         # namako gate --json output (pre-mission state)
+├── POLICY.md             # Rules: no commits, no orchestration, scope limits
+├── EXPECTED.md           # Explicit postconditions Tesaki will check
+└── OUTPUT/               # Runner writes here; Tesaki writes gate results
+    ├── attempt_report.md # Runner's self-reported attempt summary
+    ├── transcript.txt    # Optional: runner session transcript
+    └── gate_result.json  # Tesaki writes post-run gate output
+```
+
+**Why this design:**
+- Reduces reliance on runner context (mission is self-contained)
+- Enables replay/debug (mission bundle captures full state)
+- Clear contract boundary (filesystem, not API)
+- Runner cannot corrupt Tesaki state (writes only to OUTPUT/)
+
+### 10.7.6 Mission Size Budgets (Prevent Giant Wandering Missions)
+
+Tesaki enforces budgets to prevent runaway missions. These are defaults; each can be overridden in `tesaki.toml`.
+
+| Budget | Default | Description |
+|--------|---------|-------------|
+| `max_files_changed` | 10 | Maximum files the runner may modify per mission |
+| `max_scenarios_promoted` | 3 | Maximum scenarios promoted from @Deferred per mission |
+| `max_runtime_seconds` | 600 | Maximum wall-clock runtime per mission (10 minutes) |
+| `max_retries` | 2 | Maximum retry attempts on runner failure |
+| `max_cert_updates` | 3 | Maximum baseline updates per session (existing, §9.4) |
+
+**Enforcement:**
+- Tesaki checks budgets before and after runner execution.
+- Budget exceeded → mission fails with `BUDGET_EXCEEDED` stop condition.
+- Budgets are part of the product safety model.
+
+### 10.7.7 Success Criteria, Next-Step Selection, and Stop Conditions
+
+**Success is defined by Tesaki, not the runner:**
+- Runner's attempt report is informational, not authoritative.
+- Tesaki runs `namako gate --json` after runner exits.
+- Only Tesaki transitions state based on gate output and expected postconditions.
+
+**Next step selection (deterministic):**
+1. Tesaki re-reads Namako packets (status/review/explain/gate) after mission completes.
+2. Tesaki applies task selection rules (priority, reuse_score, etc.).
+3. Tesaki generates next mission bundle or enters stop condition.
+
+**Stop conditions (explicit, deterministic):**
+
+| Condition | Description |
+|-----------|-------------|
+| `DONE` | No eligible tasks remain (all scenarios passing, no promotion candidates) |
+| `BLOCKED` | Only blocked items remain (e.g., all require HARNESS_ONLY or EXTERNAL work) |
+| `HUMAN_REQUIRED` | Human intervention needed (e.g., baseline update approval required, ambiguous requirements) |
+| `ENVIRONMENT_ERROR` | Gate invocation failed, adapter crash, filesystem errors |
+| `BUDGET` | Runtime/attempt/file limits reached |
+
+Tesaki MUST emit a structured stop reason when halting.
+
+### 10.7.8 Runner Failure Modes (Deterministic Handling)
+
+| Failure Mode | Tesaki Response |
+|--------------|-----------------|
+| Runner exits non-zero | Retry once (if under `max_retries`), then stop with `RUNNER_FAILED` |
+| Runner produces no diff / no meaningful changes | Retry once, then stop with `NO_PROGRESS` |
+| Runner produces malformed/missing attempt report | Log warning, proceed with gate check (attempt report is not authoritative) |
+| Gate fails before verify (lint/run issues) | Retry once, then stop with `GATE_FAILED` |
+| Runner exceeds runtime budget | Kill runner process, stop with `BUDGET` |
+
+**On failure:** Tesaki preserves the mission bundle at `.tesaki/failed/<mission_id>/` for inspection.
+
+### 10.7.9 Canonical UX Flow (Single Source of Truth)
+
+This is the canonical flow for `tesaki run`:
+
+```
+1. User runs `tesaki run`
+
+2. Tesaki measures via Namako packets:
+   - namako status --json
+   - namako review
+   - namako gate --json
+
+3. Tesaki selects next task from packets (or enters stop condition)
+
+4. Tesaki generates Mission Bundle:
+   - Create .tesaki/missions/<mission_id>/
+   - Write NEXT_TASK.md, INPUTS/, POLICY.md, EXPECTED.md
+
+5. Tesaki invokes runner backend:
+   - Pass mission bundle location
+   - Runner executes in working tree
+   - Runner writes to OUTPUT/
+
+6. Tesaki validates:
+   - Run `namako gate --json`
+   - Compare against EXPECTED.md postconditions
+   - Record gate_result.json
+
+7. Tesaki transitions or stops:
+   - If success: clean up mission bundle, loop to step 2
+   - If failure: preserve mission bundle at .tesaki/failed/, emit stop reason
+   - If budget reached: stop with explicit reason
+```
+
+**User repeats `tesaki run`** to continue development. Each invocation is atomic and safe.
 
 ---
 

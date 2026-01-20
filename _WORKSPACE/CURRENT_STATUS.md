@@ -1,7 +1,7 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
 **Last Updated:** 2026-01-20
-**MODE:** BOOTSTRAP (v1.5 COMPLETE; awaiting update-cert baseline refresh before CONSUMPTION)
+**MODE:** BOOTSTRAP (v1.5 COMPLETE; v1.7 Runner Integration is next milestone)
 
 ---
 
@@ -19,6 +19,26 @@
 | CI Gates | ✅ ALL GREEN |
 | Bootstrap Exit Criteria | ✅ ALL SATISFIED |
 | **Namako v1.5 Explicit ID Tags** | ✅ **COMPLETE** |
+| **Namako v1.7 Runner Integration** | 🚧 **NEXT** |
+
+---
+
+## Next Milestone: v1.7 Tesaki ↔ Runner Integration (Level 2)
+
+**See GOLD_PLAN.md §10.7 for normative specification.**
+
+v1.7 implements the autonomous Product Loop where Tesaki orchestrates a coding agent (runner) to drive spec-driven development. Key features:
+
+| Component | Description |
+|-----------|-------------|
+| Mission Bundle | Filesystem contract between Tesaki and runner |
+| `tesaki run` | Single-command UX entrypoint |
+| Runner Backend | Claude Code as first implementation |
+| Stop Conditions | Explicit halt reasons (DONE, BLOCKED, BUDGET, etc.) |
+
+**Current state:** Plan and architecture documented. Implementation pending.
+
+**Single-command UX target:** Once v1.7 is implemented, `tesaki run` will be the primary entrypoint. Users run it repeatedly; Tesaki handles measurement, task selection, runner invocation, and validation internally.
 
 ---
 
@@ -38,11 +58,14 @@ cargo run -p namako-cli -- gate \
   -a "cargo run --manifest-path naia/test/npa/Cargo.toml --" \
   --determinism
 
-# Tesaki orchestrator (from namako/ directory)
+# Tesaki orchestrator — current command (from namako/ directory)
 cargo run -p tesaki -- next \
   -s ../naia/test/specs \
   -a "cargo run --manifest-path ../naia/test/npa/Cargo.toml --" \
   --max-cert-updates 3
+
+# v1.7 target: `tesaki run` will be the single-command entrypoint
+# (not yet implemented)
 ```
 
 ### Latest Results (2026-01-20)
@@ -205,7 +228,7 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| Tesaki end-to-end | ✅ | `tesaki next` produces `NEXT_TASK.md` deterministically |
+| Tesaki end-to-end | ✅ | `tesaki next` produces `NEXT_TASK.md` deterministically (v1.7: `tesaki run`) |
 | Namako packets deterministic | ✅ | `status --json`, `review`, `explain` all produce stable outputs |
 | Tesaki selects promotion candidates | ✅ | Filters `@Stub` and returns DONE when only hygiene stubs exist; promotion selection exercised via tests / prior promotion cycles |
 | Tesaki generates binding bundles | ✅ | `suggested_binding_bundle` in review output |
@@ -286,7 +309,7 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 ## 9. Transition Readiness
 
-### Current Phase: Ready for CONSUMPTION
+### Current Phase: v1.7 Runner Integration (BOOTSTRAP)
 
 **v1.5 AI-enablement features are COMPLETE:**
 
@@ -297,16 +320,31 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 | Sprint 3 | Enhanced `namako review` packets | ✅ COMPLETE |
 | Sprint 4 | Enhanced `namako explain` + `status` | ✅ COMPLETE |
 
-### CONSUMPTION Transition Steps
+### Path to CONSUMPTION
 
-**All gates green. Ready to flip to CONSUMPTION mode.**
+**v1.7 Runner Integration must be implemented before CONSUMPTION mode.**
 
-To begin CONSUMPTION mode:
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 0 | v1.7 Runner Integration (BOOTSTRAP) | 🚧 IN PROGRESS |
+| Phase 1 | CONSUMPTION Mode Activation | ⏳ PENDING |
+
+#### Phase 0: v1.7 Implementation Steps
+
+1. [ ] Implement Mission Bundle generation in Tesaki
+2. [ ] Implement Claude Code runner backend
+3. [ ] Implement `tesaki run` command
+4. [ ] Implement stop condition detection
+5. [ ] End-to-end test with controlled mission
+
+#### Phase 1: CONSUMPTION Transition Steps (After v1.7)
+
+Once v1.7 is verified end-to-end:
 1. ✅ Verify `@Stub` exclusion from promotion candidates — **DONE** (2026-01-20)
 2. ✅ Run `namako update-cert` to establish baseline — **DONE** (2026-01-20)
 3. [ ] Update this file: `MODE: CONSUMPTION`
 4. [ ] Select first CORE work item (per GOLD_PLAN §2.7 First CONSUMPTION Mission Template)
-5. [ ] Drive through Tesaki Product FSM
+5. [ ] Drive through `tesaki run` Product Loop
 
 ### Current @Deferred Status
 

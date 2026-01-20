@@ -7,9 +7,39 @@
 
 ---
 
-## Phase 1: Consumption Mode Activation
+## Phase 0: v1.7 Runner Integration (BOOTSTRAP — Immediate Priority)
+
+**Goal:** Implement Tesaki ↔ coding-agent integration so that `tesaki run` becomes the single-command autonomous development loop.
+
+**This is BOOTSTRAP work.** We are still building the toolchain. See GOLD_PLAN.md §10.7 for the normative specification.
+
+**Single-command UX target:** `tesaki run` is the intended entrypoint. Users run it repeatedly; Tesaki handles measurement, task selection, runner invocation, and validation internally.
+
+### Implementation Steps
+
+| Step | Component | Description |
+|------|-----------|-------------|
+| 0.1 | Mission Bundle | Implement `.tesaki/missions/<id>/` directory structure |
+| 0.2 | Runner Trait | Define `Runner` trait/abstraction in Tesaki |
+| 0.3 | Claude Code Backend | Implement Claude Code as first runner backend |
+| 0.4 | `tesaki run` Command | Single-command entrypoint replacing `tesaki next` workflow |
+| 0.5 | Stop Conditions | Implement DONE/BLOCKED/BUDGET/etc. detection |
+| 0.6 | End-to-End Test | Verify full loop with controlled mission |
+
+### Exit Criteria for Phase 0
+
+- [ ] `tesaki run` executes a mission bundle via Claude Code backend
+- [ ] `namako gate --json` validates runner output
+- [ ] Stop conditions emit structured reasons
+- [ ] At least one successful autonomous mission cycle demonstrated
+
+---
+
+## Phase 1: Consumption Mode Activation (After v1.7)
 
 **Goal:** Formally transition from BOOTSTRAP to CONSUMPTION mode and validate the end-to-end workflow with a controlled first mission.
+
+**Prerequisite:** Phase 0 (v1.7 Runner Integration) must be complete and verified.
 
 **Safety check before CONSUMPTION:** Ensure `@Stub` scenarios are excluded from promotion candidates and Tesaki task selection.
 
@@ -29,20 +59,20 @@ Per GOLD_PLAN §2.7, select ONE CORE scenario to validate the workflow:
 ```
 1. Select ONE scenario from feature files (or write a new @Deferred one)
 2. Define minimal observable contract (what must become testable)
-3. Run through Tesaki FSM:
-   - namako lint (resolve steps)
-   - Implement missing bindings
-   - namako run (execute)
-   - namako verify (certify)
-   - namako update-cert (if approved)
+3. Run through `tesaki run`:
+   - Tesaki runs namako gate, selects task, creates mission bundle
+   - Runner executes mission
+   - Tesaki validates via namako gate
+   - Tesaki handles update-cert (with governance limits)
 4. Keep scope minimal — one scenario, one mission
 ```
 
 #### Step 1.3: Validate Autonomous Loop
-Run `tesaki next` with `--max-cert-updates 3` to verify:
-- Promotion candidate selection works
-- Binding bundle suggestions are useful
-- NEXT_TASK.md provides actionable instructions
+Run `tesaki run` to verify:
+- Mission bundle generation works
+- Runner executes successfully
+- Gate validation catches regressions
+- Stop conditions trigger appropriately
 
 ---
 
@@ -85,7 +115,7 @@ graph TD
 1. **Start with @Deferred** — Write scenarios tagged `@Deferred` for new functionality
 2. **Promote in small batches** — Untag 1-3 scenarios at a time
 3. **Keep CI green** — Never break the gate between promotions
-4. **Use Tesaki guidance** — Let `tesaki next` suggest what to work on
+4. **Use Tesaki guidance** — Let `tesaki run` drive the development loop
 
 ---
 
@@ -142,18 +172,26 @@ For each harness enhancement:
 
 - [ ] Review changes from TODO.md execution (see OUTPUT.md)
 - [ ] Commit all changes (namako and naia repos)
-- [ ] Run `namako update-cert` to establish new baseline (hashes changed due to source_symbol)
-- [ ] Update `CURRENT_STATUS.md`: Set `MODE: CONSUMPTION`
-- [ ] Select first CONSUMPTION mission target
+- [ ] Run `namako update-cert` to establish new baseline if needed
 
-### For AI Agent (CONSUMPTION Mode)
+### For AI Agent (BOOTSTRAP Mode — v1.7 Implementation)
 
-Once MODE = CONSUMPTION:
-1. Run `tesaki next` to get current task
+**Current priority:** Implement v1.7 Runner Integration (Phase 0)
+
+1. Implement Mission Bundle directory structure
+2. Define Runner trait abstraction
+3. Implement Claude Code runner backend
+4. Implement `tesaki run` command
+5. Implement stop condition detection
+6. Test end-to-end with controlled mission
+
+### For AI Agent (After v1.7 — CONSUMPTION Mode)
+
+Once v1.7 is verified and MODE = CONSUMPTION:
+1. Run `tesaki run` to execute autonomous development loop
 2. If no promotion candidates, suggest new @Deferred scenarios
-3. Implement bindings for promoted scenarios
-4. Iterate until gates green
-5. Request update-cert approval when stable
+3. Let Tesaki drive the loop (mission → gate → validate → repeat)
+4. Tesaki handles update-cert within governance limits
 
 ---
 
