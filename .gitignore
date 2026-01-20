@@ -8,3 +8,9 @@
 **/*.rs.bk
 
 /*.cast.json
+
+# Generated CLI output
+/resolved_plan.json
+
+# Generated test output files
+engine/tests/features/output/*.out
