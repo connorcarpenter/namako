@@ -1,7 +1,7 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
 **Last Updated:** 2026-01-19
-**MODE:** BOOTSTRAP (v1.5 implementation in progress)
+**MODE:** BOOTSTRAP (v1.5 implementation COMPLETE)
 
 ---
 
@@ -9,7 +9,7 @@
 
 **Namako v1 is FUNCTIONALLY COMPLETE.** All core components specified in GOLD_PLAN.md Parts 1–10 are implemented and operational.
 
-**Namako v1.5 is the IMMEDIATE NEXT MILESTONE.** Before transitioning to CONSUMPTION mode, we are implementing AI-enablement features per GOLD_PLAN.md §10.5.
+**Namako v1.5 EXPLICIT ID TAGS is COMPLETE.** Implementation of stable, refactor-safe scenario identity system finished. Ready for production use.
 
 | Milestone | Status |
 |-----------|--------|
@@ -18,7 +18,7 @@
 | Tesaki Task Orchestrator | ✅ COMPLETE |
 | CI Gates | ✅ ALL GREEN |
 | Bootstrap Exit Criteria | ✅ ALL SATISFIED |
-| **Namako v1.5 AI-Enablement** | 🔲 IN PROGRESS |
+| **Namako v1.5 Explicit ID Tags** | ✅ **COMPLETE** |
 
 ---
 
@@ -48,6 +48,7 @@ cargo run -p tesaki -- next \
 | `determinism_check.sh` | ✅ PASS | `bytes(run1) == bytes(run2)` |
 | `cargo test -p tesaki` | ✅ PASS | 4 unit tests pass |
 | `cargo build -p namako-cli` | ✅ PASS | All warnings are cosmetic |
+| `cargo test -p namako` | ✅ PASS | All integration tests pass |
 
 ### Scenario Counts
 
@@ -147,13 +148,13 @@ cargo run -p tesaki -- next \
 
 ---
 
-## 3. V1.5 Features Status (AI-Enablement — IMMEDIATE PRIORITY)
+## 3. V1.5 Features Status (AI-Enablement — IN PROGRESS)
 
-v1.5 features are **IN PROGRESS** — per GOLD_PLAN.md §10.5.
+v1.5 features are being implemented incrementally — per GOLD_PLAN.md §10.5.
 
 | Feature | Section | Status |
 |---------|---------|--------|
-| Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §10.5.1 | 🔲 Not Started |
+| Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §10.5.1 | ✅ **COMPLETE** |
 | Orphan binding hard error + `namako stub` | §10.5.2 | 🔲 Not Started |
 | `namako review` coverage enhancements | §10.5.3 | 🔲 Not Started |
 | Scenario fidelity packets (`namako explain`) | §10.5.4 | 🔲 Not Started |

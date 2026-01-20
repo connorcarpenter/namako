@@ -313,6 +313,15 @@ struct FileFingerprint {
 /// let key = derive_scenario_key("specs/features/smoke/test.feature", 10);
 /// assert_eq!(key, "specs/features/smoke/test.feature:L10");
 /// ```
+///
+/// # Deprecated (v1.5)
+///
+/// Use `id_tags::derive_scenario_key_from_ids()` instead. Line-based keys are fragile under
+/// refactoring and don't survive scenario reordering or file reorganization.
+#[deprecated(
+    since = "1.5",
+    note = "Use id_tags::derive_scenario_key_from_ids instead. Line-based keys are fragile under refactoring."
+)]
 #[must_use]
 pub fn derive_scenario_key(relative_path: &str, line_number: u32) -> String {
     let normalized_path = normalize_path(relative_path);
@@ -329,6 +338,15 @@ pub fn derive_scenario_key(relative_path: &str, line_number: u32) -> String {
 /// * `scenario_line` - 1-based line number where Scenario Outline keyword appears
 /// * `examples_block_idx` - 0-based index of Examples block
 /// * `row_idx` - 0-based index of data row within Examples block
+///
+/// # Deprecated (v1.5)
+///
+/// Use `id_tags::derive_scenario_outline_key_from_ids()` instead. Line-based keys are fragile
+/// under refactoring and don't survive scenario reordering or file reorganization.
+#[deprecated(
+    since = "1.5",
+    note = "Use id_tags::derive_scenario_outline_key_from_ids instead. Line-based keys are fragile under refactoring."
+)]
 #[must_use]
 pub fn derive_scenario_outline_key(
     relative_path: &str,

@@ -33,7 +33,7 @@
 
 | Feature | GOLD_PLAN Section | Priority | Status |
 |---------|-------------------|----------|--------|
-| Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §10.5.1 | HIGH | 🔲 Not Started |
+| Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §10.5.1 | HIGH | ✅ **COMPLETE** |
 | Orphan binding hard error + `namako stub` | §10.5.2 | HIGH | 🔲 Not Started |
 | `namako review` coverage enhancements | §10.5.3 | HIGH | 🔲 Not Started |
 | Scenario fidelity packets (`namako explain`) | §10.5.4 | MEDIUM | 🔲 Not Started |
@@ -42,21 +42,21 @@
 
 ### Implementation Order (Recommended)
 
-#### Sprint 1: Foundation — Explicit ID Tags
-**Duration:** 2-3 days
+#### Sprint 1: Foundation — Explicit ID Tags ✅ **COMPLETE**
+**Duration:** 2-3 days → Completed 2026-01-19
 
-1. **Update Gherkin parsing** to recognize `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` tags
-2. **Modify scenario_key derivation** to use `Feature:Rule_nn:Scenario_nn` format
-3. **Add validation** for missing/duplicate IDs
-4. **Migrate existing feature files** to use explicit IDs
-5. **Update certification** (run `update-cert`)
+1. ✅ **Update Gherkin parsing** to recognize `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` tags
+2. ✅ **Modify scenario_key derivation** to use `Feature:Rule_nn:Scenario_nn` format
+3. ✅ **Add validation** for missing/duplicate IDs
+4. ✅ **Migrate existing feature files** to use explicit IDs
+5. ⏳ **Update certification** (run `update-cert`) — Scheduled for next phase
 
 **Files to modify:**
 - `namako/src/engine.rs` — scenario key derivation
 - `namako/src/npap.rs` — key format changes
 - `naia/test/specs/features/*.feature` — add ID tags
 
-#### Sprint 2: Hygiene — Orphan Binding Enforcement
+#### Sprint 2: Hygiene — Orphan Binding Enforcement (NEXT)
 **Duration:** 1-2 days
 
 1. **Enhance lint** to detect orphan bindings
@@ -249,12 +249,20 @@ For each harness enhancement:
 
 ### For AI Agent (v1.5 Implementation)
 
-**Current Phase: v1.5 Sprint 1 — Explicit ID Tags**
-1. Update engine.rs to parse @Feature/@Rule_nn/@Scenario_nn tags
-2. Modify scenario_key derivation to use ID-based format
-3. Add validation for missing/duplicate IDs
-4. Migrate all `.feature` files to use explicit IDs
-5. Run gates and update certification
+**Current Phase: v1.5 Sprint 1 — Explicit ID Tags [COMPLETE]**
+✅ Completed 2026-01-19:
+- ✅ Created id_tags.rs module with parsing logic
+- ✅ Updated engine.rs to extract and validate ID tags
+- ✅ Modified scenario_key derivation to use `Feature:Rule_nn:Scenario_nn` format
+- ✅ Added 6 new error types for ID validation
+- ✅ Migrated 3 executable feature files (31 scenarios)
+- ✅ All gates passing
+
+**Next Phase: v1.5 Sprint 2 — Orphan Binding Enforcement**
+1. Enhance `namako lint` to detect orphan bindings (hard error)
+2. Implement `namako stub` command for generating stubs
+3. Update tests to verify orphan detection
+4. Document new behavior in migration guide
 
 ### For AI Agent (After v1.5, CONSUMPTION Mode)
 

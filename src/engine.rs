@@ -10,7 +10,7 @@
 //! - Validates signatures (captures arity, docstring/datatable expectations)
 //! - Generates `resolved_plan.json`
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cucumber_expressions::Expression;
 use gherkin::{Feature, GherkinEnv};
@@ -19,6 +19,11 @@ use regex::Regex;
 use crate::npap::{
     PlannedStep, ResolvedPlan, ResolvedScenario, SemanticBinding,
     SemanticStepRegistry, compute_feature_fingerprint, derive_scenario_key,
+};
+
+#[cfg(feature = "npap")]
+use crate::id_tags::{
+    derive_scenario_key_from_ids, extract_feature_id, extract_rule_id, extract_scenario_id,
 };
 
 
@@ -61,6 +66,39 @@ pub enum ResolutionError {
         binding_id: String,
         expression: String,
         message: String,
+    },
+    /// Feature is missing @Feature(name) tag
+    MissingFeatureId {
+        feature_path: String,
+        feature_name: String,
+    },
+    /// Rule is missing @Rule_nn tag
+    MissingRuleId {
+        feature_path: String,
+        rule_name: String,
+    },
+    /// Scenario is missing @Scenario_nn tag
+    MissingScenarioId {
+        feature_path: String,
+        scenario_name: String,
+        rule_name: Option<String>,
+    },
+    /// Duplicate scenario key detected
+    DuplicateScenarioKey {
+        scenario_key: String,
+        feature_path: String,
+        scenario_name: String,
+    },
+    /// Duplicate rule ID within a feature
+    DuplicateRuleId {
+        feature_path: String,
+        rule_id: u32,
+    },
+    /// Duplicate scenario ID within a rule or feature
+    DuplicateScenarioId {
+        feature_path: String,
+        rule_name: Option<String>,
+        scenario_id: u32,
     },
 }
 
@@ -134,6 +172,75 @@ impl std::fmt::Display for ResolutionError {
                     f,
                     "Invalid cucumber expression in binding {binding_id}: \
                      \"{expression}\" - {message}"
+                )
+            }
+            Self::MissingFeatureId {
+                feature_path,
+                feature_name,
+            } => {
+                write!(
+                    f,
+                    "Missing @Feature(name) tag: feature \"{feature_name}\" in {feature_path} \
+                     must have a @Feature(snake_case_name) tag"
+                )
+            }
+            Self::MissingRuleId {
+                feature_path,
+                rule_name,
+            } => {
+                write!(
+                    f,
+                    "Missing @Rule_nn tag: rule \"{rule_name}\" in {feature_path} \
+                     must have a @Rule_nn tag (e.g., @Rule_01)"
+                )
+            }
+            Self::MissingScenarioId {
+                feature_path,
+                scenario_name,
+                rule_name,
+            } => {
+                let context = rule_name
+                    .as_ref()
+                    .map(|r| format!(" in rule \"{r}\""))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "Missing @Scenario_nn tag: scenario \"{scenario_name}\"{context} in {feature_path} \
+                     must have a @Scenario_nn tag (e.g., @Scenario_01)"
+                )
+            }
+            Self::DuplicateScenarioKey {
+                scenario_key,
+                feature_path,
+                scenario_name,
+            } => {
+                write!(
+                    f,
+                    "Duplicate scenario key: \"{scenario_key}\" for scenario \"{scenario_name}\" \
+                     in {feature_path}"
+                )
+            }
+            Self::DuplicateRuleId {
+                feature_path,
+                rule_id,
+            } => {
+                write!(
+                    f,
+                    "Duplicate @Rule_{rule_id:02} tag in {feature_path}"
+                )
+            }
+            Self::DuplicateScenarioId {
+                feature_path,
+                rule_name,
+                scenario_id,
+            } => {
+                let context = rule_name
+                    .as_ref()
+                    .map(|r| format!(" in rule \"{r}\""))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "Duplicate @Scenario_{scenario_id:02} tag{context} in {feature_path}"
                 )
             }
         }
@@ -299,6 +406,23 @@ impl ResolutionEngine {
         errors: &mut Vec<ResolutionError>,
         _warnings: &mut Vec<String>,
     ) {
+        // PHASE 2.2a: Extract and validate feature-level ID tags
+        #[cfg(feature = "npap")]
+        let feature_id = match extract_feature_id(&feature.tags) {
+            Some(id) => id,
+            None => {
+                errors.push(ResolutionError::MissingFeatureId {
+                    feature_path: path.to_string(),
+                    feature_name: feature.name.clone(),
+                });
+                return; // Cannot proceed without feature ID
+            }
+        };
+
+        // PHASE 2.2b: Track scenario keys to detect duplicates within this feature
+        let mut seen_scenario_keys: HashSet<String> = HashSet::new();
+        let mut seen_rule_ids: HashSet<u32> = HashSet::new();
+
         // Resolve feature-level background steps once (they get prepended to each scenario)
         let feature_background_steps = self.resolve_background_steps(
             feature.background.as_ref(),
@@ -306,15 +430,47 @@ impl ResolutionEngine {
             errors,
         );
 
+        // PHASE 2.2c: Process feature-level scenarios (no rule context)
         for scenario in &feature.scenarios {
             // Skip deferred scenarios - they are excluded from the executable plan
             if is_deferred_scenario(scenario) {
                 continue;
             }
 
-            // Derive scenario key (line is usize, convert to u32)
-            let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
-            let scenario_key = derive_scenario_key(path, line_u32);
+            // Extract and validate scenario-level ID tags
+            #[cfg(feature = "npap")]
+            let scenario_id = match extract_scenario_id(&scenario.tags) {
+                Some(id) => id,
+                None => {
+                    errors.push(ResolutionError::MissingScenarioId {
+                        feature_path: path.to_string(),
+                        scenario_name: scenario.name.clone(),
+                        rule_name: None,
+                    });
+                    continue; // Skip this scenario
+                }
+            };
+
+            // Derive scenario key from explicit IDs (v1.5 format)
+            #[cfg(feature = "npap")]
+            let scenario_key = derive_scenario_key_from_ids(&feature_id, None, &scenario_id);
+
+            // Fallback to line-based key if feature flag not enabled (v1 compat)
+            #[cfg(not(feature = "npap"))]
+            let scenario_key = {
+                let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
+                derive_scenario_key(path, line_u32)
+            };
+
+            // Check for duplicate scenario keys within this feature
+            if !seen_scenario_keys.insert(scenario_key.clone()) {
+                errors.push(ResolutionError::DuplicateScenarioKey {
+                    scenario_key: scenario_key.clone(),
+                    feature_path: path.to_string(),
+                    scenario_name: scenario.name.clone(),
+                });
+                continue; // Skip this scenario
+            }
 
             // Start with background steps, then scenario steps
             let mut resolved_steps = feature_background_steps.clone();
@@ -338,8 +494,31 @@ impl ResolutionEngine {
             });
         }
 
-        // Handle rules (nested scenarios)
+        // PHASE 2.2d: Process rules and their scenarios
         for rule in &feature.rules {
+            // Extract and validate rule-level ID tags
+            #[cfg(feature = "npap")]
+            let rule_id = match extract_rule_id(&rule.tags) {
+                Some(id) => id,
+                None => {
+                    errors.push(ResolutionError::MissingRuleId {
+                        feature_path: path.to_string(),
+                        rule_name: rule.name.clone(),
+                    });
+                    continue; // Skip this rule
+                }
+            };
+
+            // Check for duplicate rule IDs within this feature
+            #[cfg(feature = "npap")]
+            if !seen_rule_ids.insert(rule_id.0) {
+                errors.push(ResolutionError::DuplicateRuleId {
+                    feature_path: path.to_string(),
+                    rule_id: rule_id.0,
+                });
+                continue; // Skip this rule
+            }
+
             // Rules can have their own background (in addition to feature background)
             let rule_background_steps = self.resolve_background_steps(
                 rule.background.as_ref(),
@@ -353,8 +532,40 @@ impl ResolutionEngine {
                     continue;
                 }
 
-                let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
-                let scenario_key = derive_scenario_key(path, line_u32);
+                // Extract and validate scenario-level ID tags
+                #[cfg(feature = "npap")]
+                let scenario_id = match extract_scenario_id(&scenario.tags) {
+                    Some(id) => id,
+                    None => {
+                        errors.push(ResolutionError::MissingScenarioId {
+                            feature_path: path.to_string(),
+                            scenario_name: scenario.name.clone(),
+                            rule_name: Some(rule.name.clone()),
+                        });
+                        continue; // Skip this scenario
+                    }
+                };
+
+                // Derive scenario key from explicit IDs (v1.5 format)
+                #[cfg(feature = "npap")]
+                let scenario_key = derive_scenario_key_from_ids(&feature_id, Some(&rule_id), &scenario_id);
+
+                // Fallback to line-based key if feature flag not enabled (v1 compat)
+                #[cfg(not(feature = "npap"))]
+                let scenario_key = {
+                    let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
+                    derive_scenario_key(path, line_u32)
+                };
+
+                // Check for duplicate scenario keys within this rule
+                if !seen_scenario_keys.insert(scenario_key.clone()) {
+                    errors.push(ResolutionError::DuplicateScenarioKey {
+                        scenario_key: scenario_key.clone(),
+                        feature_path: path.to_string(),
+                        scenario_name: scenario.name.clone(),
+                    });
+                    continue; // Skip this scenario
+                }
 
                 // Feature background first, then rule background, then scenario steps
                 let mut resolved_steps = feature_background_steps.clone();
