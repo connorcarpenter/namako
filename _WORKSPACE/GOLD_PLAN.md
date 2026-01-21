@@ -25,6 +25,7 @@
 10. [The Spec-Driven Development Loop](#part-10-the-spec-driven-development-loop)
     - [10.5 AI-Enablement Features](#part-105-ai-enablement-features)
     - [10.7 Runner Integration](#part-107-runner-integration--tesaki--coding-agent-integration)
+    - [10.8 Interactive Developer Experience (v1.8)](#part-108-tesaki-v18--interactive-developer-experience)
 11. [Namako v2 — Deferred Publish-Grade Features](#part-11-namako-v2--deferred-publish-grade-features)
     - [11.11 Multi-Language Support](#1111-multi-language-support-language-neutral-engine-language-specific-adapters)
     - [11.12 Adapter SDKs](#1112-adapter-sdks-v2)
@@ -92,6 +93,17 @@ This separation ensures reproducibility, auditability, and model/provider indepe
 | Feature fingerprint hashing | ✅ | Content-based (cosmetic changes affect hash) |
 | Canonical JSON encoding | ✅ | Deterministic serialization |
 | Rust adapter (Naia) | ✅ | NPA protocol |
+
+### v1.8 Planned Enhancements
+
+| Feature | Description | Section |
+|---------|-------------|---------|
+| Interactive sessions | `tesaki` starts TTY session with natural language | §10.8.2 |
+| RepoState model | Computed internal state from Namako packets | §10.8.3 |
+| 5-stage workflow | Refine Spec → Structure → Tests → SUT → Finalize | §10.8.4 |
+| Edit-surface policies | Explicit Spec/Tests/SUT locks per mission | §10.8.5 |
+| Mission Types | Typed task templates (17+ types) | §10.8.6 |
+| Session intents | Natural language → constraint interpretation | §10.8.7 |
 
 ### v2 Planned Enhancements
 
@@ -1681,6 +1693,396 @@ EOF
 ```
 
 **User repeats `tesaki run`** to continue development. Each invocation is atomic and safe.
+
+---
+
+## Part 10.8: Tesaki v1.8 — Interactive Developer Experience
+
+**v1.8 builds on v1.7 Runner Integration to deliver the full interactive developer experience.** This section specifies the UX layer that transforms Tesaki from a batch orchestrator into an interactive development companion.
+
+### 10.8.0 Design Principles (Normative)
+
+1. **Tesaki is "personal Claude Code" with repo state awareness.** Users talk naturally; Tesaki computes truth from Namako packets and dispatches missions.
+2. **One mission at a time.** Even in interactive mode, Tesaki executes exactly one mission per cycle, then re-validates.
+3. **Stages are a lens, not a wizard.** The 5-stage workflow filters task selection; users can jump stages at any time.
+4. **Edit surfaces are explicit.** Every mission declares which surfaces (Spec/Tests/SUT) are locked or unlocked.
+5. **Propagation is automatic.** Edits ripple through: spec changes → binding needs → SUT work. Tesaki recomputes and continues.
+
+### 10.8.1 System Boundaries (Normative)
+
+This boundary is non-negotiable and extends §10.7.1:
+
+| Layer | Responsibility | Determinism |
+|-------|----------------|-------------|
+| **Namako** | Parse, resolve, measure, emit packets | MUST be deterministic |
+| **Tesaki** | Orchestrate, compute RepoState, select missions, invoke runners | Session state is stateful; mission selection is deterministic |
+| **Runner** | Execute one mission, apply edits, return | NOT deterministic (AI-driven) |
+| **SUT** | The system being built | N/A |
+
+**Tesaki owns:**
+- Interactive session management
+- RepoState computation from Namako packets
+- Stage lens and edit-surface policy enforcement
+- Mission type selection and brief generation
+- Natural language intent interpretation
+
+**Tesaki does NOT own:**
+- Truth measurement (Namako only)
+- Code generation (Runner only)
+- Baseline updates without governance
+
+### 10.8.2 CLI Commands (Normative)
+
+#### Primary Commands
+
+| Command | Description |
+|---------|-------------|
+| `tesaki` | Start an **interactive session** (TTY). Natural language interface over computed repo state. |
+| `tesaki run` | Run **exactly one mission cycle** and exit (headless-friendly). Per §10.7. |
+
+#### Supporting Commands
+
+| Command | Description |
+|---------|-------------|
+| `tesaki status` | Short computed state summary (human + machine readable) |
+| `tesaki explain` | Computed "what/why" view without running a mission |
+| `tesaki config` | Config discovery + diagnostics |
+
+Everything else is expressed as **session intent** (§10.8.6), not subcommands.
+
+### 10.8.3 RepoState: Computed Truth from Namako Packets (Normative)
+
+Tesaki's internal model is computed from Namako packets. It MUST NOT re-derive semantics by parsing raw artifacts.
+
+#### Required Packet Inputs
+
+| Packet | Source | Purpose |
+|--------|--------|---------|
+| `status.json` | `namako status --json` | Gate states, drift, failures |
+| `review.json` | `namako review` | Coverage, candidates, missing bindings |
+| `explain.json` | `namako explain` | Scenario fidelity details |
+| `gate.json` | `namako gate --json` | Pass/fail gate with structured failures |
+
+#### RepoState Model (Normative Schema)
+
+```
+RepoState {
+  // Gate states
+  lint_status: pass | fail | stale
+  run_status: pass | fail | stale | not_run
+  verify_status: pass | fail | stale | not_run
+
+  // Issue categories (derived from packets)
+  spec_issues: [SpecIssue]           // Underspecified intent, ambiguity
+  structure_issues: [StructureIssue] // Missing identity tags, parse errors
+  binding_issues: [BindingIssue]     // Missing steps, weak assertions
+  sut_issues: [SutIssue]             // Tests exist but fail
+  global_blockers: [Blocker]         // Build/tooling/environment
+
+  // Candidate task queue
+  candidate_tasks: [CandidateTask]   // Sorted by priority
+
+  // Identity
+  current_identity: Identity
+  baseline_identity: Identity | null
+  drift: DriftInfo | null
+}
+```
+
+**Invariant:** RepoState MUST be recomputed after every mission. Tesaki never relies on "chat memory" for state.
+
+### 10.8.4 The 5-Stage Workflow (Normative)
+
+Stages are a **UX lens** over task selection with default **edit-surface policies**. Users can override at any time.
+
+#### Stage Definitions
+
+| Stage | Focus | Default Surfaces |
+|-------|-------|------------------|
+| **Refine Spec** | Improve feature intent, add/clarify scenarios | Spec: UNLOCKED, Tests: LOCKED, SUT: LOCKED |
+| **Structure Spec** | Normalize identity tags, fix Gherkin structure | Spec: UNLOCKED, Tests: LOCKED, SUT: LOCKED |
+| **Implement Tests** | Create bindings, strengthen assertions | Spec: LOCKED, Tests: UNLOCKED, SUT: LOCKED |
+| **Implement SUT** | Make tests pass by implementing behavior | Spec: LOCKED, Tests: LOCKED, SUT: UNLOCKED |
+| **Finalize** | Verification, summaries, clean stopping point | Spec: LOCKED, Tests: LOCKED, SUT: LOCKED |
+
+#### Auto-Stage Detection (Normative)
+
+Tesaki SHOULD infer the appropriate stage from RepoState:
+
+1. **Refine Spec** — If `spec_issues` is non-empty
+2. **Structure Spec** — If `structure_issues` is non-empty
+3. **Implement Tests** — If `binding_issues` is non-empty
+4. **Implement SUT** — If `sut_issues` is non-empty (tests exist but fail)
+5. **Finalize** — If all gates pass and no issues remain
+
+#### Stage Override
+
+Users MAY override the detected stage via session intent:
+- "Jump back to refining the spec"
+- "Focus on bindings only"
+- "Skip to SUT implementation"
+
+### 10.8.5 Edit-Surface Policies (Normative)
+
+Every mission MUST declare explicit surface policies.
+
+#### Surface Definition
+
+| Surface | Description | Example Paths |
+|---------|-------------|---------------|
+| **Spec** | Feature files and spec artifacts | `test/specs/**/*.feature` |
+| **Tests/Bindings** | Step bindings, harness, test infrastructure | `test/tests/**`, `test/harness/**` |
+| **SUT** | System under test implementation | `src/**`, `client/**`, `server/**` |
+
+#### Policy States
+
+| State | Meaning |
+|-------|---------|
+| `LOCKED` | Runner MUST NOT edit files in this surface |
+| `UNLOCKED` | Runner MAY edit files in this surface |
+
+#### Policy in Mission Bundle
+
+The `POLICY.md` (or v1.8 `MISSION.md`) MUST include:
+
+```markdown
+## Edit Surfaces
+
+| Surface | Policy | Paths |
+|---------|--------|-------|
+| Spec | LOCKED | `test/specs/**/*.feature` |
+| Tests/Bindings | UNLOCKED | `test/tests/**`, `test/harness/**` |
+| SUT | LOCKED | `src/**`, `client/**`, `server/**` |
+```
+
+### 10.8.6 Mission Types (Normative)
+
+A **Mission Type** is a named operation template encoding:
+- Required inputs and context
+- Default edit-surface policy
+- Expected validation signals
+- What Namako evidence should improve afterward
+
+#### Canonical Mission Types (v1.8)
+
+**Spec Refinement:**
+
+| Type | Stage | Description |
+|------|-------|-------------|
+| `RefineFeatureIntent` | Refine Spec | Improve feature intent comments (scope, non-goals) |
+| `AddOrClarifyScenario` | Refine Spec | Add/adjust scenarios to cover edges |
+| `ResolveAmbiguousRequirement` | Refine Spec | Turn "vibes" into falsifiable statements |
+
+**Spec Structure:**
+
+| Type | Stage | Description |
+|------|-------|-------------|
+| `NormalizeIdentityTags` | Structure Spec | Ensure @Feature/@Rule(nn)/@Scenario(nn) exist |
+| `FixGherkinStructure` | Structure Spec | Repair malformed Gherkin, parse failures |
+
+**Tests & Bindings:**
+
+| Type | Stage | Description |
+|------|-------|-------------|
+| `CreateMissingBindings` | Implement Tests | Create step bindings for runnable scenarios |
+| `StrengthenThenAssertions` | Implement Tests | Improve "Then" checks to be specific and stable |
+| `RefactorBindingsForClarity` | Implement Tests | Clean step reuse without collapsing meaning |
+
+**SUT Implementation:**
+
+| Type | Stage | Description |
+|------|-------|-------------|
+| `ImplementBehaviorForScenario` | Implement SUT | Implement missing behavior to pass a scenario |
+| `FixRegressionFromGateFailure` | Implement SUT | Diagnose and fix a new failure |
+
+**Finalize:**
+
+| Type | Stage | Description |
+|------|-------|-------------|
+| `SummarizeAndClose` | Finalize | Produce summary of changes, what passes, what remains |
+| `CleanupAfterSuccess` | Finalize | Ensure no partial artifacts, clean stop |
+
+**Meta (No Runner):**
+
+| Type | Stage | Description |
+|------|-------|-------------|
+| `ExplainState` | N/A | Synthesize state from packets (Tesaki local) |
+| `TriageFailures` | N/A | Cluster gate failures into likely causes |
+
+#### Mission Type Selection (Normative)
+
+Given a RepoState, Tesaki selects the mission type by:
+
+1. Identify the highest-priority issue category
+2. Select the mission type that addresses that category
+3. Apply stage lens filtering if user has constrained stages
+4. Generate mission brief with type-specific content
+
+### 10.8.7 Session Intents (Normative)
+
+In interactive mode, users speak naturally. Tesaki interprets input as constraints on:
+
+- **Stage lens** — Which stage to operate in
+- **Surface locks** — Override default locks
+- **Scope** — What "done" means for this session
+- **Focus** — Which feature/scenario to prioritize
+
+#### Intent Examples
+
+| User Input | Interpreted Constraints |
+|------------|------------------------|
+| "Focus on bindings only" | Stage = Implement Tests; Spec: LOCKED, SUT: LOCKED |
+| "Jump back to refining the spec" | Stage = Refine Spec; Spec: UNLOCKED |
+| "Tell me what's failing and why" | No mission; run ExplainState locally |
+| "Don't touch tests—fix the SUT" | Stage = Implement SUT; Tests: LOCKED, SUT: UNLOCKED |
+| "Unlock spec too" | Spec: UNLOCKED (persists until re-locked) |
+
+#### Constraint Acknowledgment
+
+Tesaki MUST restate interpreted constraints before acting:
+
+```
+> Got it: Stage = Implement Tests; Spec LOCKED; SUT LOCKED.
+> Running mission: CreateMissingBindings for @Scenario(03)
+```
+
+### 10.8.8 Mission Bundle v1.8 Structure (Normative)
+
+v1.8 updates the mission bundle structure from §10.7.5:
+
+```
+.tesaki/missions/<mission_id>/
+├── MISSION.md              # Mission brief with type, stage, surfaces
+├── INPUTS/                 # Frozen Namako packet snapshots
+│   ├── status.json
+│   ├── review.json
+│   ├── explain.json        # If relevant to mission
+│   ├── gate.json           # Pre-mission gate state
+│   └── workspace.json
+├── RUNNER_OUTPUT/          # Runner writes here
+│   ├── attempt_report.md   # Runner's self-reported summary
+│   ├── stop_reason.json    # Structured stop reason
+│   └── transcript.txt      # Optional session trace
+└── POST_GATE.json          # Post-mission gate result
+```
+
+#### MISSION.md Template (Normative)
+
+```markdown
+# Mission <id>
+
+**Type:** <MissionType>
+**Stage:** <Stage>
+**Target:** <scenario_key or feature_path>
+
+## Surfaces
+
+| Surface | Policy |
+|---------|--------|
+| Spec | <LOCKED|UNLOCKED> |
+| Tests/Bindings | <LOCKED|UNLOCKED> |
+| SUT | <LOCKED|UNLOCKED> |
+
+## Objective
+
+<Type-specific objective description>
+
+## Context
+
+<Relevant excerpts from INPUTS/ packets>
+
+## Validation
+
+After runner exit:
+1. `namako gate --json` must pass
+2. <Type-specific expected evidence change>
+
+## Budgets
+
+| Limit | Value |
+|-------|-------|
+| Max files changed | <N> |
+| Max runtime (seconds) | <N> |
+
+---
+*Generated by Tesaki v1.8*
+```
+
+### 10.8.9 Propagation Semantics (Normative)
+
+A core v1.8 goal:
+
+> If spec/tests/SUT is edited, Tesaki automatically computes downstream work until the repo is back to a clean, gated state.
+
+This is NOT a special command. It is the **default consequence of the loop**:
+
+1. **Spec edits** → Namako packets change → new scenarios appear → binding needs appear → SUT work appears → loop continues
+2. **Binding edits** → runnable set changes → gate failures change → SUT work appears → loop continues
+3. **SUT edits** → failing scenarios shrink → loop continues
+
+**Propagation is just:** recompute RepoState → pick next mission → repeat until DONE.
+
+### 10.8.10 Interactive Session Flow (Normative)
+
+```
+1. User runs `tesaki`
+
+2. Tesaki computes RepoState:
+   - namako status --json
+   - namako review
+   - namako gate --json
+
+3. Tesaki displays summary:
+   > Spec: 1 issue • Structure: 0 • Bindings: 4 missing • SUT: 2 failing
+   > Stage: Implement Tests
+   > Proposed: CreateMissingBindings for @Scenario(03)
+
+4. User responds (natural language or command):
+   - "Run it" → Execute proposed mission
+   - "Why?" → Explain the selection
+   - "Focus on SUT instead" → Change stage, re-propose
+   - "Quit" → Exit session
+
+5. If mission runs:
+   - Create mission bundle
+   - Invoke runner
+   - Run namako gate --json
+   - Update RepoState
+   - Loop to step 3
+
+6. Session continues until:
+   - DONE (no eligible work)
+   - BLOCKED (external dependency)
+   - HUMAN_REQUIRED (decision needed)
+   - User quits
+```
+
+### 10.8.11 Stop Reasons (Normative)
+
+Every mission ends with a structured stop reason:
+
+| Reason | Description |
+|--------|-------------|
+| `DONE` | No eligible work within scope; gates satisfactory |
+| `HUMAN_REQUIRED` | Decision needed: ambiguity, tradeoff, missing requirement |
+| `BLOCKED` | External dependency Tesaki cannot resolve |
+| `FAILED` | Unexpected failure: runner crash, tool error |
+
+Stop reasons MUST include:
+- What was attempted
+- What evidence triggered the stop
+- What Tesaki recommends next
+
+### 10.8.12 Non-Goals for v1.8 (Normative)
+
+To keep v1.8 focused, we explicitly defer:
+
+- Large suite of stage-specific CLI subcommands (session intents cover it)
+- Arbitrary numeric budgets like "max LoC changed" as first-class concept
+- Multi-runner consensus schemes
+- Auto-commits, auto-branching (developer-owned)
+- Multi-turn context tracking with undo/rollback
+- Session persistence across restarts
 
 ---
 
