@@ -50,7 +50,7 @@ spec (.feature) → engine(resolve) → plan → adapter(execute) → evidence �
 - Plan-driven execution (adapter executes by binding ID only, no text matching)
 - Hash-based integrity evidence
 - CI-gated certification via `namako verify`
-- Explicit identity tags (`@Feature`, `@Rule_nn`, `@Scenario_nn`) for refactor-safe scenario keys
+- Explicit identity tags (`@Feature`, `@Rule(nn)`, `@Scenario(nn)`) for refactor-safe scenario keys
 - Rich AI-actionable packets (`review`, `explain`, `status --json`)
 - Orphan binding detection with `namako stub` mitigation
 
@@ -85,7 +85,7 @@ This separation ensures reproducibility, auditability, and model/provider indepe
 
 | Capability | Status | Notes |
 |------------|--------|-------|
-| Explicit ID tags | ✅ | `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` |
+| Explicit ID tags | ✅ | `@Feature(name)`, `@Rule(nn)`, `@Scenario(nn)` |
 | Orphan binding hard error | ✅ | With `namako stub` mitigation |
 | Rich AI packets | ✅ | `review`, `explain`, `status --json` |
 | Runner integration | ✅ | `tesaki run` with Claude Code/Codex backends |
@@ -747,7 +747,7 @@ If any check fails, the adapter MUST refuse to execute and exit non-zero.
 
 > **Note (Normative):** For hashed objects (including resolved plan steps), optional fields such as `docstring` and `datatable` MUST be explicitly present. Absence MUST be encoded as `null`, not omitted.
 
-**Scenario Key:** Use a deterministic key derived from explicit identity tags per §6.4.3 (e.g., `connection_lifecycle:Rule_01:Scenario_03`).
+**Scenario Key:** Use a deterministic key derived from explicit identity tags per §6.4.3 (e.g., `connection_lifecycle:Rule(01):Scenario(03)`).
 
 #### 6.4.2 Run Report (`run_report.json`)
 
@@ -792,21 +792,21 @@ The `scenario_key` MUST be globally unique within a project and MUST be derived 
 
 **Derivation Rule (Explicit IDs):**
 
-Scenario keys are derived from explicit identity tags (`@Feature(name)`, `@Rule_nn`, `@Scenario_nn`):
+Scenario keys are derived from explicit identity tags (`@Feature(name)`, `@Rule(nn)`, `@Scenario(nn)`):
 
 ```
-scenario_key = FeatureName + ":" + "Rule_" + nn + ":" + "Scenario_" + mm
+scenario_key = FeatureName + ":" + "Rule(" + nn + ")" + ":" + "Scenario(" + mm + ")"
 ```
 
 For scenarios directly under a Feature (no Rule):
 ```
-scenario_key = FeatureName + ":" + "Scenario_" + mm
+scenario_key = FeatureName + ":" + "Scenario(" + mm + ")"
 ```
 
 **Examples:**
 ```
-connection_lifecycle:Rule_01:Scenario_03
-namako_smoke_test:Scenario_01
+connection_lifecycle:Rule(01):Scenario(03)
+namako_smoke_test:Scenario(01)
 ```
 
 **Scenario Outline Extension:**
@@ -814,7 +814,7 @@ namako_smoke_test:Scenario_01
 For Scenario Outlines with Examples tables, each example row generates a distinct scenario. The key MUST include the example identifier:
 
 ```
-scenario_key = FeatureName + ":" + "Rule_" + nn + ":" + "Scenario_" + mm + ":E" + eid
+scenario_key = FeatureName + ":" + "Rule(" + nn + ")" + ":" + "Scenario(" + mm + ")" + ":E" + eid
 ```
 
 Where `eid` is:
@@ -823,20 +823,20 @@ Where `eid` is:
 
 **Example:**
 ```
-auth:Rule_02:Scenario_01:Evalid_token
-auth:Rule_02:Scenario_01:E0
+auth:Rule(02):Scenario(01):Evalid_token
+auth:Rule(02):Scenario(01):E0
 ```
 
 **Collision Detection (Normative):**
 
 If two scenarios in a project compute the same `scenario_key`:
 - Lint MUST emit a **hard error**: `SCENARIO KEY COLLISION: <key>`
-- This indicates duplicate `(Feature, Rule_nn, Scenario_nn)` tuples or a bug in key derivation
+- This indicates duplicate `(Feature, Rule(nn), Scenario(nn))` tuples or a bug in key derivation
 
 **Required Tags (Normative per §10.5.1):**
 - Features MUST have `@Feature(name)` tag
-- Rules MUST have `@Rule_nn` tag
-- Scenarios MUST have `@Scenario_nn` tag
+- Rules MUST have `@Rule(nn)` tag
+- Scenarios MUST have `@Scenario(nn)` tag
 
 ### 6.5 Execution Payload Contract (Normative)
 
@@ -1256,7 +1256,7 @@ These features enable robust AI-driven autonomous development. They maximize Tes
 
 | Feature | Description |
 |---------|-------------|
-| Explicit ID tags | `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` — identity survives refactoring |
+| Explicit ID tags | `@Feature(name)`, `@Rule(nn)`, `@Scenario(nn)` — identity survives refactoring |
 | Orphan binding hard error | Prevents dead code accumulation; `namako stub` mitigation |
 | `namako review` | Rich work packets for Tesaki task selection |
 | `namako explain` | Scenario fidelity packets for AI-assisted review |
@@ -1270,19 +1270,19 @@ Structural identity tags for refactor-safe scenario keys:
 | Tag | Applies To | Format | Example |
 |-----|-----------|--------|---------|
 | `@Feature(name)` | Feature | Alphanumeric snake_case | `@Feature(connection_lifecycle)` |
-| `@Rule_nn` | Rule | Numeric index (1-based) | `@Rule_01`, `@Rule_02` |
-| `@Scenario_nn` | Scenario | Numeric index (1-based) | `@Scenario_01`, `@Scenario_02` |
+| `@Rule(nn)` | Rule | Numeric index (1-based) | `@Rule(01)`, `@Rule(02)` |
+| `@Scenario(nn)` | Scenario | Numeric index (1-based) | `@Scenario(01)`, `@Scenario(02)` |
 | `EID` column | Examples row | String identifier | `EID: auth_success` |
 
 **Invariants:**
 - Features MUST have `@Feature(name)` tag
-- Rules MUST have `@Rule_nn` tag
-- Scenarios MUST have `@Scenario_nn` tag
+- Rules MUST have `@Rule(nn)` tag
+- Scenarios MUST have `@Scenario(nn)` tag
 - Example rows SHOULD have `EID` column (MUST for v2)
 
 **Derivation Rules:**
-- `scenario_key` = `Feature + ":" + Rule_nn + ":" + Scenario_nn` (or `+ ":E" + EID` for outline rows)
-- Collision detection: duplicate `(Feature, Rule_nn, Scenario_nn)` tuples → hard error
+- `scenario_key` = `Feature + ":" + Rule(nn) + ":" + Scenario(nn)` (or `+ ":E" + EID` for outline rows)
+- Collision detection: duplicate `(Feature, Rule(nn), Scenario(nn))` tuples → hard error
 
 ### 10.5.2 Orphan Bindings as Hard Error (Normative)
 
@@ -1453,7 +1453,7 @@ The AI-enablement features are complete when:
 
 | Criterion | Description |
 |-----------|-------------|
-| **Explicit IDs enforced** | All features require @Feature/@Rule_nn/@Scenario_nn; scenario_key uses ID-based format |
+| **Explicit IDs enforced** | All features require @Feature/@Rule(nn)/@Scenario(nn); scenario_key uses ID-based format |
 | **Orphan → hard error** | `namako lint` fails on orphan bindings; `namako stub` generates placeholders |
 | **Review packets enhanced** | All 5 packet sections present in `namako review` output |
 | **Explain packets complete** | `namako explain` outputs full fidelity packets |
@@ -1714,8 +1714,8 @@ This section captures all hardening features not currently implemented but desig
 
 **What it adds:**
 - `@Feature(name)` on Features — explicit, refactor-stable feature identity
-- `@Rule_nn` on Rules — explicit rule identity
-- `@Scenario_nn` on Scenarios — explicit scenario identity
+- `@Rule(nn)` on Rules — explicit rule identity
+- `@Scenario(nn)` on Scenarios — explicit scenario identity
 - `EID` column in Scenario Outline examples — explicit row identity
 
 **Why it matters:**
@@ -2152,7 +2152,7 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 |---------|--------|-------|
 | Resolved Execution Plan | **✅ Implemented** | Core artifact |
 | `resolved_plan_hash` | **✅ Implemented** | Core identity field |
-| `scenario_key` derivation | **✅ Implemented** | §6.4.3 — explicit ID format (`Feature:Rule_nn:Scenario_nn`) |
+| `scenario_key` derivation | **✅ Implemented** | §6.4.3 — explicit ID format (`Feature:Rule(nn):Scenario(nn)`) |
 | Kind inference (And/But → effective) | **✅ Implemented** | Standard Gherkin semantics |
 | Signature enforcement | **✅ Implemented** | Hard error on mismatch; fully defined in §5.3 |
 | Strict ambiguity policy | **✅ Implemented** | >1 match → hard error |
@@ -2164,8 +2164,8 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 | Concept | Status | Notes |
 |---------|--------|-------|
 | `@Feature(name)` feature identity | **✅ Implemented** | Required tag (§10.5.1) |
-| `@Rule_nn` rule identity | **✅ Implemented** | Required tag (§10.5.1) |
-| `@Scenario_nn` scenario identity | **✅ Implemented** | Required tag (§10.5.1) |
+| `@Rule(nn)` rule identity | **✅ Implemented** | Required tag (§10.5.1) |
+| `@Scenario(nn)` scenario identity | **✅ Implemented** | Required tag (§10.5.1) |
 | `EID` example row identity | **✅ Implemented** (optional) | SHOULD have; MUST for v2 (§10.5.1) |
 | Expression-based binding ID | **✅ Implemented** | §4.2 |
 

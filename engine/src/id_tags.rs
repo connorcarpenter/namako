@@ -1,6 +1,6 @@
 //! Explicit ID Tag Parsing for Namako v1.5
 //!
-//! This module implements parsing of `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` tags
+//! This module implements parsing of `@Feature(name)`, `@Rule(nn)`, `@Scenario(nn)` tags
 //! per GOLD_PLAN §10.5.1.
 
 use regex::Regex;
@@ -12,16 +12,16 @@ static FEATURE_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^@?[Ff]eature\(([a-zA-Z][a-zA-Z0-9_]*)\)$").unwrap()
 });
 
-/// Regex for @Rule_nn tag - captures the numeric index
-/// Matches: @Rule_01, @Rule_1, Rule_01, etc.
+/// Regex for @Rule(nn) tag - captures the numeric index
+/// Matches: @Rule(01), @Rule(1), Rule(01), etc.
 static RULE_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^@?[Rr]ule_(\d+)$").unwrap()
+    Regex::new(r"^@?[Rr]ule\((\d+)\)$").unwrap()
 });
 
-/// Regex for @Scenario_nn tag - captures the numeric index
-/// Matches: @Scenario_01, @Scenario_1, Scenario_01, etc.
+/// Regex for @Scenario(nn) tag - captures the numeric index
+/// Matches: @Scenario(01), @Scenario(1), Scenario(01), etc.
 static SCENARIO_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^@?[Ss]cenario_(\d+)$").unwrap()
+    Regex::new(r"^@?[Ss]cenario\((\d+)\)$").unwrap()
 });
 
 /// Parsed explicit ID from a Feature's tags
@@ -49,7 +49,7 @@ pub fn extract_feature_id(tags: &[String]) -> Option<FeatureId> {
     None
 }
 
-/// Extract @Rule_nn from a list of tags
+/// Extract @Rule(nn) from a list of tags
 /// Returns None if no valid rule tag found
 pub fn extract_rule_id(tags: &[String]) -> Option<RuleId> {
     for tag in tags {
@@ -64,7 +64,7 @@ pub fn extract_rule_id(tags: &[String]) -> Option<RuleId> {
     None
 }
 
-/// Extract @Scenario_nn from a list of tags
+/// Extract @Scenario(nn) from a list of tags
 /// Returns None if no valid scenario tag found
 pub fn extract_scenario_id(tags: &[String]) -> Option<ScenarioId> {
     for tag in tags {
@@ -81,12 +81,12 @@ pub fn extract_scenario_id(tags: &[String]) -> Option<ScenarioId> {
 
 /// Derives scenario key from explicit IDs per GOLD_PLAN §10.5.1
 ///
-/// Format: `FeatureName:Rule_nn:Scenario_nn` or `FeatureName:Scenario_nn` (no rule)
+/// Format: `FeatureName:Rule(nn):Scenario(nn)` or `FeatureName:Scenario(nn)` (no rule)
 ///
 /// # Arguments
 /// * `feature_id` - The @Feature(name) value
-/// * `rule_id` - The @Rule_nn value (None for feature-level scenarios)
-/// * `scenario_id` - The @Scenario_nn value
+/// * `rule_id` - The @Rule(nn) value (None for feature-level scenarios)
+/// * `scenario_id` - The @Scenario(nn) value
 pub fn derive_scenario_key_from_ids(
     feature_id: &FeatureId,
     rule_id: Option<&RuleId>,
@@ -94,24 +94,21 @@ pub fn derive_scenario_key_from_ids(
 ) -> String {
     match rule_id {
         Some(RuleId(r)) => format!(
-            "{}:Rule_{:02}:Scenario_{:02}",
+            "{}:Rule({:02}):Scenario({:02})",
             feature_id.0, r, scenario_id.0
         ),
-        None => format!(
-            "{}:Scenario_{:02}",
-            feature_id.0, scenario_id.0
-        ),
+        None => format!("{}:Scenario({:02})", feature_id.0, scenario_id.0),
     }
 }
 
 /// Derives scenario outline example key with EID extension
 ///
-/// Format: `FeatureName:Rule_nn:Scenario_nn:E<eid>` or `FeatureName:Scenario_nn:E<eid>`
+/// Format: `FeatureName:Rule(nn):Scenario(nn):E<eid>` or `FeatureName:Scenario(nn):E<eid>`
 ///
 /// # Arguments
 /// * `feature_id` - The @Feature(name) value
-/// * `rule_id` - The @Rule_nn value (None for feature-level scenarios)
-/// * `scenario_id` - The @Scenario_nn value
+/// * `rule_id` - The @Rule(nn) value (None for feature-level scenarios)
+/// * `scenario_id` - The @Scenario(nn) value
 /// * `example_id` - The EID column value or fallback index
 pub fn derive_scenario_outline_key_from_ids(
     feature_id: &FeatureId,
@@ -147,19 +144,19 @@ mod tests {
 
     #[test]
     fn test_extract_rule_id() {
-        let tags = vec!["@Rule_01".to_string()];
+        let tags = vec!["@Rule(01)".to_string()];
         assert_eq!(extract_rule_id(&tags), Some(RuleId(1)));
     }
 
     #[test]
     fn test_extract_rule_id_double_digit() {
-        let tags = vec!["@Rule_12".to_string()];
+        let tags = vec!["@Rule(12)".to_string()];
         assert_eq!(extract_rule_id(&tags), Some(RuleId(12)));
     }
 
     #[test]
     fn test_extract_scenario_id() {
-        let tags = vec!["@Scenario_05".to_string()];
+        let tags = vec!["@Scenario(05)".to_string()];
         assert_eq!(extract_scenario_id(&tags), Some(ScenarioId(5)));
     }
 
@@ -170,7 +167,7 @@ mod tests {
         let scenario = ScenarioId(3);
         assert_eq!(
             derive_scenario_key_from_ids(&feature, Some(&rule), &scenario),
-            "connection_lifecycle:Rule_01:Scenario_03"
+            "connection_lifecycle:Rule(01):Scenario(03)"
         );
     }
 
@@ -180,7 +177,7 @@ mod tests {
         let scenario = ScenarioId(1);
         assert_eq!(
             derive_scenario_key_from_ids(&feature, None, &scenario),
-            "smoke:Scenario_01"
+            "smoke:Scenario(01)"
         );
     }
 
@@ -191,7 +188,7 @@ mod tests {
         let scenario = ScenarioId(1);
         assert_eq!(
             derive_scenario_outline_key_from_ids(&feature, Some(&rule), &scenario, "valid_token"),
-            "auth:Rule_02:Scenario_01:Evalid_token"
+            "auth:Rule(02):Scenario(01):Evalid_token"
         );
     }
 }

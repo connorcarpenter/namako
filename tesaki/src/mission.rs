@@ -482,7 +482,7 @@ mod tests {
         let task = MissionTask {
             name: "Test Task".to_string(),
             feature_path: "features/test.feature".to_string(),
-            rule_name: "Rule_01".to_string(),
+            rule_name: "Rule(01)".to_string(),
             description: "Implement the test scenario.".to_string(),
             missing_bindings: vec!["Given a test".to_string()],
             expected_postconditions: vec!["Gate passes".to_string()],
@@ -533,7 +533,7 @@ mod tests {
         let task = MissionTask {
             name: "Failing Task".to_string(),
             feature_path: "features/test.feature".to_string(),
-            rule_name: "Rule_01".to_string(),
+            rule_name: "Rule(01)".to_string(),
             description: "This will fail.".to_string(),
             missing_bindings: vec![],
             expected_postconditions: vec![],
@@ -582,7 +582,7 @@ mod tests {
         let task = MissionTask {
             name: "Gate Test".to_string(),
             feature_path: "features/test.feature".to_string(),
-            rule_name: "Rule_01".to_string(),
+            rule_name: "Rule(01)".to_string(),
             description: "Test gate result writing.".to_string(),
             missing_bindings: vec![],
             expected_postconditions: vec![],

@@ -46,7 +46,7 @@ pub struct ExplainArgs {
 pub struct ExplainOutput {
     /// Schema version
     pub version: u32,
-    /// Scenario key (v1.5 format: feature_id:Rule_nn:Scenario_nn)
+    /// Scenario key (v1.5 format: feature_id:Rule(nn):Scenario(nn))
     pub scenario_key: String,
     /// Scenario name
     pub scenario_name: String,

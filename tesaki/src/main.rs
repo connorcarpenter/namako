@@ -1865,7 +1865,7 @@ mod tests {
             PromotionCandidate {
                 scenario_name: "Real scenario".to_string(),
                 feature_path: "features/test.feature".to_string(),
-                rule_name: "Rule_01".to_string(),
+                rule_name: "Rule(01)".to_string(),
                 reuse_score: 5.0,
                 new_step_texts_estimate: 2,
                 blocker: BlockerType::Unknown,
@@ -1883,7 +1883,7 @@ mod tests {
             PromotionCandidate {
                 scenario_name: "Core blocker".to_string(),
                 feature_path: "features/core.feature".to_string(),
-                rule_name: "Rule_01".to_string(),
+                rule_name: "Rule(01)".to_string(),
                 reuse_score: 3.0,
                 new_step_texts_estimate: 1,
                 blocker: BlockerType::Core,

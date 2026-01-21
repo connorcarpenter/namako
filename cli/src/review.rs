@@ -149,7 +149,7 @@ pub struct DeferredItem {
 /// GOLD_PLAN §10.5.3 Section 2: Deferred scenario with full details
 #[derive(Debug, Clone, Serialize)]
 pub struct DeferredScenarioItem {
-    /// v1.5 scenario key (feature_id:Rule_nn:Scenario_nn)
+    /// v1.5 scenario key (feature_id:Rule(nn):Scenario(nn))
     pub scenario_key: String,
     /// Scenario name
     pub scenario_name: String,
@@ -856,7 +856,7 @@ fn build_deferred_items_section(candidates: &[PromotionCandidate]) -> Vec<Deferr
         .enumerate()
         .map(|(i, c)| {
             // Generate a synthetic scenario key for deferred scenarios
-            // Format: <feature_name>:<rule>:Scenario_<n>
+            // Format: <feature_name>:<rule>:Scenario(<n>)
             let feature_name = c.feature_path
                 .split('/')
                 .last()
@@ -869,11 +869,11 @@ fn build_deferred_items_section(candidates: &[PromotionCandidate]) -> Vec<Deferr
             let rule_part = if c.rule_name == "default" {
                 "".to_string()
             } else {
-                format!(":Rule_{:02}", 1) // Simplified - would need actual rule ID
+                format!(":Rule({:02})", 1) // Simplified - would need actual rule ID
             };
 
             let scenario_key = format!(
-                "{}{}:Scenario_{:02}",
+                "{}{}:Scenario({:02})",
                 feature_name,
                 rule_part,
                 i + 1

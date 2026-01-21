@@ -182,7 +182,7 @@ fn generate_stub_feature(orphans: &[OrphanBinding]) -> String {
     sorted_orphans.sort_by(|a, b| a.binding_id.cmp(&b.binding_id));
 
     for (i, orphan) in sorted_orphans.iter().enumerate() {
-        let scenario_id = format!("@Scenario_{:02}", i + 1);
+        let scenario_id = format!("@Scenario({:02})", i + 1);
         let step_text = expression_to_step_text(&orphan.expression);
         let short_id = &orphan.binding_id[..16.min(orphan.binding_id.len())];
 

@@ -72,12 +72,12 @@ pub enum ResolutionError {
         feature_path: String,
         feature_name: String,
     },
-    /// Rule is missing @Rule_nn tag
+    /// Rule is missing @Rule(nn) tag
     MissingRuleId {
         feature_path: String,
         rule_name: String,
     },
-    /// Scenario is missing @Scenario_nn tag
+    /// Scenario is missing @Scenario(nn) tag
     MissingScenarioId {
         feature_path: String,
         scenario_name: String,
@@ -190,8 +190,8 @@ impl std::fmt::Display for ResolutionError {
             } => {
                 write!(
                     f,
-                    "Missing @Rule_nn tag: rule \"{rule_name}\" in {feature_path} \
-                     must have a @Rule_nn tag (e.g., @Rule_01)"
+                    "Missing @Rule(nn) tag: rule \"{rule_name}\" in {feature_path} \
+                     must have a @Rule(nn) tag (e.g., @Rule(01))"
                 )
             }
             Self::MissingScenarioId {
@@ -205,8 +205,8 @@ impl std::fmt::Display for ResolutionError {
                     .unwrap_or_default();
                 write!(
                     f,
-                    "Missing @Scenario_nn tag: scenario \"{scenario_name}\"{context} in {feature_path} \
-                     must have a @Scenario_nn tag (e.g., @Scenario_01)"
+                    "Missing @Scenario(nn) tag: scenario \"{scenario_name}\"{context} in {feature_path} \
+                     must have a @Scenario(nn) tag (e.g., @Scenario(01))"
                 )
             }
             Self::DuplicateScenarioKey {
@@ -226,7 +226,7 @@ impl std::fmt::Display for ResolutionError {
             } => {
                 write!(
                     f,
-                    "Duplicate @Rule_{rule_id:02} tag in {feature_path}"
+                    "Duplicate @Rule({rule_id:02}) tag in {feature_path}"
                 )
             }
             Self::DuplicateScenarioId {
@@ -240,7 +240,7 @@ impl std::fmt::Display for ResolutionError {
                     .unwrap_or_default();
                 write!(
                     f,
-                    "Duplicate @Scenario_{scenario_id:02} tag{context} in {feature_path}"
+                    "Duplicate @Scenario({scenario_id:02}) tag{context} in {feature_path}"
                 )
             }
         }
@@ -933,7 +933,7 @@ mod tests {
 @Feature(simple_test)
 Feature: Simple test
 
-  @Scenario_01
+  @Scenario(01)
   Scenario: Client connects
     Given a server is running
     When a client connects
@@ -972,7 +972,7 @@ Feature: Simple test
 @Feature(and_but_test)
 Feature: And/But test
 
-  @Scenario_01
+  @Scenario(01)
   Scenario: With And/But
     Given a server is running
     And the server is configured
@@ -1005,7 +1005,7 @@ Feature: And/But test
 @Feature(missing_step)
 Feature: Missing step
 
-  @Scenario_01
+  @Scenario(01)
   Scenario: No binding
     Given a server is running
     When no binding exists for this
@@ -1030,7 +1030,7 @@ Feature: Missing step
 @Feature(captures)
 Feature: Captures
 
-  @Scenario_01
+  @Scenario(01)
   Scenario: User
     Given a user named "Alice"
 "#;
@@ -1055,7 +1055,7 @@ Feature: Captures
 @Feature(signature_mismatch)
 Feature: Signature mismatch
 
-  @Scenario_01
+  @Scenario(01)
   Scenario: Wrong arity
     Given a user named "Alice"
 "#;
@@ -1098,7 +1098,7 @@ Feature: Signature mismatch
 @Feature(orphan_test)
 Feature: Simple test
 
-  @Scenario_01
+  @Scenario(01)
   Scenario: Client connects
     Given a server is running
     When a client connects
@@ -1134,7 +1134,7 @@ Feature: Simple test
 @Feature(all_used)
 Feature: All used
 
-  @Scenario_01
+  @Scenario(01)
   Scenario: Both bindings used
     Given a server is running
     When a client connects

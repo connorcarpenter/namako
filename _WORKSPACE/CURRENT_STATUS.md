@@ -165,7 +165,7 @@ cargo run -p tesaki -- run \
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| Explicit ID tags | `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` | ✅ |
+| Explicit ID tags | `@Feature(name)`, `@Rule(nn)`, `@Scenario(nn)` | ✅ |
 | Orphan detection | Hard error on unused bindings | ✅ |
 | Enhanced `review` | 5 sections per GOLD_PLAN §10.5.3 | ✅ |
 | Fidelity packets | `explain` with binding_expression/source_location | ✅ |
@@ -185,7 +185,7 @@ cargo run -p tesaki -- run \
 | `impl_hash` scheme | ✅ `token-fingerprint-v1\|blake3-256-lowerhex` |
 | Resolved plan schema | ✅ Per §6.4.1 |
 | Run report schema | ✅ Per §6.4.2 |
-| Scenario key derivation | ✅ `Feature:Rule_nn:Scenario_nn` format (explicit ID tags) |
+| Scenario key derivation | ✅ `Feature:Rule(nn):Scenario(nn)` format (explicit ID tags) |
 
 ### Part 7: Hashing & Identity — ✅ COMPLETE
 
@@ -230,7 +230,7 @@ All v1.5 features have been implemented per GOLD_PLAN.md §10.5.
 
 | Feature | Section | Status |
 |---------|---------|--------|
-| Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §10.5.1 | ✅ **COMPLETE** |
+| Explicit ID tags (@Feature/@Rule(nn)/@Scenario(nn)) | §10.5.1 | ✅ **COMPLETE** |
 | Orphan binding hard error + `namako stub` | §10.5.2 | ✅ **COMPLETE** |
 | `namako review` coverage enhancements | §10.5.3 | ✅ **COMPLETE** |
 | Scenario fidelity packets (`namako explain`) | §10.5.4 | ✅ **COMPLETE** |
@@ -351,7 +351,7 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 | Sprint | Focus | Status |
 |--------|-------|--------|
-| Sprint 1 | Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | ✅ COMPLETE |
+| Sprint 1 | Explicit ID tags (@Feature/@Rule(nn)/@Scenario(nn)) | ✅ COMPLETE |
 | Sprint 2 | Orphan binding enforcement + `namako stub` | ✅ COMPLETE |
 | Sprint 3 | Enhanced `namako review` packets | ✅ COMPLETE |
 | Sprint 4 | Enhanced `namako explain` + `status` | ✅ COMPLETE |
