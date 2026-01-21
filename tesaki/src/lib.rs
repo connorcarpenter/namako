@@ -7,6 +7,7 @@ pub mod gate;
 pub mod mission;
 pub mod runner;
 pub mod claude_code_runner;
+pub mod codex_runner;
 pub mod runner_test;
 pub mod stop_reason;
 pub mod workspace;
