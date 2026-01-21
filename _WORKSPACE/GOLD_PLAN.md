@@ -95,7 +95,7 @@ This document explicitly separates:
 | Concern | v1 (KISS MVP) | v1.5 (AI-Enablement) | v2+ (Armor Plating) |
 |---------|---------------|----------------------|---------------------|
 | Scope | Minimum viable for Naia self-development | AI-driven autonomous development | Publish-grade hardening |
-| Timeline | ✅ Complete | Build now (immediate) | Build later (captured here) |
+| Timeline | ✅ Complete | ✅ Complete | Build later (captured here) |
 | Identity stability | Expression-based binding IDs | Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | Refactor-stable explicit IDs |
 | Feature hashing | Feature fingerprint (simpler) | Feature fingerprint | Full FeatureAstNorm |
 | Orphan policy | Warning only | Hard error + `namako stub` | Hard error + mitigation tools |
@@ -752,7 +752,7 @@ If any check fails, the adapter MUST refuse to execute and exit non-zero.
 
 > **Note (Normative):** For hashed objects (including resolved plan steps), optional fields such as `docstring` and `datatable` MUST be explicitly present. Absence MUST be encoded as `null`, not omitted.
 
-**Scenario Key:** For v1, use a deterministic key derived from file path + scenario name (see §6.4.3). v2+ may adopt explicit IDs.
+**Scenario Key:** Use a deterministic key derived from explicit identity tags per §6.4.3 (e.g., `connection_lifecycle:Rule_01:Scenario_03`).
 
 #### 6.4.2 Run Report (`run_report.json`)
 
@@ -791,53 +791,57 @@ If any check fails, the adapter MUST refuse to execute and exit non-zero.
 
 **Header Echo:** The run report MUST echo the plan header fields exactly.
 
-#### 6.4.3 Scenario Key Derivation (v1, Normative)
+#### 6.4.3 Scenario Key Derivation (v1.5, Normative)
 
-The `scenario_key` MUST be globally unique within a project and MUST be derived deterministically to avoid collisions and platform variance.
+The `scenario_key` MUST be globally unique within a project and MUST be derived deterministically from explicit identity tags.
 
-**v1 Derivation Rule:**
+**v1.5 Derivation Rule (Explicit IDs):**
+
+Scenario keys are derived from explicit identity tags (`@Feature(name)`, `@Rule_nn`, `@Scenario_nn`):
 
 ```
-scenario_key = normalized_relpath + ":L" + line_number
+scenario_key = FeatureName + ":" + "Rule_" + nn + ":" + "Scenario_" + mm
 ```
 
-Where:
-- `normalized_relpath` is the relative path from the repository root to the `.feature` file, with:
-  - Forward slashes (`/`) as separators (never backslashes)
-  - Unicode NFC normalization applied
-  - No leading `./` or trailing `/`
-- `line_number` is the 1-based line number where the `Scenario:` or `Scenario Outline:` keyword appears
-
-**Example:**
+For scenarios directly under a Feature (no Rule):
 ```
-test/specs/features/connection/handshake.feature:L42
+scenario_key = FeatureName + ":" + "Scenario_" + mm
+```
+
+**Examples:**
+```
+connection_lifecycle:Rule_01:Scenario_03
+namako_smoke_test:Scenario_01
 ```
 
 **Scenario Outline Extension:**
 
-For Scenario Outlines with Examples tables, each example row generates a distinct scenario. The key MUST be extended:
+For Scenario Outlines with Examples tables, each example row generates a distinct scenario. The key MUST include the example identifier:
 
 ```
-scenario_key = normalized_relpath + ":L" + scenario_line + ":E" + examples_block_index + ":R" + row_index
+scenario_key = FeatureName + ":" + "Rule_" + nn + ":" + "Scenario_" + mm + ":E" + eid
 ```
 
-Where:
-- `examples_block_index` is the 0-based index of the Examples block within the Scenario Outline
-- `row_index` is the 0-based index of the data row within that Examples block (excluding the header row)
+Where `eid` is:
+- The value from the `EID` column if present
+- Otherwise, the 0-based row index within the Examples block
 
 **Example:**
 ```
-test/specs/features/auth/login.feature:L15:E0:R2
+auth:Rule_02:Scenario_01:Evalid_token
+auth:Rule_02:Scenario_01:E0
 ```
-(Scenario Outline at line 15, first Examples block, third data row)
 
 **Collision Detection (Normative):**
 
 If two scenarios in a project compute the same `scenario_key`:
 - Lint MUST emit a **hard error**: `SCENARIO KEY COLLISION: <key>`
-- This indicates duplicate scenarios at the same location (should not happen) or a bug in key derivation
+- This indicates duplicate `(Feature, Rule_nn, Scenario_nn)` tuples or a bug in key derivation
 
-> **v2+ Note:** Explicit identity tags (`@Scenario_nn`) may replace line-based keys for refactor stability.
+**Required Tags (Normative per §10.5.1):**
+- Features MUST have `@Feature(name)` tag
+- Rules MUST have `@Rule_nn` tag
+- Scenarios MUST have `@Scenario_nn` tag
 
 ### 6.5 Execution Payload Contract (Normative)
 
@@ -1093,23 +1097,12 @@ The generated `binding_id` ties identity to expression strings.
 
 ### 8.2 Simpler Feature Hashing
 
-v1 uses feature fingerprint (content hash) rather than FeatureAstNorm.
+v1/v1.5 uses feature fingerprint (content hash) rather than FeatureAstNorm.
 - Cosmetic edits (whitespace, comments) may change hash
-- This is acceptable for v1 (self-development)
-- v2+ adopts full FeatureAstNorm for cosmetic-change immunity
+- This is acceptable for v1/v1.5 (self-development)
+- v2+ may adopt full FeatureAstNorm for cosmetic-change immunity
 
-### 8.3 No Explicit Structural IDs
-
-v1 does not require `@Feature`, `@Rule_nn`, `@Scenario_nn`, `EID` tags.
-- Scenario identity derived from normalized relative path + line number (and Outline examples extensions) per §6.4.3
-- This is acceptable for v1 (self-development)
-- v2+ may enforce explicit IDs for refactor stability
-
-### 8.4 Orphan Bindings Are Warnings
-
-v1 may warn on orphan bindings (bindings not used by any scenario).
-- Not a hard error in v1
-- v2+ makes this a hard error with mitigation tool (`namako stub`)
+> **Note:** Explicit structural IDs (`@Feature`, `@Rule_nn`, `@Scenario_nn`) and orphan binding hard errors are now implemented in v1.5. See §10.5.1 and §10.5.2.
 
 ---
 
@@ -1155,10 +1148,7 @@ Baseline updates require controlled governance. The `tesaki` CLI provides this v
 
 **Command-Line Control:**
 ```bash
-# Current command (pre-v1.7):
-tesaki next --max-cert-updates N
-
-# v1.7 command (future):
+# v1.7 command (current):
 tesaki run --max-cert-updates N
 ```
 
@@ -1270,7 +1260,7 @@ This project has existing Markdown docs describing Naia behavior.
 
 ## Part 10.5: Namako v1.5 — AI-Enablement Features
 
-**v1.5 is the immediate next milestone.** These features enable robust AI-driven autonomous development without requiring the full publish-grade hardening of v2+. They are selected to maximize Tesaki's effectiveness while minimizing implementation complexity.
+**v1.5 is COMPLETE.** These features enable robust AI-driven autonomous development without requiring the full publish-grade hardening of v2+. They are selected to maximize Tesaki's effectiveness while minimizing implementation complexity.
 
 ### v1.5 Feature Set (Normative)
 
@@ -2161,7 +2151,7 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| Goal 1: Spec Unambiguity | **IN v1** (partial) | Operational ambiguity → hard error. `namako review` **DEFERRED** to v2+ (§11.4) |
+| Goal 1: Spec Unambiguity | **IN v1.5** | Operational ambiguity → hard error. `namako review` implements rich packets (§10.5.3) |
 | Goal 2: Scenario Completeness | **IN v1** (partial) | Structural completeness (resolve all steps). Deep coverage **DEFERRED** to v2+ |
 | Goal 3: Test Faithfulness | **IN v1** | Plan-driven execution |
 | Goal 4: Repeatable Perfection | **IN v1** | `namako verify` in CI |
@@ -2185,21 +2175,21 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 |---------|--------|-------|
 | Resolved Execution Plan | **IN v1** | Core artifact |
 | `resolved_plan_hash` | **IN v1** | Core identity field |
-| `scenario_key` derivation | **IN v1** | §6.4.3 — deterministic path + line format |
+| `scenario_key` derivation | **IN v1.5** | §6.4.3 — explicit ID format (`Feature:Rule_nn:Scenario_nn`) |
 | Kind inference (And/But → effective) | **IN v1** | Standard Gherkin semantics |
 | Signature enforcement | **IN v1** | Hard error on mismatch; fully defined in §5.3 |
 | Strict ambiguity policy | **IN v1** | >1 match → hard error |
-| Orphan → hard error | **DEFERRED** to v2+ | v1 may warn only (§11.3) |
+| Orphan → hard error | **IN v1.5** | Hard error + `namako stub` mitigation (§10.5.2) |
 | Missing step → hard error | **IN v1** | 0 matches → hard error |
 
 ### ID Scheme
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| `@Feature` feature identity | **DEFERRED** to v2+ | §11.2 |
-| `@Rule_nn` rule identity | **DEFERRED** to v2+ | §11.2 |
-| `@Scenario_nn` scenario identity | **DEFERRED** to v2+ | §11.2 |
-| `EID` example row identity | **DEFERRED** to v2+ | §11.2 |
+| `@Feature(name)` feature identity | **IN v1.5** | Required tag (§10.5.1) |
+| `@Rule_nn` rule identity | **IN v1.5** | Required tag (§10.5.1) |
+| `@Scenario_nn` scenario identity | **IN v1.5** | Required tag (§10.5.1) |
+| `EID` example row identity | **IN v1.5** (optional) | SHOULD have; MUST for v2+ (§10.5.1) |
 | Expression-based binding ID | **IN v1** | §4.2 |
 
 ### Spec Surface
@@ -2216,10 +2206,10 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 
 | Invariant | Status | Notes |
 |-----------|--------|-------|
-| 1: Structural Tag Integrity | **DEFERRED** to v2+ | Requires explicit ID scheme |
+| 1: Structural Tag Integrity | **IN v1.5** | Explicit ID scheme enforced (§10.5.1) |
 | 2: Explicit Binding Identity | **IN v1** | Generated binding ID |
 | 3: Engine Supremacy | **IN v1** | Core principle |
-| 4: No Orphan Bindings | **DEFERRED** to v2+ | v1 warns only |
+| 4: No Orphan Bindings | **IN v1.5** | Hard error + `namako stub` (§10.5.2) |
 | 5: Operational Determinism | **IN v1** | Sorted keys, stable order |
 | 6: Single-Kind Binding Functions | **IN v1** | Each binding → one kind |
 | 7: Collision-Free Execution | **IN v1** | Per-scenario World |
@@ -2259,9 +2249,9 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 | `namako run` | **IN v1** | Core command |
 | `namako verify` | **IN v1** | CI gate |
 | `namako update-cert` | **IN v1** | Manual baseline update |
-| `namako status` | **IN v1** (optional) | Diff tool |
-| `namako review` | **DEFERRED** to v2+ | §11.4 |
-| `namako stub` | **DEFERRED** to v2+ | §11.3 |
+| `namako status` | **IN v1** | Diff tool + JSON output (§10.5.5) |
+| `namako review` | **IN v1.5** | AI work packets (§10.5.3) |
+| `namako stub` | **IN v1.5** | Orphan binding mitigation (§10.5.2) |
 
 ### Workflows
 
