@@ -1,13 +1,13 @@
 # GOLD_PLAN.md
 
-## The Authoritative Specification System for Naia — KISS MVP (v1) + Armor Plating Roadmap (v2+)
+## The Authoritative Specification System for Naia
 
 ---
 
 ## Table of Contents
 
 1. [Executive Summary](#part-1-executive-summary)
-2. [Thesis: v1 is KISS MVP, v2+ is Armor Plating](#part-2-thesis-v1-is-kiss-mvp-v2-is-armor-plating)
+2. [Architecture and Modes](#part-2-architecture-and-modes)
     - [2.3 Two FSMs: Bootstrap vs Product](#23-two-fsms-bootstrap-vs-product-normative)
     - [2.4 Modes: BOOTSTRAP vs CONSUMPTION](#24-modes-bootstrap-vs-consumption-normative)
     - [2.5 Bootstrap Exit Criteria](#25-bootstrap-exit-criteria-normative)
@@ -15,33 +15,23 @@
     - [2.7 First CONSUMPTION Mission Template](#27-first-consumption-mission-template-normative)
 3. [Canonical Repo & Crate Architecture](#part-3-canonical-repo--crate-architecture)
 4. [Step Macro UX and Binding Identity](#part-4-step-macro-ux-and-binding-identity)
-    - [4.4 v1 Binding ABI](#44-v1-binding-abi-normative)
-5. [Namako v1: The Future-Proof KISS MVP](#part-5-namako-v1-the-future-proof-kiss-mvp)
-6. [NPA v1: Adapter Protocol](#part-6-npa-v1-adapter-protocol)
-    - [6.4.3 Scenario Key Derivation](#643-scenario-key-derivation-v1-normative)
-7. [Hashing & Identity: v1 Contract](#part-7-hashing--identity-v1-contract)
-    - [7.0 Hash & Encoding Contract — Single Source of Truth](#70-hash--encoding-contract-v1--single-source-of-truth)
-8. [Where v1 is Intentionally NOT Publish-Grade](#part-8-where-v1-is-intentionally-not-publish-grade)
+5. [Namako CLI Commands](#part-5-namako-cli-commands)
+6. [NPA: Adapter Protocol](#part-6-npa-adapter-protocol)
+    - [6.4.3 Scenario Key Derivation](#643-scenario-key-derivation-normative)
+7. [Hashing & Identity Contract](#part-7-hashing--identity-contract)
+    - [7.0 Hash & Encoding Contract — Single Source of Truth](#70-hash--encoding-contract--single-source-of-truth)
+8. [Current Limitations (v2 Will Address)](#part-8-current-limitations-v2-will-address)
 9. [Tesaki: The AI Driver Layer (No Inference in Namako)](#part-9-tesaki-the-ai-driver-layer-no-inference-in-namako)
-10. [The Spec-Driven Development Loop (v1)](#part-10-the-spec-driven-development-loop-v1)
-10.5. [Namako v1.5 — AI-Enablement Features](#part-105-namako-v15--ai-enablement-features)
-10.7. [v1.7 Runner Integration (Level 2)](#part-107-v17-runner-integration-level-2--tesaki--coding-agent-integration)
-    - [10.7.1 Layers and Roles](#1071-layers-and-roles-bootstrap-vs-product-vs-runner)
-    - [10.7.2 Ownership Table](#1072-ownership-table-what-lives-where)
-    - [10.7.3 Tesaki Consumes Packets Only](#1073-tesaki-consumes-packets-only-invariant-anti-drift)
-    - [10.7.4 Runner Integration Model](#1074-runner-integration-model-runner-lives-inside-tesaki)
-    - [10.7.5 Mission Bundle Contract](#1075-mission-bundle-contract-filesystem-contract-boundary)
-    - [10.7.6 Mission Size Budgets](#1076-mission-size-budgets-prevent-giant-wandering-missions)
-    - [10.7.7 Success Criteria and Stop Conditions](#1077-success-criteria-next-step-selection-and-stop-conditions)
-    - [10.7.8 Runner Failure Modes](#1078-runner-failure-modes-deterministic-handling)
-    - [10.7.9 Canonical UX Flow](#1079-canonical-ux-flow-single-source-of-truth)
-11. [Namako v2+ — Armor Plating (Deferred Publish-Grade Features)](#part-11-namako-v2--armor-plating-deferred-publish-grade-features)
+10. [The Spec-Driven Development Loop](#part-10-the-spec-driven-development-loop)
+    - [10.5 AI-Enablement Features](#part-105-ai-enablement-features)
+    - [10.7 Runner Integration](#part-107-runner-integration--tesaki--coding-agent-integration)
+11. [Namako v2 — Deferred Publish-Grade Features](#part-11-namako-v2--deferred-publish-grade-features)
     - [11.11 Multi-Language Support](#1111-multi-language-support-language-neutral-engine-language-specific-adapters)
     - [11.12 Adapter SDKs](#1112-adapter-sdks-v2)
     - [11.13 Cross-Language Hashing & Conformance](#1113-cross-language-hashing--conformance-v2)
     - [11.14 Adapter Certification Tooling](#1114-adapter-certification-tooling-v2)
-12. [Definition of Done (v1)](#part-12-definition-of-done-v1)
-13. [Appendix: No-drop Checklist (v9 Concept Trace)](#appendix-no-drop-checklist-v9-concept-trace)
+12. [Definition of Done](#part-12-definition-of-done)
+13. [Appendix: Concept Checklist](#appendix-concept-checklist)
 
 ---
 
@@ -55,13 +45,16 @@ The core workflow is:
 spec (.feature) → engine(resolve) → plan → adapter(execute) → evidence → verify
 ```
 
-**Namako v1** is the **minimum future-proof KISS MVP** that Connor can use immediately for Naia development. It provides:
+**Namako** provides:
 - Strict resolution of `.feature` files to step bindings
 - Plan-driven execution (adapter executes by binding ID only, no text matching)
 - Hash-based integrity evidence
 - CI-gated certification via `namako verify`
+- Explicit identity tags (`@Feature`, `@Rule_nn`, `@Scenario_nn`) for refactor-safe scenario keys
+- Rich AI-actionable packets (`review`, `explain`, `status --json`)
+- Orphan binding detection with `namako stub` mitigation
 
-**Namako v2+** captures all hardening features deferred from v1 but designed to be forward-compatible.
+**Namako v2** will add publish-grade hardening features (see Part 11).
 
 ### The Core Insight: Plan-Driven Integrity
 
@@ -71,7 +64,7 @@ The **Namako Engine** is the sole source of matching logic. It resolves every st
 
 ### Language-Neutral by Design
 
-Namako is **language-agnostic**: the engine/CLI is a Rust tool, but adapters MAY be implemented in **any programming language** (Rust, JS/TS, Python, Go, C++, etc.). The adapter protocol (NPA) is the only cross-language integration boundary. v1 ships with Rust adapter support for Naia; v2+ expands to official SDKs and conformance tooling for other ecosystems.
+Namako is **language-agnostic**: the engine/CLI is a Rust tool, but adapters MAY be implemented in **any programming language** (Rust, JS/TS, Python, Go, C++, etc.). The adapter protocol (NPA) is the only cross-language integration boundary. Currently ships with Rust adapter support for Naia; v2 will expand to official SDKs and conformance tooling for other ecosystems.
 
 ### Tesaki (AI Driver) — Inference Lives Above Namako
 
@@ -86,22 +79,28 @@ This separation ensures reproducibility, auditability, and model/provider indepe
 
 ---
 
-## Part 2: Thesis: v1 is KISS MVP, v2+ is Armor Plating
+## Part 2: Architecture and Modes
 
-### 2.1 Separation of Concerns
+### 2.1 Current Capabilities
 
-This document explicitly separates:
+| Capability | Status | Notes |
+|------------|--------|-------|
+| Explicit ID tags | ✅ | `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` |
+| Orphan binding hard error | ✅ | With `namako stub` mitigation |
+| Rich AI packets | ✅ | `review`, `explain`, `status --json` |
+| Runner integration | ✅ | `tesaki run` with Claude Code/Codex backends |
+| Feature fingerprint hashing | ✅ | Content-based (cosmetic changes affect hash) |
+| Canonical JSON encoding | ✅ | Deterministic serialization |
+| Rust adapter (Naia) | ✅ | NPA protocol |
 
-| Concern | v1 (KISS MVP) | v1.5 (AI-Enablement) | v2+ (Armor Plating) |
-|---------|---------------|----------------------|---------------------|
-| Scope | Minimum viable for Naia self-development | AI-driven autonomous development | Publish-grade hardening |
-| Timeline | ✅ Complete | ✅ Complete | Build later (captured here) |
-| Identity stability | Expression-based binding IDs | Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | Refactor-stable explicit IDs |
-| Feature hashing | Feature fingerprint (simpler) | Feature fingerprint | Full FeatureAstNorm |
-| Orphan policy | Warning only | Hard error + `namako stub` | Hard error + mitigation tools |
-| Encoding | Canonical JSON | Canonical JSON | CBOR profiles, conformance fixtures |
-| Language support | Rust adapter (Naia) | Rust adapter (Naia) | Multi-language SDKs + conformance |
-| AI packets | Basic | Rich (`review`, `explain`, `status --json`) | Full automation support |
+### v2 Planned Enhancements
+
+| Feature | Description |
+|---------|-------------|
+| FeatureAstNorm | Cosmetic-change-immune hashing |
+| CBOR encoding | Cross-platform byte reproducibility |
+| Multi-language SDKs | JS/TS, Python, Go adapter support |
+| Conformance fixtures | Regression safety for adapters |
 
 ### Namako vs Tesaki (Normative)
 
@@ -117,12 +116,12 @@ This document explicitly separates:
 
 ### 2.2 Design Principle: No Dead Ends
 
-v1 is designed such that every v2+ feature can be adopted incrementally via:
+The current system is designed such that every v2 feature can be adopted incrementally via:
 - Version bumps (`hash_contract_version`, `binding_id_scheme`)
 - Additive schema changes
 - Identity regeneration (via `update-cert`)
 
-No v1 decision MUST be reversed to adopt v2+.
+No current decision MUST be reversed to adopt v2.
 
 ### 2.3 Two FSMs: Bootstrap vs Product (Normative)
 
@@ -186,7 +185,7 @@ All BOOTSTRAP surfaces, **plus** Naia product core — but ONLY when driven by a
 
 The system transitions from `MODE=BOOTSTRAP` to `MODE=CONSUMPTION` only when ALL of the following are satisfied:
 
-1. **Tesaki end-to-end:** `tesaki next` runs and produces `NEXT_TASK.md` deterministically (v1.7 will replace with `tesaki run`)
+1. **Tesaki end-to-end:** `tesaki run` runs and produces a deterministic mission bundle
 2. **Namako packets deterministic:** `status --json`, `review`, `explain` all produce stable, usable outputs
 3. **Tesaki autonomous capabilities:**
    - Can select promotion candidates when `reuse_score > 0`
@@ -194,7 +193,7 @@ The system transitions from `MODE=BOOTSTRAP` to `MODE=CONSUMPTION` only when ALL
    - Can run gates (lint → run → verify)
    - Can update baseline (with governance)
    - Stops safely when blocked (no infinite loops)
-4. **Scenario fidelity workflow exists:** At least v1 depth via `namako explain`
+4. **Scenario fidelity workflow exists:** Full fidelity via `namako explain`
 5. **CI green:** All gates pass (`namako gate`, `namako gate --determinism`, `cargo test -p tesaki`)
 
 ### 2.6 Consumption Entry Criteria (Normative)
@@ -256,7 +255,7 @@ Provides the CLI commands:
 - `run` — Lint + execute plan via adapter + produce run report + validate integrity
 - `verify` — CI gate: candidate identity == baseline identity
 - `update-cert` — Manual: writes baseline cert (MUST refuse unless prerequisites satisfied)
-- `status` — Optional in v1: diff identity vs metadata
+- `status` — Diff identity vs metadata (plus JSON output)
 
 ### 3.2 Naia Repo (project integrating Namako)
 
@@ -313,9 +312,9 @@ Each macro takes **exactly one string argument**.
 - No embedded IDs in strings
 - No optional parameters
 
-**Step Function Signatures (v1 Context-First ABI):**
+**Step Function Signatures (Context-First ABI):**
 
-The v1 ABI enforces **capability separation** at compile time through context types:
+The ABI enforces **capability separation** at compile time through context types:
 
 - **Given/When steps**: First parameter MUST be `ctx: &mut CtxMut` (mutable reference to context)
 - **Then steps**: First parameter MUST be `ctx: &CtxRef` (immutable reference to read-only context)
@@ -348,27 +347,27 @@ User code MUST NOT contain explicit binding IDs. The system MUST ALWAYS generate
 - `effective_kind` (Given/When/Then)
 - `expression_string` (the literal string inside the macro)
 
-#### 4.2.1 Binding ID Scheme (v1, Normative)
+#### 4.2.1 Binding ID Scheme (Normative)
 
 Define `expr_norm` as the macro string normalized by:
 1. Unicode normalization to NFC
 2. Newline normalization to `\n`
 
-> **Note:** v1 MUST NOT add other normalizations (e.g., whitespace collapsing). Keep it simple.
+> **Note:** Do not add other normalizations (e.g., whitespace collapsing). Keep it simple.
 
 Define:
 ```
-binding_id = blake3_256_lowerhex( "namako-binding-id-v1|" + kind + "|" + expr_norm )
+binding_id = blake3_256_lowerhex( "namako-binding-id|" + kind + "|" + expr_norm )
 ```
 
 The semantic registry MUST include:
 ```
-binding_id_scheme = "kind+expr_norm|namako-binding-id-v1|blake3-256-lowerhex"
+binding_id_scheme = "kind+expr_norm|namako-binding-id|blake3-256-lowerhex"
 ```
 
 `binding_id_scheme` MUST be included in the `step_registry_hash` computation.
 
-> **v2+ Note:** The binding-id scheme is chosen specifically because it is **portable across languages and tooling**. Any adapter in any language can compute the same `binding_id` from the same `(kind, expression_string)` pair using the documented algorithm and BLAKE3.
+> **v2 Note:** The binding-id scheme is chosen specifically because it is **portable across languages and tooling**. Any adapter in any language can compute the same `binding_id` from the same `(kind, expression_string)` pair using the documented algorithm and BLAKE3.
 
 #### 4.2.2 Collision Rule (Normative)
 
@@ -383,13 +382,13 @@ The adapter MUST:
 - NOT perform text matching or regex at runtime
 - Treat `step_text` as metadata only
 
-### 4.4 v1 Binding ABI (Normative)
+### 4.4 Binding ABI (Normative)
 
 This section defines how `namako_codegen` derives signature metadata from the step function signature. This is the authoritative definition for signature enforcement in §5.3.
 
 #### 4.4.0 Context-First ABI (Capability Separation)
 
-The v1 ABI enforces **capability separation at compile time** through typed context parameters:
+The ABI enforces **capability separation at compile time** through typed context parameters:
 
 | Step Kind | Required First Parameter | Capabilities |
 |-----------|--------------------------|--------------|
@@ -427,7 +426,7 @@ The World type is derived from the context type via the `StepContext::World` ass
 #### 4.4.2 Captures Mapping
 
 - **`signature.captures_arity`** equals the number of capture parameters after the context parameter, **excluding** any optional DocString/DataTable parameters.
-- All captures are passed as `String` in v1 (typed capture conversion is deferred to v2+).
+- All captures are passed as `String` currently (typed capture conversion is deferred to v2).
 - Captures appear in the function signature in the same order as their corresponding `{...}` placeholders in the expression string.
 
 **Example:**
@@ -467,15 +466,15 @@ This fixed order ensures deterministic signature reflection by `namako_codegen`.
 - **Given/When with read-only context (`CtxRef`)** → MUST be rejected at compile time.
 - **Then with mutable context (`CtxMut`)** → MUST be rejected at compile time.
 
-> **Note:** The v1 Binding ABI is what `namako_codegen` uses to compute the `signature.*` fields in the adapter manifest.
+> **Note:** The Binding ABI is what `namako_codegen` uses to compute the `signature.*` fields in the adapter manifest.
 
 ---
 
-## Part 5: Namako v1: The Future-Proof KISS MVP
+## Part 5: Namako CLI Commands
 
-### 5.1 v1 Scope: What is IN
+### 5.1 Current Scope: What is IN
 
-v1 MUST include:
+The system MUST include:
 
 | Capability | Description |
 |------------|-------------|
@@ -491,22 +490,18 @@ v1 MUST include:
 | CI gate | `namako verify` (strict identity compare) |
 | Manual baseline update | `namako update-cert` (only when explicitly invoked + prerequisites satisfied) |
 
-### 5.2 v1 Scope: What is OUT (Deferred to v2+)
-
-v1 MUST NOT require:
+### 5.2 Deferred to v2
 
 | Deferred Feature | Rationale |
 |------------------|-----------|
-| Full FeatureAstNorm hashing | Simpler fingerprint is sufficient for v1 |
-| Explicit ID scheme (`@Feature/@Rule_nn/@Scenario_nn/EID`) | Expression-based IDs are acceptable for v1 |
-| Orphan binding hard errors | v1 MAY warn; v2+ makes it a hard error |
-| Tesaki work packets (review/explain/status JSON outputs) | Deferred to v2+ |
-| CBOR canonical encoding profiles | v1 uses canonical JSON; v2+ may migrate |
-| Malicious adapter defense | Out of scope (trusted adapter assumption; v2+ adds conformance tooling) |
-| Conformance fixtures with canonical bytes | Deferred to v2+ |
-| `resolution_semantics_id` | Deferred to v2+; v1 uses simpler versioning |
+| Full FeatureAstNorm hashing | Simpler fingerprint is sufficient for current use |
+| CBOR canonical encoding profiles | Currently uses canonical JSON; v2 may migrate |
+| Malicious adapter defense | Out of scope (trusted adapter assumption; v2 adds conformance tooling) |
+| Conformance fixtures with canonical bytes | Deferred to v2 |
+| `resolution_semantics_id` | Deferred to v2; currently uses simpler versioning |
+| Multi-language adapter SDKs | Currently Rust only; v2 adds JS/TS, Python, Go |
 
-### 5.3 v1 CLI Commands (Normative)
+### 5.3 CLI Commands (Normative)
 
 #### `namako manifest`
 **Purpose:** Debug. Prints adapter semantic registry + hashes.
@@ -527,9 +522,9 @@ v1 MUST NOT require:
 - Ambiguous step (>1 match)
 - Signature mismatch (see below)
 
-**Signature Mismatch Definition (v1, Normative):**
+**Signature Mismatch Definition (Normative):**
 
-A signature mismatch occurs when the step's requirements do not match the binding's declared capabilities. The binding's signature metadata is derived from the function signature per the v1 Binding ABI (§4.4):
+A signature mismatch occurs when the step's requirements do not match the binding's declared capabilities. The binding's signature metadata is derived from the function signature per the Binding ABI (§4.4):
 
 | Check | Rule |
 |-------|------|
@@ -542,7 +537,7 @@ A signature mismatch occurs when the step's requirements do not match the bindin
 - If a step does NOT include a DataTable, the binding MAY declare `accepts_datatable = true` or `false` (binding receives `null`)
 - The adapter MUST pass `null` for absent DocString/DataTable regardless of binding declaration
 
-> **v1 KISS:** Captures are always strings in v1. Typed capture conversion is deferred to v2+.
+> **KISS (current):** Captures are always strings. Typed capture conversion is deferred to v2.
 
 #### `namako run`
 **Purpose:** Lint + execute plan via adapter + produce run report + validate integrity.
@@ -582,7 +577,7 @@ A signature mismatch occurs when the step's requirements do not match the bindin
 
 **Rationale:** Certification is never updated implicitly.
 
-#### `namako status` (Optional in v1)
+#### `namako status`
 **Purpose:** If present, clearly diff identity vs metadata.
 
 **Behavior:**
@@ -591,7 +586,7 @@ A signature mismatch occurs when the step's requirements do not match the bindin
 
 ---
 
-## Part 6: NPA v1: Adapter Protocol
+## Part 6: NPA: Adapter Protocol
 
 ### 6.0 Language Neutrality (Normative)
 
@@ -605,8 +600,8 @@ The Namako Engine/CLI MUST treat the adapter as an **external executable** invok
 ### 6.1 Versioning
 
 All artifacts MUST include:
-- `npap_version` — Protocol version (v1: use `1`)
-- `hash_contract_version` — Identifies encoding + hashing rules (v1: `"namako-v1-json+blake3-256"`)
+- `npap_version` — Protocol version (use `1`)
+- `hash_contract_version` — Identifies encoding + hashing rules (currently: `"namako-json+blake3-256"`)
 
 ### 6.2 Command: `adapter manifest`
 
@@ -658,15 +653,15 @@ The manifest JSON emission MUST use the same sorted order for bindings.
 
 > **Rationale:** Sorting by `binding_id` ensures that discovery order (e.g., from proc macros) does not affect the hash. This makes registry identity deterministic across builds.
 
-#### 6.2.2 `impl_hash` (v1 Requirements)
+#### 6.2.2 `impl_hash` (Requirements)
 
 `impl_hash` MUST change when the binding implementation changes. It serves as a drift signal to detect when implementation code has been modified.
 
-**v1 Scheme (Normative):**
+**Scheme (Normative):**
 
 The manifest header MUST include:
 ```
-impl_hash_scheme = "token-fingerprint-v1|blake3-256-lowerhex"
+impl_hash_scheme = "token-fingerprint|blake3-256-lowerhex"
 ```
 
 **Computation (Normative):**
@@ -687,11 +682,11 @@ The proc macro MUST compute `impl_hash` as follows:
 The `impl_hash` MUST be deterministic across builds on the same codebase:
 - Same source code → same `impl_hash`
 - Different build directory paths MUST NOT affect the hash
-- Reformatting (whitespace/newlines) MAY affect the hash in v1 (acceptable; v2+ may strengthen)
+- Reformatting (whitespace/newlines) MAY affect the hash (acceptable; v2 may strengthen)
 
 > **Rationale:** Token-based fingerprinting avoids the pitfalls of raw source hashing (path sensitivity, comment drift) while remaining implementable in a proc macro.
 
-> **v2+ Note:** Stronger schemes may capture dependency signals or use AST-based normalization (see §10.9).
+> **v2 Note:** Stronger schemes may capture dependency signals or use AST-based normalization (see §10.9).
 
 ### 6.3 Command: `adapter run`
 
@@ -727,7 +722,7 @@ If any check fails, the adapter MUST refuse to execute and exit non-zero.
 {
   "header": {
     "npap_version": 1,
-    "hash_contract_version": "namako-v1-json+blake3-256",
+    "hash_contract_version": "namako-json+blake3-256",
     "feature_fingerprint_hash": "...",
     "step_registry_hash": "...",
     "resolved_plan_hash": "..."
@@ -760,7 +755,7 @@ If any check fails, the adapter MUST refuse to execute and exit non-zero.
 {
   "header": {
     "npap_version": 1,
-    "hash_contract_version": "namako-v1-json+blake3-256",
+    "hash_contract_version": "namako-json+blake3-256",
     "feature_fingerprint_hash": "...",
     "step_registry_hash": "...",
     "resolved_plan_hash": "..."
@@ -791,11 +786,11 @@ If any check fails, the adapter MUST refuse to execute and exit non-zero.
 
 **Header Echo:** The run report MUST echo the plan header fields exactly.
 
-#### 6.4.3 Scenario Key Derivation (v1.5, Normative)
+#### 6.4.3 Scenario Key Derivation (Normative)
 
 The `scenario_key` MUST be globally unique within a project and MUST be derived deterministically from explicit identity tags.
 
-**v1.5 Derivation Rule (Explicit IDs):**
+**Derivation Rule (Explicit IDs):**
 
 Scenario keys are derived from explicit identity tags (`@Feature(name)`, `@Rule_nn`, `@Scenario_nn`):
 
@@ -868,15 +863,15 @@ payload_hash = blake3_256_lowerhex( canonical_json_encode( ExecutionPayload ) )
 
 ---
 
-## Part 7: Hashing & Identity: v1 Contract
+## Part 7: Hashing & Identity Contract
 
-### 7.0 Hash & Encoding Contract (v1) — Single Source of Truth
+### 7.0 Hash & Encoding Contract — Single Source of Truth
 
-This section is the **authoritative reference** for all hashing and encoding rules in v1. All other sections MUST defer to these rules. Implementers MUST follow this section exactly to achieve deterministic, reproducible hashes.
+This section is the **authoritative reference** for all hashing and encoding rules in the current system. All other sections MUST defer to these rules. Implementers MUST follow this section exactly to achieve deterministic, reproducible hashes.
 
 #### 7.0.1 Hash Domain Constraints (Normative)
 
-Hashed objects in v1 MUST contain **only** the following types:
+Hashed objects MUST contain **only** the following types:
 - **Strings** (UTF-8)
 - **Booleans** (`true` / `false`)
 - **Integers** (signed or unsigned; represented without decimal points)
@@ -902,7 +897,7 @@ This applies to:
 - DataTable cell values
 - Any other string content in hashed objects
 
-#### 7.0.3 Canonical JSON Rules (v1, Normative)
+#### 7.0.3 Canonical JSON Rules (Normative)
 
 All hashed objects MUST be encoded using the following canonical JSON rules:
 
@@ -945,7 +940,7 @@ When computing an object's own hash:
 
 #### 7.0.6 Hash Algorithm (Normative)
 
-v1 uses **BLAKE3-256** for all hash computations:
+The system uses **BLAKE3-256** for all hash computations:
 - Output: 256-bit hash
 - Encoding: lowercase hexadecimal string (64 characters)
 - Notation: `blake3_256_lowerhex(...)`
@@ -954,9 +949,9 @@ v1 uses **BLAKE3-256** for all hash computations:
 
 > **See §7.0 for the complete hash and encoding contract.**
 
-v1 MUST define:
+The system MUST define:
 ```
-hash_contract_version = "namako-v1-json+blake3-256"
+hash_contract_version = "namako-json+blake3-256"
 ```
 
 This identifies:
@@ -977,7 +972,7 @@ When hashing an object:
 - When computing `resolved_plan_hash`, omit `header.resolved_plan_hash`
 - Do NOT omit `header.step_registry_hash` (it's input, not output)
 
-### 7.3 v1 Identity Tuple (Normative)
+### 7.3 Identity Tuple (Normative)
 
 The certification artifact (`certification.json`) contains `{ identity, metadata }`.
 
@@ -986,7 +981,7 @@ The certification artifact (`certification.json`) contains `{ identity, metadata
 | Field | Description |
 |-------|-------------|
 | `hash_contract_version` | Encoding + hashing rules |
-| `feature_fingerprint_hash` | Hash of feature content (v1: simpler than FeatureAstNorm) |
+| `feature_fingerprint_hash` | Hash of feature content (current: simpler than FeatureAstNorm) |
 | `step_registry_hash` | Hash of semantic step registry |
 | `resolved_plan_hash` | Hash of resolved execution plan |
 
@@ -999,11 +994,11 @@ The certification artifact (`certification.json`) contains `{ identity, metadata
 | `cargo_lock_hash` | Optional: for reproducibility |
 | `rustc_version` | Optional: for reproducibility |
 
-#### 7.3.1 Feature Fingerprint Hash (v1)
+#### 7.3.1 Feature Fingerprint Hash
 
 > **Normalization and encoding rules per §7.0.**
 
-For v1, compute a simpler feature fingerprint:
+Compute a simpler feature fingerprint:
 ```
 feature_fingerprint_hash = blake3_256_lowerhex(
   canonical_json_encode( FeatureFingerprint )
@@ -1016,9 +1011,9 @@ Where `FeatureFingerprint` includes:
   - Unicode normalization to NFC (per §7.0.2)
   - Newline normalization to `\n` (per §7.0.2)
 
-> **Note:** v2+ adopts full FeatureAstNorm for stability under cosmetic edits.
+> **Note:** v2 adopts full FeatureAstNorm for stability under cosmetic edits.
 
-### 7.4 v1 Verification Rules (Normative)
+### 7.4 Verification Rules (Normative)
 
 `namako verify` MUST perform the following checks. The verify command is the **authority**; it does not trust echoed header values but recomputes them from current sources.
 
@@ -1067,11 +1062,11 @@ After integrity validation passes, `namako verify` MUST:
 2. Perform strict field-by-field equality on all identity fields
 3. Any mismatch → hard failure with exit code non-zero
 
-### 7.5 Canonical JSON Encoding (v1, Normative)
+### 7.5 Canonical JSON Encoding (Normative)
 
 > **See §7.0.3 for the authoritative canonical JSON encoding rules.**
 
-For v1, use canonical JSON:
+Use canonical JSON:
 - Object keys: sorted lexicographically
 - No trailing commas
 - No comments
@@ -1083,26 +1078,22 @@ For v1, use canonical JSON:
 
 ---
 
-## Part 8: Where v1 is Intentionally NOT Publish-Grade
+## Part 8: Current Limitations (v2 Will Address)
 
-v1 is explicitly a **KISS MVP for self-development**. The following limitations are accepted:
+The following limitations are accepted for current use; v2 will address them for publish-grade hardening:
 
 ### 8.1 Expression-Based Binding IDs
 
 The generated `binding_id` ties identity to expression strings.
 - Editing an expression string changes its `binding_id`
 - This is treated as identity drift requiring `update-cert`
-- This is acceptable for v1 (self-development)
-- v2+ may adopt stable explicit IDs for publish-grade stability
+- v2 may adopt stable explicit IDs for publish-grade stability
 
-### 8.2 Simpler Feature Hashing
+### 8.2 Feature Fingerprint Hashing
 
-v1/v1.5 uses feature fingerprint (content hash) rather than FeatureAstNorm.
+Current implementation uses feature fingerprint (content hash) rather than FeatureAstNorm.
 - Cosmetic edits (whitespace, comments) may change hash
-- This is acceptable for v1/v1.5 (self-development)
-- v2+ may adopt full FeatureAstNorm for cosmetic-change immunity
-
-> **Note:** Explicit structural IDs (`@Feature`, `@Rule_nn`, `@Scenario_nn`) and orphan binding hard errors are now implemented in v1.5. See §10.5.1 and §10.5.2.
+- v2 may adopt full FeatureAstNorm for cosmetic-change immunity
 
 ---
 
@@ -1148,7 +1139,6 @@ Baseline updates require controlled governance. The `tesaki` CLI provides this v
 
 **Command-Line Control:**
 ```bash
-# v1.7 command (current):
 tesaki run --max-cert-updates N
 ```
 
@@ -1177,14 +1167,14 @@ Tesaki MAY run `update-cert` autonomously only when ALL of the following are tru
 3. No scenario failures in the run report
 4. No git operations are performed (no commits)
 
-### 9.5 v1 vs v2 in the Loop
+### 9.5 Autonomy Today vs v2
 
-- **v1** can run the loop manually (human choosing slices).
-- **v2** adds packets that make Tesaki autonomous (`review`/`explain`/`status`).
+- Today, Tesaki drives the loop by consuming Namako packets (`review`/`explain`/`status`) and gating every change via `namako gate`.
+- v2 may add publish-grade hardening (conformance, multi-language SDKs, stronger hashing) without changing the loop’s core control boundaries.
 
 ---
 
-## Part 10: The Spec-Driven Development Loop (v1)
+## Part 10: The Spec-Driven Development Loop
 
 ### 10.1 Core Principle
 
@@ -1258,26 +1248,24 @@ This project has existing Markdown docs describing Naia behavior.
 
 ---
 
-## Part 10.5: Namako v1.5 — AI-Enablement Features
+## Part 10.5: AI-Enablement Features
 
-**v1.5 is COMPLETE.** These features enable robust AI-driven autonomous development without requiring the full publish-grade hardening of v2+. They are selected to maximize Tesaki's effectiveness while minimizing implementation complexity.
+These features enable robust AI-driven autonomous development. They maximize Tesaki's effectiveness while minimizing implementation complexity.
 
-### v1.5 Feature Set (Normative)
+### AI-Enablement Feature Set (Normative)
 
-| Feature | Source Section | Priority | Rationale |
-|---------|----------------|----------|-----------|
-| Explicit ID tags (@Feature/@Rule_nn/@Scenario_nn) | §11.2 | HIGH | Identity survives refactoring; essential for autonomous spec management |
-| Orphan binding hard error + `namako stub` | §11.3 | HIGH | Prevents dead code accumulation in bindings |
-| `namako review` coverage enhancements | §11.4 | HIGH | Rich work packets for Tesaki task selection |
-| Scenario fidelity packets (`namako explain`) | §11.5 | MEDIUM | AI-assisted "spirit of the spec" review |
-| Machine-readable process state (`namako status --json`) | §11.6 | HIGH | FSM automation without log parsing |
-| Rich `namako status` diffs | §11.10 | MEDIUM | Better debugging and drift diagnostics |
+| Feature | Description |
+|---------|-------------|
+| Explicit ID tags | `@Feature(name)`, `@Rule_nn`, `@Scenario_nn` — identity survives refactoring |
+| Orphan binding hard error | Prevents dead code accumulation; `namako stub` mitigation |
+| `namako review` | Rich work packets for Tesaki task selection |
+| `namako explain` | Scenario fidelity packets for AI-assisted review |
+| `namako status --json` | Machine-readable process state for FSM automation |
+| Rich status diffs | Human-readable identity status for debugging |
 
-### 10.5.1 Explicit Identity Tags (v1.5, Normative)
+### 10.5.1 Explicit Identity Tags (Normative)
 
-**Promoted from §11.2.**
-
-v1.5 MUST support structural identity tags:
+Structural identity tags for refactor-safe scenario keys:
 
 | Tag | Applies To | Format | Example |
 |-----|-----------|--------|---------|
@@ -1286,26 +1274,19 @@ v1.5 MUST support structural identity tags:
 | `@Scenario_nn` | Scenario | Numeric index (1-based) | `@Scenario_01`, `@Scenario_02` |
 | `EID` column | Examples row | String identifier | `EID: auth_success` |
 
-**Invariant (v1.5):**
+**Invariants:**
 - Features MUST have `@Feature(name)` tag
 - Rules MUST have `@Rule_nn` tag
 - Scenarios MUST have `@Scenario_nn` tag
-- Example rows SHOULD have `EID` column (MUST for v2+)
-
-**Migration from v1:**
-- Add tags to all existing `.feature` files
-- Scenario keys will use `Feature:Rule_nn:Scenario_nn` format instead of `path:Lnn`
-- Bump identity (run `update-cert` after migration)
+- Example rows SHOULD have `EID` column (MUST for v2)
 
 **Derivation Rules:**
 - `scenario_key` = `Feature + ":" + Rule_nn + ":" + Scenario_nn` (or `+ ":E" + EID` for outline rows)
 - Collision detection: duplicate `(Feature, Rule_nn, Scenario_nn)` tuples → hard error
 
-### 10.5.2 Orphan Bindings as Hard Error (v1.5, Normative)
+### 10.5.2 Orphan Bindings as Hard Error (Normative)
 
-**Promoted from §11.3.**
-
-v1.5 changes orphan binding policy from warning to hard error:
+Orphan binding policy:
 
 - Binding in registry not used by any scenario → **hard error** in `namako lint`
 - Rationale: Prevents dead code accumulation, keeps registry minimal
@@ -1333,11 +1314,9 @@ Scenario: Stub for orphan binding abc123
   Given <original step text from binding>
 ```
 
-### 10.5.3 Enhanced Work Packets (`namako review`) (v1.5, Normative)
+### 10.5.3 Enhanced Work Packets (`namako review`) (Normative)
 
-**Promoted from §11.4.**
-
-v1.5 enhances `namako review` to output richer AI-actionable packets:
+`namako review` outputs AI-actionable packets:
 
 **Required Packet Sections:**
 1. **Coverage Summary:**
@@ -1369,11 +1348,9 @@ v1.5 enhances `namako review` to output richer AI-actionable packets:
 
 **Determinism Requirement:** Output MUST be stable (sorted keys, stable ordering).
 
-### 10.5.4 Scenario Fidelity Packets (`namako explain`) (v1.5, Normative)
+### 10.5.4 Scenario Fidelity Packets (`namako explain`) (Normative)
 
-**Promoted from §11.5.**
-
-v1.5 implements `namako explain --scenario-key <key>` to output a fidelity packet:
+`namako explain --scenario-key <key>` outputs a fidelity packet:
 
 **Packet Contents:**
 ```json
@@ -1402,11 +1379,11 @@ v1.5 implements `namako explain --scenario-key <key>` to output a fidelity packe
 - Enables AI review: "Does this binding actually test what the rule describes?"
 - Provides implementation context without reading entire codebase
 
-### 10.5.5 Machine-Readable Process State (`namako status --json`) (v1.5, Normative)
+### 10.5.5 Machine-Readable Process State (`namako status --json`) (Normative)
 
 **Promoted from §11.6.**
 
-v1.5 enhances `namako status --json` for FSM automation:
+`namako status --json` enables FSM automation:
 
 **Required Output Fields:**
 ```json
@@ -1441,11 +1418,11 @@ v1.5 enhances `namako status --json` for FSM automation:
 
 **Determinism Requirement:** Output MUST be stable for same inputs.
 
-### 10.5.6 Rich Status Diffs (v1.5, Normative)
+### 10.5.6 Rich Status Diffs (Normative)
 
 **Promoted from §11.10.**
 
-v1.5 adds human-readable diff output to `namako status`:
+`namako status` includes human-readable diff output:
 
 **Text Output (default):**
 ```
@@ -1470,9 +1447,9 @@ NEEDS_UPDATE_CERT_APPROVAL
 - Faster developer debugging
 - Clearer CI failure diagnostics
 
-### v1.5 Definition of Done
+### AI-Enablement Definition of Done
 
-The v1.5 system is complete when:
+The AI-enablement features are complete when:
 
 | Criterion | Description |
 |-----------|-------------|
@@ -1486,13 +1463,13 @@ The v1.5 system is complete when:
 
 ---
 
-## Part 10.7: v1.7 Runner Integration (Level 2) — Tesaki ↔ Coding-Agent Integration
+## Part 10.7: Runner Integration — Tesaki ↔ Coding-Agent Integration
 
-**v1.7 is BOOTSTRAP work.** This section defines how Tesaki orchestrates an external coding agent (runner) to autonomously drive spec-driven development. This is the **Product Loop** we are building.
+**Runner integration is BOOTSTRAP work.** This section defines how Tesaki orchestrates an external coding agent (runner) to autonomously drive spec-driven development. This is the **Product Loop** we are building.
 
 ### 10.7.0 Non-Negotiable Invariants (Normative)
 
-These invariants MUST be maintained in all v1.7 design and implementation:
+These invariants MUST be maintained in this design and implementation:
 
 1. **Tesaki is the ONLY orchestrator / state machine** in the Product Loop.
 2. **Namako is measurement + packet emission** (gate + status/review/explain). Tesaki consumes packets; it does not re-derive them.
@@ -1535,7 +1512,7 @@ Three layers exist and MUST remain strictly separated:
 
 **Explicitly NOT owned by runner:**
 - Selecting next task
-- Calling Tesaki for orchestration (no `tesaki next` from runner)
+- Calling Tesaki for orchestration (runner does not invoke Tesaki)
 - Performing baseline updates unless Tesaki explicitly requests (and Tesaki still validates)
 
 ### 10.7.3 "Tesaki Consumes Packets Only" Invariant (Anti-Drift)
@@ -1707,9 +1684,9 @@ EOF
 
 ---
 
-## Part 11: Namako v2+ — Armor Plating (Deferred Publish-Grade Features)
+## Part 11: Namako v2 — Deferred Publish-Grade Features
 
-This section captures all hardening features not required in v1/v1.5 but designed into the system for future adoption.
+This section captures all hardening features not currently implemented but designed into the system for future adoption.
 
 ### 11.1 FeatureAstNorm (Full AST Normal Form Hashing)
 
@@ -1751,7 +1728,7 @@ This section captures all hardening features not required in v1/v1.5 but designe
 - Bump `hash_contract_version`
 - Regenerate certification
 
-**Invariant (v2+):** Every Feature, Rule, Scenario, and Example Row MUST have explicit identity.
+**Invariant (v2):** Every Feature, Rule, Scenario, and Example Row MUST have explicit identity.
 
 ### 11.3 Orphan Bindings as Hard Error
 
@@ -1973,9 +1950,9 @@ adapter_cmd = ["./bin/myproject-namako"]
 adapter_cmd = ["./build/myproject_namako"]
 ```
 
-> **Note:** These examples are v2+ guidance. v1 ships with Rust adapter support only.
+> **Note:** These examples are v2 guidance. The current system ships with Rust adapter support only.
 
-### 11.14 Adapter SDKs (v2+)
+### 11.14 Adapter SDKs (v2)
 
 **What it adds:**
 - Official Namako SDKs for major ecosystems: JS/TS, Python, Go, JVM, .NET, C++
@@ -2014,7 +1991,7 @@ Each SDK MUST provide:
 - SDK adoption is optional but recommended
 - Projects MAY implement NPA directly without SDK
 
-### 11.15 Cross-Language Hashing & Conformance (v2+)
+### 11.15 Cross-Language Hashing & Conformance (v2)
 
 Cross-language hash reproducibility is critical. This section defines two strategies.
 
@@ -2075,7 +2052,7 @@ The Namako repo MUST ship conformance fixtures for:
 ```json
 {
   "fixture_version": "1",
-  "hash_contract_version": "namako-v1-json+blake3-256",
+  "hash_contract_version": "namako-json+blake3-256",
   "cases": [
     {
       "name": "simple_given_step",
@@ -2091,7 +2068,7 @@ The Namako repo MUST ship conformance fixtures for:
 - Any mismatch MUST cause the conformance check to fail.
 - CI MUST validate fixtures on all supported platforms.
 
-### 11.16 Adapter Certification Tooling (v2+)
+### 11.16 Adapter Certification Tooling (v2)
 
 **What it adds:**
 - A CLI command: `namako adapter-verify` (or `namako conformance`)
@@ -2127,9 +2104,9 @@ namako adapter-verify --adapter-cmd "./bin/myproject-namako" --fixtures path/to/
 
 ---
 
-## Part 12: Definition of Done (v1)
+## Part 12: Definition of Done
 
-The v1 system is live when:
+The system is live when:
 
 | Criterion | Description |
 |-----------|-------------|
@@ -2151,138 +2128,138 @@ This appendix traces every major concept from `NORTH_STAR_PLAN_v9.md` and labels
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| Goal 1: Spec Unambiguity | **IN v1.5** | Operational ambiguity → hard error. `namako review` implements rich packets (§10.5.3) |
-| Goal 2: Scenario Completeness | **IN v1** (partial) | Structural completeness (resolve all steps). Deep coverage **DEFERRED** to v2+ |
-| Goal 3: Test Faithfulness | **IN v1** | Plan-driven execution |
-| Goal 4: Repeatable Perfection | **IN v1** | `namako verify` in CI |
-| Goal 5: Change Propagation | **IN v1** | Hash-based identity |
-| Goal 6: Audit-Grade Outputs | **IN v1** (partial) | Artifacts produced. Conformance fixtures **DEFERRED** to v2+ (§11.8) |
+| Goal 1: Spec Unambiguity | **✅ Implemented** | Operational ambiguity → hard error. `namako review` implements rich packets (§10.5.3) |
+| Goal 2: Scenario Completeness | **✅ Implemented** (partial) | Structural completeness (resolve all steps). Deep coverage **DEFERRED** to v2 |
+| Goal 3: Test Faithfulness | **✅ Implemented** | Plan-driven execution |
+| Goal 4: Repeatable Perfection | **✅ Implemented** | `namako verify` in CI |
+| Goal 5: Change Propagation | **✅ Implemented** | Hash-based identity |
+| Goal 6: Audit-Grade Outputs | **✅ Implemented** (partial) | Artifacts produced. Conformance fixtures **DEFERRED** to v2 (§11.8) |
 
 ### Architecture
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| Engine resolves, Adapter obeys | **IN v1** | Core principle |
-| Trust boundary | **IN v1** | Trusted adapter assumption |
-| Baseline vs Candidate | **IN v1** | Core certification model |
-| Shared hashing infrastructure | **IN v1** | Canonical JSON for v1; §7.0 is single source of truth |
-| Hash & Encoding Contract | **IN v1** | §7.0 — authoritative reference for all hashing/encoding |
-| `namako_hash` crate | **DEFERRED** to v2+ | v1 uses inline hashing; v2+ may extract crate |
+| Engine resolves, Adapter obeys | **✅ Implemented** | Core principle |
+| Trust boundary | **✅ Implemented** | Trusted adapter assumption |
+| Baseline vs Candidate | **✅ Implemented** | Core certification model |
+| Shared hashing infrastructure | **✅ Implemented** | Canonical JSON; §7.0 is single source of truth |
+| Hash & Encoding Contract | **✅ Implemented** | §7.0 — authoritative reference for all hashing/encoding |
+| `namako_hash` crate | **DEFERRED** to v2 | Current implementation uses inline hashing; v2 may extract crate |
 
 ### Resolution & Plan
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| Resolved Execution Plan | **IN v1** | Core artifact |
-| `resolved_plan_hash` | **IN v1** | Core identity field |
-| `scenario_key` derivation | **IN v1.5** | §6.4.3 — explicit ID format (`Feature:Rule_nn:Scenario_nn`) |
-| Kind inference (And/But → effective) | **IN v1** | Standard Gherkin semantics |
-| Signature enforcement | **IN v1** | Hard error on mismatch; fully defined in §5.3 |
-| Strict ambiguity policy | **IN v1** | >1 match → hard error |
-| Orphan → hard error | **IN v1.5** | Hard error + `namako stub` mitigation (§10.5.2) |
-| Missing step → hard error | **IN v1** | 0 matches → hard error |
+| Resolved Execution Plan | **✅ Implemented** | Core artifact |
+| `resolved_plan_hash` | **✅ Implemented** | Core identity field |
+| `scenario_key` derivation | **✅ Implemented** | §6.4.3 — explicit ID format (`Feature:Rule_nn:Scenario_nn`) |
+| Kind inference (And/But → effective) | **✅ Implemented** | Standard Gherkin semantics |
+| Signature enforcement | **✅ Implemented** | Hard error on mismatch; fully defined in §5.3 |
+| Strict ambiguity policy | **✅ Implemented** | >1 match → hard error |
+| Orphan → hard error | **✅ Implemented** | Hard error + `namako stub` mitigation (§10.5.2) |
+| Missing step → hard error | **✅ Implemented** | 0 matches → hard error |
 
 ### ID Scheme
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| `@Feature(name)` feature identity | **IN v1.5** | Required tag (§10.5.1) |
-| `@Rule_nn` rule identity | **IN v1.5** | Required tag (§10.5.1) |
-| `@Scenario_nn` scenario identity | **IN v1.5** | Required tag (§10.5.1) |
-| `EID` example row identity | **IN v1.5** (optional) | SHOULD have; MUST for v2+ (§10.5.1) |
-| Expression-based binding ID | **IN v1** | §4.2 |
+| `@Feature(name)` feature identity | **✅ Implemented** | Required tag (§10.5.1) |
+| `@Rule_nn` rule identity | **✅ Implemented** | Required tag (§10.5.1) |
+| `@Scenario_nn` scenario identity | **✅ Implemented** | Required tag (§10.5.1) |
+| `EID` example row identity | **✅ Implemented** (optional) | SHOULD have; MUST for v2 (§10.5.1) |
+| Expression-based binding ID | **✅ Implemented** | §4.2 |
 
 ### Spec Surface
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| FeatureAstNorm | **DEFERRED** to v2+ | §11.1. v1 uses simpler fingerprint |
-| `feature_ast_hash` | **DEFERRED** to v2+ | v1 uses `feature_fingerprint_hash` |
-| Rule-only scenarios | **DEFERRED** to v2+ | v1 does not enforce |
-| Background under Rule only | **DEFERRED** to v2+ | v1 does not enforce |
-| Durations excluded from hash | **IN v1** | Durations are metadata only |
+| FeatureAstNorm | **DEFERRED** to v2 | §11.1. Current system uses simpler fingerprint |
+| `feature_ast_hash` | **DEFERRED** to v2 | Current system uses `feature_fingerprint_hash` |
+| Rule-only scenarios | **DEFERRED** to v2 | Current system does not enforce |
+| Background under Rule only | **DEFERRED** to v2 | Current system does not enforce |
+| Durations excluded from hash | **✅ Implemented** | Durations are metadata only |
 
 ### Invariants (v9)
 
 | Invariant | Status | Notes |
 |-----------|--------|-------|
-| 1: Structural Tag Integrity | **IN v1.5** | Explicit ID scheme enforced (§10.5.1) |
-| 2: Explicit Binding Identity | **IN v1** | Generated binding ID |
-| 3: Engine Supremacy | **IN v1** | Core principle |
-| 4: No Orphan Bindings | **IN v1.5** | Hard error + `namako stub` (§10.5.2) |
-| 5: Operational Determinism | **IN v1** | Sorted keys, stable order |
-| 6: Single-Kind Binding Functions | **IN v1** | Each binding → one kind |
-| 7: Collision-Free Execution | **IN v1** | Per-scenario World |
-| 8: Explicit Certification Workflow | **IN v1** | `verify` checks, `update-cert` changes |
+| 1: Structural Tag Integrity | **✅ Implemented** | Explicit ID scheme enforced (§10.5.1) |
+| 2: Explicit Binding Identity | **✅ Implemented** | Generated binding ID |
+| 3: Engine Supremacy | **✅ Implemented** | Core principle |
+| 4: No Orphan Bindings | **✅ Implemented** | Hard error + `namako stub` (§10.5.2) |
+| 5: Operational Determinism | **✅ Implemented** | Sorted keys, stable order |
+| 6: Single-Kind Binding Functions | **✅ Implemented** | Each binding → one kind |
+| 7: Collision-Free Execution | **✅ Implemented** | Per-scenario World |
+| 8: Explicit Certification Workflow | **✅ Implemented** | `verify` checks, `update-cert` changes |
 
 ### NPA
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| `adapter manifest` | **IN v1** | Semantic registry |
-| `adapter run --plan` | **IN v1** | Plan-driven execution |
-| Semantic vs Debug registry split | **IN v1** (simplified) | v1 has semantic only; debug is optional |
-| `impl_hash` | **IN v1** | Token-fingerprint scheme (§6.2.2) |
-| `impl_hash_scheme` | **IN v1** | Explicit scheme versioning (§6.2.2) |
-| Freshness check | **IN v1** | Refuse stale plans |
-| `executed_payload_hash` | **IN v1** | Integrity evidence |
-| `executed_impl_hash` | **IN v1** | Drift signal |
+| `adapter manifest` | **✅ Implemented** | Semantic registry |
+| `adapter run --plan` | **✅ Implemented** | Plan-driven execution |
+| Semantic vs Debug registry split | **✅ Implemented** (simplified) | Current implementation has semantic only; debug is optional |
+| `impl_hash` | **✅ Implemented** | Token-fingerprint scheme (§6.2.2) |
+| `impl_hash_scheme` | **✅ Implemented** | Explicit scheme versioning (§6.2.2) |
+| Freshness check | **✅ Implemented** | Refuse stale plans |
+| `executed_payload_hash` | **✅ Implemented** | Integrity evidence |
+| `executed_impl_hash` | **✅ Implemented** | Drift signal |
 
 ### Certification
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| Identity vs Metadata split | **IN v1** | Core design |
-| `hash_contract_version` | **IN v1** | Versioned encoding |
-| Verify recomputes authority hashes | **IN v1** | §7.4.1 — verify is the authority, not echoed values |
-| Stale artifact detection | **IN v1** | §7.4.3 — clear diagnostic on drift |
-| `resolution_semantics_id` | **DEFERRED** to v2+ | §11.9 |
-| `bindings_used_hash` | **DEFERRED** to v2+ | §11.12 |
-| Conformance fixtures | **DEFERRED** to v2+ | §11.8 |
+| Identity vs Metadata split | **✅ Implemented** | Core design |
+| `hash_contract_version` | **✅ Implemented** | Versioned encoding |
+| Verify recomputes authority hashes | **✅ Implemented** | §7.4.1 — verify is the authority, not echoed values |
+| Stale artifact detection | **✅ Implemented** | §7.4.3 — clear diagnostic on drift |
+| `resolution_semantics_id` | **DEFERRED** to v2 | §11.9 |
+| `bindings_used_hash` | **DEFERRED** to v2 | §11.12 |
+| Conformance fixtures | **DEFERRED** to v2 | §11.8 |
 
 ### CLI
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| `namako manifest` | **IN v1** | Debug command |
-| `namako lint` | **IN v1** | Core command |
-| `namako run` | **IN v1** | Core command |
-| `namako verify` | **IN v1** | CI gate |
-| `namako update-cert` | **IN v1** | Manual baseline update |
-| `namako status` | **IN v1** | Diff tool + JSON output (§10.5.5) |
-| `namako review` | **IN v1.5** | AI work packets (§10.5.3) |
-| `namako stub` | **IN v1.5** | Orphan binding mitigation (§10.5.2) |
+| `namako manifest` | **✅ Implemented** | Debug command |
+| `namako lint` | **✅ Implemented** | Core command |
+| `namako run` | **✅ Implemented** | Core command |
+| `namako verify` | **✅ Implemented** | CI gate |
+| `namako update-cert` | **✅ Implemented** | Manual baseline update |
+| `namako status` | **✅ Implemented** | Diff tool + JSON output (§10.5.5) |
+| `namako review` | **✅ Implemented** | AI work packets (§10.5.3) |
+| `namako stub` | **✅ Implemented** | Orphan binding mitigation (§10.5.2) |
 
 ### Workflows
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| Tight loop (AI-assisted SDD) | **IN v1** | §10 |
-| Slice-based workflow | **IN v1** | §10.2 |
-| Requirements capture | **IN v1** | Step 1 |
-| Convert to .feature | **IN v1** | Step 2 |
-| Scenario integrity loop | **IN v1** | Step 3 |
-| Binding faithfulness loop | **IN v1** | Step 4 |
-| Implement system | **IN v1** | Step 5 |
+| Tight loop (AI-assisted SDD) | **✅ Implemented** | §10 |
+| Slice-based workflow | **✅ Implemented** | §10.2 |
+| Requirements capture | **✅ Implemented** | Step 1 |
+| Convert to .feature | **✅ Implemented** | Step 2 |
+| Scenario integrity loop | **✅ Implemented** | Step 3 |
+| Binding faithfulness loop | **✅ Implemented** | Step 4 |
+| Implement system | **✅ Implemented** | Step 5 |
 
 ### Multi-Language Support (New)
 
 | Concept | Status | Notes |
 |---------|--------|-------|
-| Language-neutral adapter protocol | **IN v1** (conceptual) | NPA is language-neutral by design; v1 ships Rust adapter only |
-| Any-language adapter support | **DEFERRED** to v2+ | §11.13 |
-| Universal 3-piece project pattern | **DEFERRED** to v2+ | §11.13.2 |
-| Adapter SDKs (JS/TS, Python, Go, etc.) | **DEFERRED** to v2+ | §11.14 |
-| Cross-language hashing (hash oracle) | **DEFERRED** to v2+ | §11.15 Strategy 1 |
-| Cross-language hashing (native SDK) | **DEFERRED** to v2+ | §11.15 Strategy 2 |
-| Conformance fixtures for adapters | **DEFERRED** to v2+ | §11.15 |
-| Adapter certification tooling | **DEFERRED** to v2+ | §11.16 |
+| Language-neutral adapter protocol | **✅ Implemented** (conceptual) | NPA is language-neutral by design; current system ships Rust adapter only |
+| Any-language adapter support | **DEFERRED** to v2 | §11.13 |
+| Universal 3-piece project pattern | **DEFERRED** to v2 | §11.13.2 |
+| Adapter SDKs (JS/TS, Python, Go, etc.) | **DEFERRED** to v2 | §11.14 |
+| Cross-language hashing (hash oracle) | **DEFERRED** to v2 | §11.15 Strategy 1 |
+| Cross-language hashing (native SDK) | **DEFERRED** to v2 | §11.15 Strategy 2 |
+| Conformance fixtures for adapters | **DEFERRED** to v2 | §11.15 |
+| Adapter certification tooling | **DEFERRED** to v2 | §11.16 |
 
 ### Dropped Concepts
 
 | Concept | Status | Reason |
 |---------|--------|--------|
-| Malicious adapter defense | **DROPPED** | Out of scope; trusted adapter assumption (v2+ adds conformance as mitigation) |
+| Malicious adapter defense | **DROPPED** | Out of scope; trusted adapter assumption (v2 adds conformance as mitigation) |
 | Deep semantic coverage measurement | **DROPPED** | Non-goal; review-driven process only |
 | Assertion meaningfulness measurement | **DROPPED** | Non-goal; out of scope |
 
