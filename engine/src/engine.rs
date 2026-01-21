@@ -18,8 +18,11 @@ use regex::Regex;
 
 use crate::npap::{
     PlannedStep, ResolvedPlan, ResolvedScenario, SemanticBinding,
-    SemanticStepRegistry, compute_feature_fingerprint, derive_scenario_key,
+    SemanticStepRegistry, compute_feature_fingerprint,
 };
+
+#[cfg(not(feature = "npap"))]
+use crate::npap::derive_scenario_key;
 
 #[cfg(feature = "npap")]
 use crate::id_tags::{
@@ -71,6 +74,17 @@ pub enum ResolutionError {
     MissingFeatureId {
         feature_path: String,
         feature_name: String,
+    },
+    /// Feature has no Rule sections
+    MissingRuleSection {
+        feature_path: String,
+        feature_name: String,
+    },
+    /// Scenario defined outside a Rule section
+    ScenarioOutsideRule {
+        feature_path: String,
+        scenario_name: String,
+        line: u32,
     },
     /// Rule is missing @Rule(nn) tag
     MissingRuleId {
@@ -182,6 +196,25 @@ impl std::fmt::Display for ResolutionError {
                     f,
                     "Missing @Feature(name) tag: feature \"{feature_name}\" in {feature_path} \
                      must have a @Feature(snake_case_name) tag"
+                )
+            }
+            Self::MissingRuleSection {
+                feature_path,
+                feature_name,
+            } => {
+                write!(
+                    f,
+                    "Feature \"{feature_name}\" in {feature_path} must define at least one Rule section"
+                )
+            }
+            Self::ScenarioOutsideRule {
+                feature_path,
+                scenario_name,
+                line,
+            } => {
+                write!(
+                    f,
+                    "Scenario \"{scenario_name}\" in {feature_path}:{line} must be nested under a Rule section"
                 )
             }
             Self::MissingRuleId {
@@ -490,6 +523,23 @@ impl ResolutionEngine {
         let mut seen_scenario_keys: HashSet<String> = HashSet::new();
         let mut seen_rule_ids: HashSet<u32> = HashSet::new();
 
+        if feature.rules.is_empty() {
+            errors.push(ResolutionError::MissingRuleSection {
+                feature_path: path.to_string(),
+                feature_name: feature.name.clone(),
+            });
+        }
+
+        if !feature.scenarios.is_empty() {
+            for scenario in &feature.scenarios {
+                errors.push(ResolutionError::ScenarioOutsideRule {
+                    feature_path: path.to_string(),
+                    scenario_name: scenario.name.clone(),
+                    line: u32::try_from(scenario.position.line).unwrap_or(0),
+                });
+            }
+        }
+
         // Resolve feature-level background steps once (they get prepended to each scenario)
         let feature_background_steps = self.resolve_background_steps(
             feature.background.as_ref(),
@@ -497,73 +547,7 @@ impl ResolutionEngine {
             errors,
         );
 
-        // PHASE 2.2c: Process feature-level scenarios (no rule context)
-        for scenario in &feature.scenarios {
-            // For @Deferred scenarios: resolve steps to get binding IDs for orphan detection
-            // but don't add to the executable plan
-            if is_deferred_scenario(scenario) {
-                self.collect_deferred_binding_ids(scenario, path, deferred_binding_ids);
-                continue;
-            }
-
-            // Extract and validate scenario-level ID tags
-            #[cfg(feature = "npap")]
-            let scenario_id = match extract_scenario_id(&scenario.tags) {
-                Some(id) => id,
-                None => {
-                    errors.push(ResolutionError::MissingScenarioId {
-                        feature_path: path.to_string(),
-                        scenario_name: scenario.name.clone(),
-                        rule_name: None,
-                    });
-                    continue; // Skip this scenario
-                }
-            };
-
-            // Derive scenario key from explicit IDs (v1.5 format)
-            #[cfg(feature = "npap")]
-            let scenario_key = derive_scenario_key_from_ids(&feature_id, None, &scenario_id);
-
-            // Fallback to line-based key if feature flag not enabled (v1 compat)
-            #[cfg(not(feature = "npap"))]
-            let scenario_key = {
-                let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
-                derive_scenario_key(path, line_u32)
-            };
-
-            // Check for duplicate scenario keys within this feature
-            if !seen_scenario_keys.insert(scenario_key.clone()) {
-                errors.push(ResolutionError::DuplicateScenarioKey {
-                    scenario_key: scenario_key.clone(),
-                    feature_path: path.to_string(),
-                    scenario_name: scenario.name.clone(),
-                });
-                continue; // Skip this scenario
-            }
-
-            // Start with background steps, then scenario steps
-            let mut resolved_steps = feature_background_steps.clone();
-            let mut last_keyword = if resolved_steps.is_empty() { "Given" } else { "Given" };
-
-            for step in &scenario.steps {
-                // Track effective kind for And/But
-                let effective_kind = resolve_effective_kind(&step.keyword, &mut last_keyword);
-
-                match self.resolve_step(step, path, &effective_kind) {
-                    Ok(planned) => resolved_steps.push(planned),
-                    Err(e) => errors.push(e),
-                }
-            }
-
-            resolved_scenarios.push(ResolvedScenario {
-                scenario_key,
-                feature_path: path.to_string(),
-                scenario_name: scenario.name.clone(),
-                steps: resolved_steps,
-            });
-        }
-
-        // PHASE 2.2d: Process rules and their scenarios
+        // PHASE 2.2c: Process rules and their scenarios
         for rule in &feature.rules {
             // Extract and validate rule-level ID tags
             #[cfg(feature = "npap")]
@@ -933,11 +917,13 @@ mod tests {
 @Feature(simple_test)
 Feature: Simple test
 
-  @Scenario(01)
-  Scenario: Client connects
-    Given a server is running
-    When a client connects
-    Then the client is connected
+  @Rule(01)
+  Rule: Client connections
+    @Scenario(01)
+    Scenario: Client connects
+      Given a server is running
+      When a client connects
+      Then the client is connected
 "#;
 
         let features = vec![("test.feature", feature_source)];
@@ -972,13 +958,15 @@ Feature: Simple test
 @Feature(and_but_test)
 Feature: And/But test
 
-  @Scenario(01)
-  Scenario: With And/But
-    Given a server is running
-    And the server is configured
-    When a client connects
-    Then the client is connected
-    But the server accepts it
+  @Rule(01)
+  Rule: And/But handling
+    @Scenario(01)
+    Scenario: With And/But
+      Given a server is running
+      And the server is configured
+      When a client connects
+      Then the client is connected
+      But the server accepts it
 "#;
 
         let features = vec![("test.feature", feature_source)];
@@ -1005,10 +993,12 @@ Feature: And/But test
 @Feature(missing_step)
 Feature: Missing step
 
-  @Scenario(01)
-  Scenario: No binding
-    Given a server is running
-    When no binding exists for this
+  @Rule(01)
+  Rule: Missing bindings
+    @Scenario(01)
+    Scenario: No binding
+      Given a server is running
+      When no binding exists for this
 "#;
 
         let features = vec![("test.feature", feature_source)];
@@ -1030,9 +1020,11 @@ Feature: Missing step
 @Feature(captures)
 Feature: Captures
 
-  @Scenario(01)
-  Scenario: User
-    Given a user named "Alice"
+  @Rule(01)
+  Rule: Captures
+    @Scenario(01)
+    Scenario: User
+      Given a user named "Alice"
 "#;
 
         let features = vec![("test.feature", feature_source)];
@@ -1055,9 +1047,11 @@ Feature: Captures
 @Feature(signature_mismatch)
 Feature: Signature mismatch
 
-  @Scenario(01)
-  Scenario: Wrong arity
-    Given a user named "Alice"
+  @Rule(01)
+  Rule: Arity checks
+    @Scenario(01)
+    Scenario: Wrong arity
+      Given a user named "Alice"
 "#;
 
         let features = vec![("test.feature", feature_source)];
@@ -1098,11 +1092,13 @@ Feature: Signature mismatch
 @Feature(orphan_test)
 Feature: Simple test
 
-  @Scenario(01)
-  Scenario: Client connects
-    Given a server is running
-    When a client connects
-    Then the client is connected
+  @Rule(01)
+  Rule: Client connections
+    @Scenario(01)
+    Scenario: Client connects
+      Given a server is running
+      When a client connects
+      Then the client is connected
 "#;
 
         let features = vec![("test.feature", feature_source)];
@@ -1134,10 +1130,12 @@ Feature: Simple test
 @Feature(all_used)
 Feature: All used
 
-  @Scenario(01)
-  Scenario: Both bindings used
-    Given a server is running
-    When a client connects
+  @Rule(01)
+  Rule: Both bindings
+    @Scenario(01)
+    Scenario: Both bindings used
+      Given a server is running
+      When a client connects
 "#;
 
         let features = vec![("test.feature", feature_source)];
@@ -1145,5 +1143,30 @@ Feature: All used
 
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         assert!(result.orphan_bindings.is_empty());
+    }
+
+    #[test]
+    fn test_requires_rule_sections() {
+        let registry = SemanticStepRegistry::new(vec![
+            make_binding("Given", "a server is running", 0),
+        ]);
+
+        let engine = ResolutionEngine::new(&registry).unwrap();
+
+        let feature_source = r#"
+@Feature(missing_rule)
+Feature: Missing rule
+
+  @Scenario(01)
+  Scenario: Top level
+    Given a server is running
+"#;
+
+        let features = vec![("test.feature", feature_source)];
+        let result = engine.resolve(features.into_iter());
+
+        assert!(result.plan.is_none());
+        assert!(result.errors.iter().any(|e| matches!(e, ResolutionError::MissingRuleSection { .. })));
+        assert!(result.errors.iter().any(|e| matches!(e, ResolutionError::ScenarioOutsideRule { .. })));
     }
 }

@@ -144,7 +144,7 @@ fn generate_single_stub(
     let existing = std::fs::read_to_string(feature_path)
         .with_context(|| format!("Failed to read {}", feature_path.display()))?;
 
-    // Generate stub scenario
+    // Generate stub scenario (ensuring a Rule section)
     let stub = generate_single_stub_scenario(orphan);
 
     // Append to feature file
@@ -176,7 +176,6 @@ fn generate_stub_feature(orphans: &[OrphanBinding]) -> String {
     lines.push("Feature: Orphan Binding Stubs".to_string());
     lines.push("  Placeholder scenarios for bindings not yet used by real specifications.".to_string());
     lines.push(String::new());
-
     // Sort orphans for deterministic output
     let mut sorted_orphans: Vec<_> = orphans.iter().collect();
     sorted_orphans.sort_by(|a, b| a.binding_id.cmp(&b.binding_id));
@@ -186,14 +185,14 @@ fn generate_stub_feature(orphans: &[OrphanBinding]) -> String {
         let step_text = expression_to_step_text(&orphan.expression);
         let short_id = &orphan.binding_id[..16.min(orphan.binding_id.len())];
 
-        lines.push(format!("  @Deferred @Stub"));
-        lines.push(format!("  {}", scenario_id));
+        lines.push(format!("    @Deferred @Stub"));
+        lines.push(format!("    {}", scenario_id));
         lines.push(format!(
-            "  Scenario: Stub for orphan binding {}...",
+            "    Scenario: Stub for orphan binding {}...",
             short_id
         ));
-        lines.push(format!("    # Expression: \"{}\"", orphan.expression));
-        lines.push(format!("    {} {}", orphan.kind, step_text));
+        lines.push(format!("      # Expression: \"{}\"", orphan.expression));
+        lines.push(format!("      {} {}", orphan.kind, step_text));
         lines.push(String::new());
     }
 
@@ -206,11 +205,11 @@ fn generate_single_stub_scenario(orphan: &OrphanBinding) -> String {
     let short_id = &orphan.binding_id[..16.min(orphan.binding_id.len())];
 
     format!(
-        r#"  # Auto-generated stub for orphan binding
-  @Deferred @Stub
-  Scenario: Stub for orphan binding {}...
-    # Expression: "{}"
-    {} {}"#,
+        r#"    # Auto-generated stub for orphan binding
+    @Deferred @Stub
+    Scenario: Stub for orphan binding {}...
+      # Expression: "{}"
+      {} {}"#,
         short_id,
         orphan.expression,
         orphan.kind,
