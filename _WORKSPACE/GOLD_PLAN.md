@@ -1506,7 +1506,7 @@ These invariants MUST be maintained in all v1.7 design and implementation:
 
 1. **Tesaki is the ONLY orchestrator / state machine** in the Product Loop.
 2. **Namako is measurement + packet emission** (gate + status/review/explain). Tesaki consumes packets; it does not re-derive them.
-3. **Runner is an untrusted executor** (Claude Code today). Runner never decides "what next", never advances Tesaki state.
+3. **Runner is an untrusted executor** (Claude Code or Codex CLI). Runner never decides "what next", never advances Tesaki state.
 4. **Assume context bleed is always possible.** Design around it via Mission Bundles + post-run gates; do not introduce "fresh session support" flags.
 5. **Mission Bundle is the unit of work** and the contract boundary between Tesaki and the runner.
 6. **Single-command UX target:** user runs `tesaki run` repeatedly. Tesaki runs Namako internally for measurement.
@@ -1519,7 +1519,7 @@ Three layers exist and MUST remain strictly separated:
 |-------|------|-------------|
 | **Layer A** | BOOTSTRAP | Connor + Opus building Namako/Tesaki (this project phase) |
 | **Layer B** | PRODUCT LOOP | Tesaki + Namako driving Naia development (the workflow we are building) |
-| **Layer C** | RUNNER | External coding agent process (Claude Code session) |
+| **Layer C** | RUNNER | External coding agent process (Claude Code or Codex CLI session) |
 
 **Critical Invariant:** Layer C (Runner) MUST NOT orchestrate Layer B (Product Loop). The runner receives a mission, executes it, and returns. It does not decide what happens next.
 
@@ -1528,7 +1528,7 @@ Three layers exist and MUST remain strictly separated:
 **Tesaki owns:**
 - Task selection from Namako packets
 - Mission lifecycle + stop conditions
-- Invoking runner (Claude Code integration)
+- Invoking runner (Claude Code or Codex CLI integration)
 - Post-run validation by running `namako gate --json`
 - Governance enforcement (cert update limits, retries, halts)
 
@@ -1563,8 +1563,8 @@ This prevents architectural drift where Tesaki becomes a shadow implementation o
 
 **Model Definition:**
 - Runner is an internal Tesaki abstraction (Rust trait/module).
-- Claude Code is one concrete backend implementation.
-- Swapping runners later is done by implementing additional backends inside Tesaki (e.g., local LLM, different API, mock runner for testing).
+- Claude Code and Codex CLI are the primary concrete backend implementations.
+- Swapping runners is done by specifying `--runner claude` or `--runner codex` (or implementing additional backends inside Tesaki, e.g., local LLM, mock runner for testing).
 
 **No separate runner CLI:** Users run `tesaki run`, which internally manages runner invocation. The runner process receives a mission bundle and returns; it has no external CLI of its own.
 

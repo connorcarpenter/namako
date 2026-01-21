@@ -33,7 +33,7 @@ v1.7 implements the autonomous Product Loop where Tesaki orchestrates a coding a
 |-----------|--------|-------------|
 | Mission Bundle | ✅ | `tesaki/src/mission.rs` - Filesystem contract |
 | `tesaki run` | ✅ | Single-command UX entrypoint |
-| Runner Backends | ✅ | Mock, Command, ClaudeCode in `tesaki/src/runner.rs` |
+| Runner Backends | ✅ | Mock, ClaudeCode, Codex in `tesaki/src/{runner.rs, claude_code_runner.rs, codex_runner.rs}` |
 | Stop Conditions | ✅ | DONE, BLOCKED, BUDGET, etc. in `tesaki/src/stop_reason.rs` |
 | Workspace Tracking | ✅ | `tesaki/src/workspace.rs` - Change detection |
 | Gate Outcome Classification | ✅ | `tesaki/src/gate.rs` - GateOutcome + UpdateCertInvoker |
@@ -61,7 +61,7 @@ tesaki config print
 cargo run -p tesaki -- run \
   -s <specs_dir> \
   -a "<adapter_cmd>" \
-  --runner mock  # or claude, cmd
+  --runner mock  # or claude, codex, cmd
 ```
 
 **Next step:** Test with clean specs repository, then transition to CONSUMPTION mode.

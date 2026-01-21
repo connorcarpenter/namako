@@ -22,6 +22,7 @@
 | 0.1 | Mission Bundle | `.tesaki/missions/<id>/` directory structure | ✅ `mission.rs` |
 | 0.2 | Runner Trait | `Runner` trait/abstraction in Tesaki | ✅ `runner.rs` |
 | 0.3 | Claude Code Backend | First runner backend | ✅ `ClaudeCodeRunner` |
+| 0.3b | Codex Backend | OpenAI Codex CLI runner backend | ✅ `CodexRunner` |
 | 0.4 | `tesaki run` Command | Single-command entrypoint | ✅ `main.rs` |
 | 0.5 | Stop Conditions | DONE/BLOCKED/BUDGET/etc. detection | ✅ `stop_reason.rs` |
 | 0.6 | Gate Classification | GateOutcome + UpdateCertInvoker | ✅ `gate.rs` |
@@ -33,7 +34,7 @@
 
 ### Exit Criteria for Phase 0 — All Satisfied
 
-- [x] `tesaki run` executes a mission bundle via Claude Code backend
+- [x] `tesaki run` executes a mission bundle via Claude Code or Codex backend
 - [x] `namako gate --json` validates runner output
 - [x] Stop conditions emit structured reasons
 - [x] At least one successful autonomous mission cycle demonstrated (mock-backed)
@@ -191,6 +192,7 @@ For each harness enhancement:
 - ✅ Mission Bundle directory structure (`tesaki/src/mission.rs`)
 - ✅ Runner trait abstraction (`tesaki/src/runner.rs`)
 - ✅ Claude Code runner backend (`ClaudeCodeRunner`)
+- ✅ Codex CLI runner backend (`CodexRunner`)
 - ✅ `tesaki run` command (`tesaki/src/main.rs`)
 - ✅ Stop condition detection (`tesaki/src/stop_reason.rs`)
 - ✅ Config discovery (`tesaki/src/config.rs`)
