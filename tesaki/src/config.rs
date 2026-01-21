@@ -67,6 +67,27 @@ pub struct Config {
     /// Maximum files the runner may change per mission
     #[serde(default)]
     pub max_files_changed: Option<usize>,
+
+    /// Optional surface definitions (glob patterns)
+    #[serde(default)]
+    pub surfaces: Option<SurfacesConfig>,
+}
+
+/// Surface patterns override
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SurfaceConfig {
+    pub patterns: Vec<String>,
+}
+
+/// Surface definitions section
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SurfacesConfig {
+    #[serde(default)]
+    pub spec: Option<SurfaceConfig>,
+    #[serde(default)]
+    pub tests: Option<SurfaceConfig>,
+    #[serde(default)]
+    pub sut: Option<SurfaceConfig>,
 }
 
 /// Resolved configuration with all paths made absolute
@@ -101,6 +122,9 @@ pub struct ResolvedConfig {
 
     /// Maximum files changed
     pub max_files_changed: Option<usize>,
+
+    /// Surface definitions overrides
+    pub surfaces: Option<SurfacesConfig>,
 }
 
 impl ResolvedConfig {
@@ -200,6 +224,7 @@ fn resolve_config(config: Config, config_root: &Path, config_path: &Path) -> Res
         max_cert_updates: config.max_cert_updates,
         max_runtime_seconds: config.max_runtime_seconds,
         max_files_changed: config.max_files_changed,
+        surfaces: config.surfaces,
     })
 }
 
@@ -263,6 +288,16 @@ max_retries = 2
 max_cert_updates = 3
 max_runtime_seconds = 600
 max_files_changed = 10
+
+# Optional: Surface overrides
+[surfaces.spec]
+patterns = ["test/specs/**/*.feature"]
+
+[surfaces.tests]
+patterns = ["test/tests/**", "test/harness/**"]
+
+[surfaces.sut]
+patterns = ["src/**", "client/**", "server/**"]
 "#
 }
 
@@ -391,6 +426,7 @@ adapter_cmd = "test"
                 assert!(config.max_cert_updates.is_none());
                 assert!(config.max_runtime_seconds.is_none());
                 assert!(config.max_files_changed.is_none());
+                assert!(config.surfaces.is_none());
             }
             ConfigDiscoveryResult::NotFound { .. } => panic!("Expected to find config"),
         }
@@ -411,6 +447,15 @@ max_retries = 5
 max_cert_updates = 10
 max_runtime_seconds = 1200
 max_files_changed = 20
+
+[surfaces.spec]
+patterns = ["specs/**/*.feature"]
+
+[surfaces.tests]
+patterns = ["tests/**"]
+
+[surfaces.sut]
+patterns = ["src/**"]
 "#;
         fs::write(tesaki_dir.join("config.toml"), config_content).unwrap();
 
@@ -423,6 +468,36 @@ max_files_changed = 20
                 assert_eq!(config.max_cert_updates, Some(10));
                 assert_eq!(config.max_runtime_seconds, Some(1200));
                 assert_eq!(config.max_files_changed, Some(20));
+                assert!(config.surfaces.is_some());
+            }
+            ConfigDiscoveryResult::NotFound { .. } => panic!("Expected to find config"),
+        }
+    }
+
+    #[test]
+    fn test_surface_overrides_parse() {
+        let temp = TempDir::new().unwrap();
+        let tesaki_dir = temp.path().join(".tesaki");
+        fs::create_dir_all(&tesaki_dir).unwrap();
+
+        let config_content = r#"
+specs_dir = "specs"
+adapter_cmd = "test"
+
+[surfaces.spec]
+patterns = ["specs/**/*.feature"]
+
+[surfaces.tests]
+patterns = ["tests/**"]
+"#;
+        fs::write(tesaki_dir.join("config.toml"), config_content).unwrap();
+
+        let result = discover_config(temp.path()).unwrap();
+        match result {
+            ConfigDiscoveryResult::Found(config) => {
+                let surfaces = config.surfaces.unwrap();
+                assert_eq!(surfaces.spec.unwrap().patterns, vec!["specs/**/*.feature".to_string()]);
+                assert_eq!(surfaces.tests.unwrap().patterns, vec!["tests/**".to_string()]);
             }
             ConfigDiscoveryResult::NotFound { .. } => panic!("Expected to find config"),
         }

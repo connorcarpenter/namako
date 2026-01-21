@@ -1,7 +1,7 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
-**Last Updated:** 2026-01-20
-**MODE:** BOOTSTRAP (v1.7 Runner Integration IMPLEMENTED; ready for testing)
+**Last Updated:** 2026-01-21
+**MODE:** CONSUMPTION (v1.7 Runner Integration VERIFIED; using Tesaki Product Loop)
 
 ---
 
@@ -19,7 +19,8 @@
 | CI Gates | ✅ ALL GREEN |
 | Bootstrap Exit Criteria | ✅ ALL SATISFIED |
 | **Namako v1.5 Explicit ID Tags** | ✅ **COMPLETE** |
-| **Namako v1.7 Runner Integration** | ✅ **IMPLEMENTED** |
+| **Namako v1.7 Runner Integration** | ✅ **VERIFIED** |
+| **CONSUMPTION Mode** | ✅ **ACTIVE** |
 
 ---
 
@@ -42,7 +43,7 @@ v1.7 implements the autonomous Product Loop where Tesaki orchestrates a coding a
 | **Config Discovery** | ✅ | `tesaki/src/config.rs` - `.tesaki/config.toml` auto-discovery |
 | **Dev Shim Scripts** | ✅ | `scripts/tesaki` + `scripts/install-tesaki-dev-shim` |
 
-**Current state:** Implementation complete. Ready for end-to-end testing.
+**Current state:** Implementation verified. CONSUMPTION mode active.
 
 **Usage (with config discovery — zero flags):**
 ```bash
@@ -64,7 +65,7 @@ cargo run -p tesaki -- run \
   --runner mock  # or claude, codex, cmd
 ```
 
-**Next step:** Test with clean specs repository, then transition to CONSUMPTION mode.
+**Next step:** Drive CORE work items through `tesaki run` Product Loop.
 
 ---
 
@@ -345,7 +346,7 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 ## 9. Transition Readiness
 
-### Current Phase: v1.7 Runner Integration (BOOTSTRAP)
+### Current Phase: CONSUMPTION Mode Active
 
 **v1.5 AI-enablement features are COMPLETE:**
 
@@ -358,12 +359,12 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 
 ### Path to CONSUMPTION
 
-**v1.7 Runner Integration must be implemented before CONSUMPTION mode.**
+**v1.7 Runner Integration is VERIFIED. CONSUMPTION mode is ACTIVE.**
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 0 | v1.7 Runner Integration (BOOTSTRAP) | ✅ COMPLETE |
-| Phase 1 | CONSUMPTION Mode Activation | ⏳ PENDING |
+| Phase 0 | v1.7 Runner Integration (BOOTSTRAP) | ✅ VERIFIED |
+| Phase 1 | CONSUMPTION Mode Activation | ✅ **ACTIVE** |
 
 #### Phase 0: v1.7 Implementation Steps — ✅ COMPLETE
 
@@ -374,14 +375,14 @@ V2+ features remain **DEFERRED** — not blocking v1.5 or CONSUMPTION mode.
 5. [x] Implement gate outcome classification (`tesaki/src/gate.rs`)
 6. [x] Implement update-cert governance (auto update-cert for verify-only failures)
 7. [x] Implement retry logic (retry loop for retryable failures)
-8. [x] End-to-end test with controlled mission (48 tests pass)
+8. [x] End-to-end test with controlled mission (54 tests pass)
 
-#### Phase 1: CONSUMPTION Transition Steps (After v1.7)
+#### Phase 1: CONSUMPTION Transition Steps — ✅ COMPLETE
 
-Once v1.7 is verified end-to-end:
-1. ✅ Verify `@Stub` exclusion from promotion candidates — **DONE** (2026-01-20)
-2. ✅ Run `namako update-cert` to establish baseline — **DONE** (2026-01-20)
-3. [ ] Update this file: `MODE: CONSUMPTION`
+v1.7 verified end-to-end on 2026-01-21:
+1. ✅ Verify `@Stub` exclusion from promotion candidates — **DONE** (2026-01-21)
+2. ✅ Run `namako update-cert` to establish baseline — **DONE** (2026-01-21)
+3. ✅ Update this file: `MODE: CONSUMPTION` — **DONE** (2026-01-21)
 4. [ ] Select first CORE work item (per GOLD_PLAN §2.7 First CONSUMPTION Mission Template)
 5. [ ] Drive through `tesaki run` Product Loop
 

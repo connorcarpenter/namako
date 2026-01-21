@@ -73,10 +73,10 @@ pub trait Runner: Send + Sync {
     /// Execute the runner against a mission bundle.
     ///
     /// The runner should:
-    /// 1. Read NEXT_TASK.md for instructions
+    /// 1. Read MISSION.md for instructions
     /// 2. Read POLICY.md for constraints
     /// 3. Perform the requested work
-    /// 4. Write attempt_report.md to OUTPUT/
+    /// 4. Write attempt_report.md to RUNNER_OUTPUT/
     ///
     /// Returns the outcome of the execution.
     fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome>;

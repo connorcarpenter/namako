@@ -1,4 +1,4 @@
-//! Mission Bundle module for v1.7 Runner Integration.
+//! Mission Bundle module for v1.8 Runner Integration.
 //!
 //! This module implements the filesystem contract between Tesaki and the runner,
 //! per GOLD_PLAN.md §10.7.5.
@@ -13,25 +13,31 @@
 //!
 //! ```text
 //! .tesaki/missions/<mission_id>/
-//! ├── NEXT_TASK.md          # Single prompt payload for the runner
+//! ├── MISSION.md            # Single prompt payload for the runner
 //! ├── POLICY.md             # Rules: no commits, no orchestration, scope limits
-//! ├── EXPECTED.md           # Explicit postconditions Tesaki will check
 //! ├── INPUTS/               # Namako packet snapshots relevant to mission
 //! │   ├── status.json       # namako status --json output
 //! │   ├── review.json       # namako review output
 //! │   ├── explain.json      # namako explain output (if relevant)
 //! │   ├── gate.json         # namako gate --json output (pre-mission state)
+//! │   ├── repo_state.json   # computed RepoState
+//! │   └── mission_config.json # mission config + surface policy
 //! │   └── workspace.json    # Workspace configuration
-//! └── OUTPUT/               # Runner writes here; Tesaki writes gate results
+//! ├── POST_GATE.json        # Tesaki writes post-run gate output
+//! └── RUNNER_OUTPUT/        # Runner writes here
 //!     ├── attempt_report.md # Runner's self-reported attempt summary
 //!     ├── transcript.txt    # Optional: runner session transcript
-//!     └── gate_result.json  # Tesaki writes post-run gate output
+//!     └── stop_reason.json  # Runner stop reason (if available)
 //! ```
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::mission_type::{MissionBrief, MissionType};
+use crate::stage::Stage;
+use crate::surface_policy::{SurfaceDefinition, SurfacePolicy};
 
 /// Mission ID format: `NNN-<task_slug>-<short_hash>`
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,23 +169,23 @@ pub struct MissionInputs {
     pub gate_json: String,
     pub explain_json: Option<String>,
     pub workspace_json: String,
+    pub repo_state_json: String,
 }
 
-/// Task information for generating NEXT_TASK.md and EXPECTED.md.
-#[derive(Debug, Clone)]
-pub struct MissionTask {
-    /// The selected task name/identifier.
-    pub name: String,
-    /// Feature file path.
-    pub feature_path: String,
-    /// Rule name.
-    pub rule_name: String,
-    /// Description of what needs to be done.
-    pub description: String,
-    /// Missing step bindings to implement.
-    pub missing_bindings: Vec<String>,
-    /// Expected postconditions (machine-checkable).
-    pub expected_postconditions: Vec<String>,
+/// Mission config written to INPUTS/mission_config.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionConfig {
+    pub mission_type: String,
+    pub stage: String,
+    pub surface_policy: SurfacePolicy,
+    pub surface_definitions: SurfaceDefinitions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurfaceDefinitions {
+    pub spec: SurfaceDefinition,
+    pub tests_bindings: SurfaceDefinition,
+    pub sut: SurfaceDefinition,
 }
 
 /// Mission Bundle representing the filesystem contract.
@@ -194,14 +200,17 @@ impl MissionBundle {
     /// Create a new mission bundle with all required files.
     ///
     /// This creates the directory structure and writes:
-    /// - NEXT_TASK.md
+    /// - MISSION.md
     /// - POLICY.md
-    /// - EXPECTED.md
     /// - INPUTS/ directory with all input files
-    /// - OUTPUT/ directory (empty, for runner to write to)
+    /// - RUNNER_OUTPUT/ directory (empty, for runner to write to)
     pub fn create(
         tesaki_root: &Path,
-        task: &MissionTask,
+        mission_type: &MissionType,
+        brief: &MissionBrief,
+        stage: &Stage,
+        surface_policy: &SurfacePolicy,
+        surface_definitions: &SurfaceDefinitions,
         inputs: &MissionInputs,
         budgets: MissionBudgets,
         mode: &str,
@@ -209,13 +218,13 @@ impl MissionBundle {
         // Generate identity data for hash
         let identity_data = format!(
             "{}:{}:{}:{}",
-            task.name,
+            mission_type.name(),
             inputs.status_json,
             inputs.review_json,
             inputs.gate_json
         );
 
-        let id = MissionId::generate(tesaki_root, &task.name, &identity_data)?;
+        let id = MissionId::generate(tesaki_root, mission_type.name(), &identity_data)?;
         let mission_dir = tesaki_root.join("missions").join(id.as_str());
 
         // Create directory structure
@@ -225,26 +234,33 @@ impl MissionBundle {
         let inputs_dir = mission_dir.join("INPUTS");
         fs::create_dir_all(&inputs_dir)?;
 
-        let output_dir = mission_dir.join("OUTPUT");
-        fs::create_dir_all(&output_dir)?;
+        let runner_output_dir = mission_dir.join("RUNNER_OUTPUT");
+        fs::create_dir_all(&runner_output_dir)?;
 
-        // Write NEXT_TASK.md
-        let next_task_content = Self::generate_next_task_content(task, &id, &budgets);
-        fs::write(mission_dir.join("NEXT_TASK.md"), &next_task_content)?;
+        // Write MISSION.md
+        let mission_content = Self::generate_mission_content(brief, mission_type, stage, surface_policy, surface_definitions, &id, &budgets);
+        fs::write(mission_dir.join("MISSION.md"), &mission_content)?;
 
         // Write POLICY.md
-        let policy_content = Self::generate_policy_content(&budgets, mode);
+        let policy_content = Self::generate_policy_content(&budgets, mode, surface_policy, surface_definitions);
         fs::write(mission_dir.join("POLICY.md"), &policy_content)?;
-
-        // Write EXPECTED.md
-        let expected_content = Self::generate_expected_content(task);
-        fs::write(mission_dir.join("EXPECTED.md"), &expected_content)?;
 
         // Write INPUTS
         fs::write(inputs_dir.join("status.json"), &inputs.status_json)?;
         fs::write(inputs_dir.join("review.json"), &inputs.review_json)?;
         fs::write(inputs_dir.join("gate.json"), &inputs.gate_json)?;
         fs::write(inputs_dir.join("workspace.json"), &inputs.workspace_json)?;
+        fs::write(inputs_dir.join("repo_state.json"), &inputs.repo_state_json)?;
+
+        let mission_config = MissionConfig {
+            mission_type: mission_type.name().to_string(),
+            stage: stage.name().to_string(),
+            surface_policy: surface_policy.clone(),
+            surface_definitions: surface_definitions.clone(),
+        };
+        let mission_config_json = serde_json::to_string_pretty(&mission_config)
+            .context("Failed to serialize mission_config.json")?;
+        fs::write(inputs_dir.join("mission_config.json"), mission_config_json)?;
 
         if let Some(explain) = &inputs.explain_json {
             fs::write(inputs_dir.join("explain.json"), explain)?;
@@ -279,39 +295,74 @@ impl MissionBundle {
         Ok(failed_path)
     }
 
-    /// Write gate result JSON to OUTPUT/gate_result.json.
+    /// Write gate result JSON to POST_GATE.json.
     pub fn write_gate_result(&self, gate_json: &str) -> Result<()> {
-        let output_path = self.path.join("OUTPUT").join("gate_result.json");
+        let output_path = self.path.join("POST_GATE.json");
         fs::write(&output_path, gate_json)
-            .with_context(|| format!("Failed to write gate_result.json: {}", output_path.display()))
+            .with_context(|| format!("Failed to write POST_GATE.json: {}", output_path.display()))
     }
 
     /// Check if the runner wrote an attempt report.
     pub fn has_attempt_report(&self) -> bool {
-        self.path.join("OUTPUT").join("attempt_report.md").exists()
+        self.path.join("RUNNER_OUTPUT").join("attempt_report.md").exists()
     }
 
-    /// Generate NEXT_TASK.md content.
-    fn generate_next_task_content(task: &MissionTask, id: &MissionId, budgets: &MissionBudgets) -> String {
+    /// Generate MISSION.md content.
+    fn generate_mission_content(
+        brief: &MissionBrief,
+        mission_type: &MissionType,
+        stage: &Stage,
+        surface_policy: &SurfacePolicy,
+        surface_definitions: &SurfaceDefinitions,
+        id: &MissionId,
+        budgets: &MissionBudgets,
+    ) -> String {
         let mut content = String::new();
 
         content.push_str(&format!("# Mission {}\n\n", id));
-        content.push_str(&format!("## Task: {}\n\n", task.name));
-        content.push_str(&format!("**Feature:** `{}`\n", task.feature_path));
-        content.push_str(&format!("**Rule:** {}\n\n", task.rule_name));
-        content.push_str("---\n\n");
+        content.push_str(&format!("**Type:** {}\n", mission_type.name()));
+        content.push_str(&format!("**Stage:** {}\n", stage.name()));
+        if let Some(target) = mission_type.target_label() {
+            content.push_str(&format!("**Target:** {}\n", target));
+        }
+        content.push_str("\n");
 
-        content.push_str("## Description\n\n");
-        content.push_str(&task.description);
+        content.push_str("## Surfaces\n\n");
+        content.push_str("| Surface | Policy | Paths |\n");
+        content.push_str("|---------|--------|-------|\n");
+        content.push_str(&format!(
+            "| Spec | {} | `{}` |\n",
+            format_lock(surface_policy.spec),
+            surface_definitions.spec.patterns.join("`, `")
+        ));
+        content.push_str(&format!(
+            "| Tests/Bindings | {} | `{}` |\n",
+            format_lock(surface_policy.tests_bindings),
+            surface_definitions.tests_bindings.patterns.join("`, `")
+        ));
+        content.push_str(&format!(
+            "| SUT | {} | `{}` |\n",
+            format_lock(surface_policy.sut),
+            surface_definitions.sut.patterns.join("`, `")
+        ));
+        content.push_str("\n");
+
+        content.push_str("## Objective\n\n");
+        content.push_str(&brief.objective);
         content.push_str("\n\n");
 
-        if !task.missing_bindings.is_empty() {
-            content.push_str("## Missing Bindings to Implement\n\n");
-            for binding in &task.missing_bindings {
-                content.push_str(&format!("- `{}`\n", binding));
-            }
-            content.push_str("\n");
+        content.push_str("## Context\n\n");
+        content.push_str(&brief.context);
+        content.push_str("\n\n");
+
+        content.push_str("## Validation\n\n");
+        for (i, criterion) in brief.validation_criteria.iter().enumerate() {
+            content.push_str(&format!("{}. {}\n", i + 1, criterion));
         }
+        if brief.validation_criteria.is_empty() {
+            content.push_str("1. namako gate --json must pass\n");
+        }
+        content.push_str("\n");
 
         content.push_str("## Budgets\n\n");
         content.push_str("| Limit | Value |\n");
@@ -321,21 +372,19 @@ impl MissionBundle {
         content.push_str(&format!("| Max runtime (seconds) | {} |\n", budgets.max_runtime_seconds));
         content.push_str("\n");
 
-        content.push_str("## Instructions\n\n");
-        content.push_str("1. Read POLICY.md for constraints\n");
-        content.push_str("2. Read EXPECTED.md for success criteria\n");
-        content.push_str("3. Review INPUTS/ for current state\n");
-        content.push_str("4. Implement the required changes\n");
-        content.push_str("5. Write a summary to OUTPUT/attempt_report.md\n\n");
-
         content.push_str("---\n\n");
-        content.push_str("*Generated by Tesaki v1.7*\n");
+        content.push_str("*Generated by Tesaki v1.8*\n");
 
         content
     }
 
     /// Generate POLICY.md content.
-    fn generate_policy_content(budgets: &MissionBudgets, mode: &str) -> String {
+    fn generate_policy_content(
+        budgets: &MissionBudgets,
+        mode: &str,
+        surface_policy: &SurfacePolicy,
+        surface_definitions: &SurfaceDefinitions,
+    ) -> String {
         let mut content = String::new();
 
         content.push_str("# Mission Policy\n\n");
@@ -346,7 +395,7 @@ impl MissionBundle {
         content.push_str("1. **NO COMMITS** — Do not run `git commit`. Tesaki handles all commits.\n");
         content.push_str("2. **NO ORCHESTRATION** — Do not call `tesaki run` or `tesaki next`. You are the runner, not the orchestrator.\n");
         content.push_str("3. **NO GIT OPERATIONS** — Do not run `git push`, `git reset`, or other destructive git commands.\n");
-        content.push_str("4. **WRITE ATTEMPT REPORT** — Write a summary of your work to `OUTPUT/attempt_report.md`.\n\n");
+        content.push_str("4. **WRITE ATTEMPT REPORT** — Write a summary of your work to `RUNNER_OUTPUT/attempt_report.md`.\n\n");
 
         content.push_str("## Allowed Edit Surfaces\n\n");
         content.push_str("**IMPORTANT: You operate on the specs repository ONLY.**\n");
@@ -365,6 +414,26 @@ impl MissionBundle {
             content.push_str("**FORBIDDEN (always):**\n");
             content.push_str("- Any file outside this repository (especially Namako/Tesaki)\n\n");
         }
+
+        content.push_str("## Surface Policy\n\n");
+        content.push_str("| Surface | Policy | Paths |\n");
+        content.push_str("|---------|--------|-------|\n");
+        content.push_str(&format!(
+            "| Spec | {} | `{}` |\n",
+            format_lock(surface_policy.spec),
+            surface_definitions.spec.patterns.join("`, `")
+        ));
+        content.push_str(&format!(
+            "| Tests/Bindings | {} | `{}` |\n",
+            format_lock(surface_policy.tests_bindings),
+            surface_definitions.tests_bindings.patterns.join("`, `")
+        ));
+        content.push_str(&format!(
+            "| SUT | {} | `{}` |\n",
+            format_lock(surface_policy.sut),
+            surface_definitions.sut.patterns.join("`, `")
+        ));
+        content.push_str("\n");
 
         content.push_str("## Budget Limits\n\n");
         content.push_str("| Limit | Value | What Happens If Exceeded |\n");
@@ -391,50 +460,27 @@ impl MissionBundle {
         content.push_str("After you exit, Tesaki will:\n\n");
         content.push_str("1. Run `namako gate --json` to validate your changes\n");
         content.push_str("2. Check that budgets were not exceeded\n");
-        content.push_str("3. Record results to `OUTPUT/gate_result.json`\n\n");
+        content.push_str("3. Record results to `POST_GATE.json`\n\n");
         content.push_str("Your `attempt_report.md` is informational only — success is determined by the gate result.\n\n");
 
         content.push_str("---\n\n");
-        content.push_str("*Generated by Tesaki v1.7*\n");
+        content.push_str("*Generated by Tesaki v1.8*\n");
 
         content
     }
+}
 
-    /// Generate EXPECTED.md content.
-    fn generate_expected_content(task: &MissionTask) -> String {
-        let mut content = String::new();
-
-        content.push_str("# Expected Postconditions\n\n");
-        content.push_str("After runner exit, Tesaki will verify these conditions.\n\n");
-        content.push_str("---\n\n");
-
-        content.push_str("## Primary Success Criterion\n\n");
-        content.push_str("`namako gate --json` must pass (all phases: lint, run, verify).\n\n");
-        content.push_str("If verify fails only due to baseline mismatch and governance allows,\n");
-        content.push_str("Tesaki may run `namako update-cert` and re-verify.\n\n");
-
-        if !task.expected_postconditions.is_empty() {
-            content.push_str("## Mission-Specific Postconditions\n\n");
-            for (i, condition) in task.expected_postconditions.iter().enumerate() {
-                content.push_str(&format!("{}. {}\n", i + 1, condition));
-            }
-            content.push_str("\n");
-        }
-
-        content.push_str("## Failure Handling\n\n");
-        content.push_str("If the gate fails, the mission will be preserved at `.tesaki/failed/<mission_id>/`\n");
-        content.push_str("for inspection. Tesaki will emit a structured stop reason.\n\n");
-
-        content.push_str("---\n\n");
-        content.push_str("*Generated by Tesaki v1.7*\n");
-
-        content
+fn format_lock(lock: crate::surface_policy::SurfaceLock) -> &'static str {
+    match lock {
+        crate::surface_policy::SurfaceLock::Locked => "LOCKED",
+        crate::surface_policy::SurfaceLock::Unlocked => "UNLOCKED",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo_state::RepoState;
     use tempfile::TempDir;
 
     #[test]
@@ -479,26 +525,34 @@ mod tests {
         let tesaki_root = temp_dir.path().join(".tesaki");
         fs::create_dir_all(&tesaki_root).unwrap();
 
-        let task = MissionTask {
-            name: "Test Task".to_string(),
-            feature_path: "features/test.feature".to_string(),
-            rule_name: "Rule(01)".to_string(),
-            description: "Implement the test scenario.".to_string(),
-            missing_bindings: vec!["Given a test".to_string()],
-            expected_postconditions: vec!["Gate passes".to_string()],
-        };
-
         let inputs = MissionInputs {
             status_json: r#"{"status": "ok"}"#.to_string(),
             review_json: r#"{"review": "ok"}"#.to_string(),
             gate_json: r#"{"lint": {"status": "pass"}}"#.to_string(),
             explain_json: None,
             workspace_json: r#"{"repos": []}"#.to_string(),
+            repo_state_json: r#"{"lint_status":"pass"}"#.to_string(),
+        };
+
+        let mission_type = MissionType::CreateMissingBindings {
+            scenario_key: "feature:Rule(01):Scenario(01)".to_string(),
+            missing_steps: vec!["Given a test".to_string()],
+        };
+        let brief = mission_type.generate_brief(&RepoState::default());
+        let surface_policy = SurfacePolicy::for_implement_tests();
+        let surface_definitions = SurfaceDefinitions {
+            spec: SurfaceDefinition::spec(),
+            tests_bindings: SurfaceDefinition::tests_bindings(),
+            sut: SurfaceDefinition::sut(),
         };
 
         let bundle = MissionBundle::create(
             &tesaki_root,
-            &task,
+            &mission_type,
+            &brief,
+            &Stage::ImplementTests,
+            &surface_policy,
+            &surface_definitions,
             &inputs,
             MissionBudgets::default(),
             "BOOTSTRAP",
@@ -506,15 +560,16 @@ mod tests {
 
         // Verify directory structure
         assert!(bundle.path.exists());
-        assert!(bundle.path.join("NEXT_TASK.md").exists());
+        assert!(bundle.path.join("MISSION.md").exists());
         assert!(bundle.path.join("POLICY.md").exists());
-        assert!(bundle.path.join("EXPECTED.md").exists());
         assert!(bundle.path.join("INPUTS").exists());
         assert!(bundle.path.join("INPUTS/status.json").exists());
         assert!(bundle.path.join("INPUTS/review.json").exists());
         assert!(bundle.path.join("INPUTS/gate.json").exists());
         assert!(bundle.path.join("INPUTS/workspace.json").exists());
-        assert!(bundle.path.join("OUTPUT").exists());
+        assert!(bundle.path.join("INPUTS/repo_state.json").exists());
+        assert!(bundle.path.join("INPUTS/mission_config.json").exists());
+        assert!(bundle.path.join("RUNNER_OUTPUT").exists());
 
         // Verify content includes key elements
         let policy = fs::read_to_string(bundle.path.join("POLICY.md")).unwrap();
@@ -530,26 +585,31 @@ mod tests {
         let tesaki_root = temp_dir.path().join(".tesaki");
         fs::create_dir_all(&tesaki_root).unwrap();
 
-        let task = MissionTask {
-            name: "Failing Task".to_string(),
-            feature_path: "features/test.feature".to_string(),
-            rule_name: "Rule(01)".to_string(),
-            description: "This will fail.".to_string(),
-            missing_bindings: vec![],
-            expected_postconditions: vec![],
-        };
-
         let inputs = MissionInputs {
             status_json: "{}".to_string(),
             review_json: "{}".to_string(),
             gate_json: "{}".to_string(),
             explain_json: None,
             workspace_json: "{}".to_string(),
+            repo_state_json: "{}".to_string(),
+        };
+
+        let mission_type = MissionType::SummarizeAndClose;
+        let brief = mission_type.generate_brief(&RepoState::default());
+        let surface_policy = SurfacePolicy::for_finalize();
+        let surface_definitions = SurfaceDefinitions {
+            spec: SurfaceDefinition::spec(),
+            tests_bindings: SurfaceDefinition::tests_bindings(),
+            sut: SurfaceDefinition::sut(),
         };
 
         let bundle = MissionBundle::create(
             &tesaki_root,
-            &task,
+            &mission_type,
+            &brief,
+            &Stage::Finalize,
+            &surface_policy,
+            &surface_definitions,
             &inputs,
             MissionBudgets::default(),
             "BOOTSTRAP",
@@ -569,7 +629,7 @@ mod tests {
         assert!(failed_path.ends_with(&mission_id));
 
         // Content should be preserved
-        assert!(failed_path.join("NEXT_TASK.md").exists());
+        assert!(failed_path.join("MISSION.md").exists());
         assert!(failed_path.join("POLICY.md").exists());
     }
 
@@ -579,26 +639,31 @@ mod tests {
         let tesaki_root = temp_dir.path().join(".tesaki");
         fs::create_dir_all(&tesaki_root).unwrap();
 
-        let task = MissionTask {
-            name: "Gate Test".to_string(),
-            feature_path: "features/test.feature".to_string(),
-            rule_name: "Rule(01)".to_string(),
-            description: "Test gate result writing.".to_string(),
-            missing_bindings: vec![],
-            expected_postconditions: vec![],
-        };
-
         let inputs = MissionInputs {
             status_json: "{}".to_string(),
             review_json: "{}".to_string(),
             gate_json: "{}".to_string(),
             explain_json: None,
             workspace_json: "{}".to_string(),
+            repo_state_json: "{}".to_string(),
+        };
+
+        let mission_type = MissionType::SummarizeAndClose;
+        let brief = mission_type.generate_brief(&RepoState::default());
+        let surface_policy = SurfacePolicy::for_finalize();
+        let surface_definitions = SurfaceDefinitions {
+            spec: SurfaceDefinition::spec(),
+            tests_bindings: SurfaceDefinition::tests_bindings(),
+            sut: SurfaceDefinition::sut(),
         };
 
         let bundle = MissionBundle::create(
             &tesaki_root,
-            &task,
+            &mission_type,
+            &brief,
+            &Stage::Finalize,
+            &surface_policy,
+            &surface_definitions,
             &inputs,
             MissionBudgets::default(),
             "BOOTSTRAP",
@@ -607,7 +672,7 @@ mod tests {
         let gate_result = r#"{"lint": {"status": "pass"}, "run": {"status": "pass"}, "verify": {"status": "pass"}}"#;
         bundle.write_gate_result(gate_result).unwrap();
 
-        let result_path = bundle.path.join("OUTPUT/gate_result.json");
+        let result_path = bundle.path.join("POST_GATE.json");
         assert!(result_path.exists());
         let content = fs::read_to_string(result_path).unwrap();
         assert_eq!(content, gate_result);

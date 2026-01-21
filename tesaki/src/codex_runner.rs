@@ -85,9 +85,9 @@ impl Runner for CodexRunner {
         let mission_dir_abs =
             std::fs::canonicalize(mission_dir).unwrap_or_else(|_| mission_dir.to_path_buf());
 
-        // Read the NEXT_TASK.md file to provide as stdin prompt
-        let next_task_path = mission_dir.join("NEXT_TASK.md");
-        let prompt = match std::fs::read_to_string(&next_task_path) {
+        // Read the MISSION.md file to provide as stdin prompt
+        let mission_path = mission_dir.join("MISSION.md");
+        let prompt = match std::fs::read_to_string(&mission_path) {
             Ok(content) => content,
             Err(e) => {
                 return Ok(RunnerOutcome {
@@ -97,8 +97,8 @@ impl Runner for CodexRunner {
                     stdout_path: None,
                     stderr_path: None,
                     error_message: Some(format!(
-                        "Failed to read NEXT_TASK.md from {}: {}",
-                        next_task_path.display(),
+                        "Failed to read MISSION.md from {}: {}",
+                        mission_path.display(),
                         e
                     )),
                 });
@@ -182,8 +182,8 @@ impl Runner for CodexRunner {
             OutcomeClassification::Failed
         };
 
-        // Write stdout/stderr to mission OUTPUT/ if non-empty
-        let output_dir = mission_dir.join("OUTPUT");
+        // Write stdout/stderr to mission RUNNER_OUTPUT/ if non-empty
+        let output_dir = mission_dir.join("RUNNER_OUTPUT");
         let _ = std::fs::create_dir_all(&output_dir);
 
         let stdout_path = if !output.stdout.is_empty() {
@@ -292,13 +292,13 @@ mod tests {
     #[test]
     fn test_codex_runner_expand_custom() {
         let runner = CodexRunner::new(Some(
-            "codex exec -C {working_dir} --full-auto < {mission_dir}/NEXT_TASK.md".to_string(),
+            "codex exec -C {working_dir} --full-auto < {mission_dir}/MISSION.md".to_string(),
         ))
         .unwrap();
         let expanded = runner.expand_command(Path::new("/test/mission"), Path::new("/workspace"));
         assert_eq!(
             expanded,
-            "codex exec -C /workspace --full-auto < /test/mission/NEXT_TASK.md"
+            "codex exec -C /workspace --full-auto < /test/mission/MISSION.md"
         );
     }
 

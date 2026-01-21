@@ -61,7 +61,7 @@ impl Runner for MockRunner {
 
         // Write attempt report if configured
         if self.write_attempt_report {
-            let report_path = mission_dir.join("OUTPUT/attempt_report.md");
+            let report_path = mission_dir.join("RUNNER_OUTPUT/attempt_report.md");
             let content = if self.should_succeed {
                 "# Attempt Report\n\nMission completed successfully (mock).\n"
             } else {
@@ -107,7 +107,7 @@ mod tests {
     fn test_mock_runner_success() {
         let temp_dir = TempDir::new().unwrap();
         let mission_dir = temp_dir.path().join("mission");
-        std::fs::create_dir_all(mission_dir.join("OUTPUT")).unwrap();
+        std::fs::create_dir_all(mission_dir.join("RUNNER_OUTPUT")).unwrap();
 
         let runner = MockRunner::success();
         let config = RunnerConfig {
@@ -119,14 +119,14 @@ mod tests {
         let outcome = runner.run(&mission_dir, &config).unwrap();
         assert_eq!(outcome.classification, OutcomeClassification::Ok);
         assert_eq!(outcome.exit_code, Some(0));
-        assert!(mission_dir.join("OUTPUT/attempt_report.md").exists());
+        assert!(mission_dir.join("RUNNER_OUTPUT/attempt_report.md").exists());
     }
 
     #[test]
     fn test_mock_runner_failure() {
         let temp_dir = TempDir::new().unwrap();
         let mission_dir = temp_dir.path().join("mission");
-        std::fs::create_dir_all(mission_dir.join("OUTPUT")).unwrap();
+        std::fs::create_dir_all(mission_dir.join("RUNNER_OUTPUT")).unwrap();
 
         let runner = MockRunner::failure();
         let config = RunnerConfig {

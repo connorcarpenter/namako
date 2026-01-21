@@ -18,11 +18,18 @@
 
 mod config;
 mod gate;
+mod issue_classifier;
 mod mission;
+mod mission_selector;
+mod mission_type;
+mod packet_parser;
+mod repo_state;
 mod runner;
 mod claude_code_runner;
 mod runner_test;
+mod stage;
 mod stop_reason;
+mod surface_policy;
 mod workspace;
 
 use anyhow::{Context, Result};
@@ -137,6 +144,10 @@ enum Commands {
         /// Operating mode (auto-detected from CURRENT_STATUS.md if not specified)
         #[arg(long, value_parser = ["BOOTSTRAP", "CONSUMPTION"])]
         mode: Option<String>,
+
+        /// Stage lens override (refine, structure, tests, sut, finalize)
+        #[arg(long, value_parser = ["refine", "structure", "tests", "sut", "finalize"])]
+        stage: Option<String>,
 
         /// Path to CURRENT_STATUS.md for mode detection (optional)
         #[arg(long)]
@@ -315,6 +326,7 @@ fn main() -> Result<()> {
             max_files_changed,
             max_retries,
             mode,
+            stage,
             current_status,
         } => {
             // Resolve config: CLI flags override config file values
@@ -339,6 +351,8 @@ fn main() -> Result<()> {
                 resolved.max_files_changed.unwrap_or(10) as u32,
                 resolved.max_retries.unwrap_or(2),
                 &mode.unwrap_or_else(|| "BOOTSTRAP".to_string()),
+                stage,
+                resolved.surfaces.clone(),
                 current_status,
             )
         },
@@ -361,6 +375,7 @@ struct ResolvedArgs {
     max_retries: Option<u32>,
     max_runtime_seconds: Option<u64>,
     max_files_changed: Option<usize>,
+    surfaces: Option<config::SurfacesConfig>,
 }
 
 /// Resolve configuration from CLI flags, falling back to config file if flags are missing.
@@ -389,6 +404,7 @@ fn resolve_config_or_flags(
             max_retries,
             max_runtime_seconds,
             max_files_changed,
+            surfaces: None,
         });
     }
 
@@ -417,6 +433,7 @@ fn resolve_config_or_flags(
                 max_retries: max_retries.or(cfg.max_retries),
                 max_runtime_seconds: max_runtime_seconds.or(cfg.max_runtime_seconds),
                 max_files_changed: max_files_changed.or(cfg.max_files_changed),
+                surfaces: cfg.surfaces,
             })
         }
         config::ConfigDiscoveryResult::NotFound { .. } => {
@@ -1241,15 +1258,23 @@ fn run_run(
     max_files_changed: u32,
     max_retries: u32,
     mode: &str,
+    stage: Option<String>,
+    surfaces: Option<config::SurfacesConfig>,
     current_status: Option<PathBuf>,
 ) -> Result<()> {
-    use crate::mission::{MissionBundle, MissionBudgets, MissionInputs, MissionTask};
+    use crate::mission::{MissionBundle, MissionBudgets, MissionInputs};
+    use crate::mission::SurfaceDefinitions;
+    use crate::mission_selector::select_with_constraints;
+    use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
     use crate::runner::{Runner, RunnerConfig, OutcomeClassification};
     use crate::runner_test::MockRunner;
     use crate::claude_code_runner::ClaudeCodeRunner;
+    use crate::repo_state::RepoState;
+    use crate::stage::{Stage, StageConstraint, detect_stage};
     use crate::stop_reason::{StopReason, RunResult};
     use crate::workspace::Workspace;
     use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker};
+    use crate::surface_policy::SurfaceDefinition;
 
     // Canonicalize spec_root
     let spec_root = fs::canonicalize(spec_root)
@@ -1326,7 +1351,7 @@ fn run_run(
         _ => anyhow::bail!("Unknown runner: {}", runner_name),
     };
 
-    eprintln!("=== Tesaki v1.7 Run ===");
+    eprintln!("=== Tesaki v1.8 ===");
     eprintln!("Spec root: {}", spec_root.display());
     eprintln!("Mode: {}", mode);
     eprintln!("Runner: {}", runner.name());
@@ -1335,25 +1360,14 @@ fn run_run(
     // Step 1: Measure via Namako packets
     eprintln!("[1/6] Running namako gate --json (pre-mission state)...");
     let gate_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
-    let gate_result: serde_json::Value = serde_json::from_str(&gate_json)
-        .context("Failed to parse gate JSON")?;
+    let gate_packet = parse_gate_json(&gate_json)?;
+    let gate_outcome = GateOutcome::from_json_str(&gate_json);
+    let gate_passes = gate_outcome == GateOutcome::Pass;
 
-    // Check if gate passes
-    let gate_passes = gate_result.get("lint")
-        .and_then(|l| l.get("status"))
-        .and_then(|s| s.as_str()) == Some("pass")
-        && gate_result.get("run")
-            .and_then(|r| r.get("status"))
-            .and_then(|s| s.as_str()) == Some("pass")
-        && gate_result.get("verify")
-            .and_then(|v| v.get("status"))
-            .and_then(|s| s.as_str()) == Some("pass");
-
-    if gate_passes {
-        eprintln!("  Gate: PASS (all phases green)");
-    } else {
-        eprintln!("  Gate: Some phases not passing");
-    }
+    eprintln!(
+        "  Gate: {}",
+        if gate_passes { "PASS (all phases green)" } else { "Not all phases passing" }
+    );
 
     // Step 2: Get status and review packets
     eprintln!("[2/6] Running namako status/review...");
@@ -1376,113 +1390,82 @@ fn run_run(
     let status_json = fs::read_to_string(&status_path)?;
     let review_json = fs::read_to_string(&review_path)?;
 
-    let status: StatusJson = serde_json::from_str(&status_json)?;
-    let review: ReviewJson = serde_json::from_str(&review_json)?;
+    let status_packet = parse_status_json(&status_json)?;
+    let review_packet = parse_review_json(&review_json)?;
 
-    let action = &status.recommended_next_action;
-    eprintln!("  Status action: {}", action);
-    eprintln!("  Promotion candidates: {}", review.promotion_candidates.len());
+    let repo_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+    eprintln!("  RepoState: {}", repo_state.summary());
 
-    // Step 3: Select task or enter stop condition
-    eprintln!("[3/6] Selecting task...");
+    let stage_override = match stage.as_deref() {
+        Some(value) => Stage::from_str(value)
+            .ok_or_else(|| anyhow::anyhow!("Invalid stage '{}'", value))?,
+        None => detect_stage(&repo_state),
+    };
+    eprintln!(
+        "  Stage: {} {}",
+        stage_override.name(),
+        if stage.is_some() { "(manual)" } else { "(auto)" }
+    );
 
-    // Filter candidates based on mode
-    let operating_mode = if mode == "BOOTSTRAP" {
-        OperatingMode::Bootstrap
-    } else {
-        OperatingMode::Consumption
+    // Step 3: Select mission type
+    eprintln!("[3/6] Selecting mission...");
+    let constraint = StageConstraint {
+        stage: if stage.is_some() { Some(stage_override) } else { None },
+        surface_overrides: None,
     };
 
-    let eligible_candidates: Vec<&PromotionCandidate> = review.promotion_candidates.iter()
-        .filter(|c| {
-            // Stubs are never eligible
-            if c.is_stub {
-                return false;
+    let selection = select_with_constraints(&repo_state, &constraint);
+    let (mission_type, active_stage, surface_policy) = match selection {
+        Some(result) => result,
+        None => {
+            if repo_state.has_work() {
+                let result = RunResult::blocked("No eligible mission for the selected stage");
+                emit_run_result(&result, &spec_root)?;
+                eprintln!("STOP: BLOCKED - No eligible mission for stage");
+                return Ok(());
             }
-            // CORE blockers excluded in BOOTSTRAP
-            if operating_mode == OperatingMode::Bootstrap && c.blocker == BlockerType::Core {
-                return false;
-            }
-            true
-        })
-        .collect();
-
-    // If gate passes and no eligible candidates, we're DONE
-    if gate_passes && eligible_candidates.is_empty() {
-        let result = RunResult::done(0, 0);
-        emit_run_result(&result, &spec_root)?;
-        eprintln!("STOP: DONE - All gates pass, no promotion candidates");
-        return Ok(());
-    }
-
-    // If only blocked candidates remain
-    if eligible_candidates.is_empty() && !review.promotion_candidates.is_empty() {
-        let result = RunResult::blocked("Only blocked candidates remain (CORE blockers in BOOTSTRAP mode)");
-        emit_run_result(&result, &spec_root)?;
-        eprintln!("STOP: BLOCKED - Only blocked candidates remain");
-        return Ok(());
-    }
-
-    // Select first eligible candidate (or handle FIX_* actions)
-    let task = if action == "FIX_RUN" && !status.last_run_failures.is_empty() {
-        // Focus on fixing the first failure
-        let failure = &status.last_run_failures[0];
-        MissionTask {
-            name: format!("Fix: {}", failure.scenario_name),
-            feature_path: failure.scenario_key.split(':').next().unwrap_or("unknown").to_string(),
-            rule_name: "Fix failing scenario".to_string(),
-            description: format!(
-                "Fix the failing scenario: {}\n\nFailure: {} ({})",
-                failure.scenario_name, failure.failure_kind, failure.scenario_key
-            ),
-            missing_bindings: vec![],
-            expected_postconditions: vec![
-                format!("Scenario '{}' passes", failure.scenario_name),
-                "namako gate --json shows all phases pass".to_string(),
-            ],
-        }
-    } else if let Some(candidate) = eligible_candidates.first() {
-        // Promote the top candidate
-        let missing = review.missing_bindings_for_top_candidates.iter()
-            .find(|m| m.candidate_name == candidate.scenario_name)
-            .map(|m| m.missing_step_texts.clone())
-            .unwrap_or_default();
-
-        MissionTask {
-            name: format!("Promote: {}", candidate.scenario_name),
-            feature_path: candidate.feature_path.clone(),
-            rule_name: candidate.rule_name.clone(),
-            description: format!(
-                "Promote scenario '{}' from @Deferred to executable.\n\n\
-                Feature: {}\n\
-                Rule: {}\n\
-                Reuse score: {:.1}\n\
-                New steps needed: {}",
-                candidate.scenario_name,
-                candidate.feature_path,
-                candidate.rule_name,
-                candidate.reuse_score,
-                candidate.new_step_texts_estimate
-            ),
-            missing_bindings: missing,
-            expected_postconditions: vec![
-                format!("Scenario '{}' is executable (not @Deferred)", candidate.scenario_name),
-                "namako gate --json shows all phases pass".to_string(),
-            ],
-        }
-    } else {
-        // No specific task, just run the gate
-        MissionTask {
-            name: "Run gate".to_string(),
-            feature_path: "N/A".to_string(),
-            rule_name: "N/A".to_string(),
-            description: format!("Action: {}. Run the gate and address any issues.", action),
-            missing_bindings: vec![],
-            expected_postconditions: vec!["namako gate --json shows all phases pass".to_string()],
+            let result = RunResult::done(0, 0);
+            emit_run_result(&result, &spec_root)?;
+            eprintln!("STOP: DONE - No work remaining");
+            return Ok(());
         }
     };
 
-    eprintln!("  Selected: {}", task.name);
+    let brief = mission_type.generate_brief(&repo_state);
+
+    eprintln!("  Type: {}", mission_type.name());
+    if let Some(target) = mission_type.target_label() {
+        eprintln!("  Target: {}", target);
+    }
+    eprintln!(
+        "  Surfaces: Spec {} • Tests {} • SUT {}",
+        lock_label(surface_policy.spec),
+        lock_label(surface_policy.tests_bindings),
+        lock_label(surface_policy.sut)
+    );
+
+    let mut surface_definitions = SurfaceDefinitions {
+        spec: SurfaceDefinition::spec(),
+        tests_bindings: SurfaceDefinition::tests_bindings(),
+        sut: SurfaceDefinition::sut(),
+    };
+    if let Some(overrides) = surfaces {
+        if let Some(spec) = overrides.spec {
+            if !spec.patterns.is_empty() {
+                surface_definitions.spec.patterns = spec.patterns;
+            }
+        }
+        if let Some(tests) = overrides.tests {
+            if !tests.patterns.is_empty() {
+                surface_definitions.tests_bindings.patterns = tests.patterns;
+            }
+        }
+        if let Some(sut) = overrides.sut {
+            if !sut.patterns.is_empty() {
+                surface_definitions.sut.patterns = sut.patterns;
+            }
+        }
+    }
 
     // Tracking for governance
     let mut attempts_made: u32 = 0;
@@ -1494,11 +1477,14 @@ fn run_run(
         attempts_made += 1;
         eprintln!("\n--- Attempt {}/{} ---", attempts_made, max_retries + 1);
 
-        // Step 4: Create mission bundle (includes attempt_index in NEXT_TASK.md)
+        // Step 4: Create mission bundle (MISSION.md per v1.8)
         eprintln!("[4/6] Creating mission bundle...");
 
         let tesaki_dir = spec_root.join(".tesaki");
         fs::create_dir_all(&tesaki_dir)?;
+
+        let repo_state_json = serde_json::to_string_pretty(&repo_state)
+            .context("Failed to serialize repo_state.json")?;
 
         let inputs = MissionInputs {
             status_json: status_json.clone(),
@@ -1506,19 +1492,20 @@ fn run_run(
             gate_json: gate_json.clone(),
             explain_json: None,
             workspace_json: workspace.to_json()?,
+            repo_state_json,
         };
 
-        // Create task with attempt metadata
-        let task_with_attempt = MissionTask {
-            name: if attempts_made > 1 {
-                format!("{} (attempt {})", task.name, attempts_made)
-            } else {
-                task.name.clone()
-            },
-            ..task.clone()
-        };
-
-        let mission = MissionBundle::create(&tesaki_dir, &task_with_attempt, &inputs, budgets.clone(), mode)?;
+        let mission = MissionBundle::create(
+            &tesaki_dir,
+            &mission_type,
+            &brief,
+            &active_stage,
+            &surface_policy,
+            &surface_definitions,
+            &inputs,
+            budgets.clone(),
+            mode,
+        )?;
         eprintln!("  Mission: {}", mission.id);
         eprintln!("  Path: {}", mission.path.display());
 
@@ -1534,6 +1521,12 @@ fn run_run(
         let outcome = runner.run(&mission.path, &runner_config)?;
         eprintln!("  Outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
             outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
+
+        let stop_reason_path = mission.path.join("RUNNER_OUTPUT").join("stop_reason.json");
+        let stop_reason_json = serde_json::to_string_pretty(&outcome)
+            .context("Failed to serialize runner outcome")?;
+        fs::write(&stop_reason_path, stop_reason_json)
+            .context("Failed to write RUNNER_OUTPUT/stop_reason.json")?;
 
         // Determine stop reason from runner outcome
         let runner_stop = match outcome.classification {
@@ -1630,8 +1623,8 @@ fn run_run(
                         eprintln!("  Re-validating after update-cert...");
                         let recheck_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
 
-                        // Write gate_result_after_update_cert.json per TODO.md §A4
-                        let after_cert_path = mission.path.join("OUTPUT").join("gate_result_after_update_cert.json");
+                        // Write POST_GATE_AFTER_UPDATE_CERT.json per TODO.md §A4
+                        let after_cert_path = mission.path.join("POST_GATE_AFTER_UPDATE_CERT.json");
                         fs::write(&after_cert_path, &recheck_json)?;
 
                         let recheck_outcome = GateOutcome::from_json_str(&recheck_json);
@@ -1736,6 +1729,13 @@ fn emit_run_result(result: &stop_reason::RunResult, spec_root: &PathBuf) -> Resu
     fs::write(tesaki_dir.join("last_run.json"), &json)?;
 
     Ok(())
+}
+
+fn lock_label(lock: crate::surface_policy::SurfaceLock) -> &'static str {
+    match lock {
+        crate::surface_policy::SurfaceLock::Locked => "LOCKED",
+        crate::surface_policy::SurfaceLock::Unlocked => "UNLOCKED",
+    }
 }
 
 #[cfg(test)]

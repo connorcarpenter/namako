@@ -23,8 +23,8 @@ impl ClaudeCodeRunner {
     pub fn new(command: Option<String>) -> Result<Self> {
         let cmd = command.unwrap_or_else(|| {
             // Default Claude Code command
-            // The runner will read NEXT_TASK.md from the mission directory
-            "claude --print --dangerously-skip-permissions --input-file {mission_dir}/NEXT_TASK.md".to_string()
+            // The runner will read MISSION.md from the mission directory
+            "claude --print --dangerously-skip-permissions --input-file {mission_dir}/MISSION.md".to_string()
         });
 
         Ok(Self {
@@ -141,8 +141,9 @@ impl Runner for ClaudeCodeRunner {
             OutcomeClassification::Failed
         };
 
-        // Write stdout/stderr to mission OUTPUT/ if non-empty
-        let output_dir = mission_dir.join("OUTPUT");
+        // Write stdout/stderr to mission RUNNER_OUTPUT/ if non-empty
+        let output_dir = mission_dir.join("RUNNER_OUTPUT");
+        let _ = std::fs::create_dir_all(&output_dir);
         let stdout_path = if !output.stdout.is_empty() {
             let path = output_dir.join("runner_stdout.txt");
             let _ = std::fs::write(&path, &output.stdout);
@@ -230,8 +231,8 @@ mod tests {
 
     #[test]
     fn test_claude_code_runner_expand() {
-        let runner = ClaudeCodeRunner::new(Some("echo {mission_dir}/NEXT_TASK.md".to_string())).unwrap();
+        let runner = ClaudeCodeRunner::new(Some("echo {mission_dir}/MISSION.md".to_string())).unwrap();
         let expanded = runner.expand_command(Path::new("/test/mission"));
-        assert_eq!(expanded, "echo /test/mission/NEXT_TASK.md");
+        assert_eq!(expanded, "echo /test/mission/MISSION.md");
     }
 }

@@ -4,10 +4,17 @@
 
 pub mod config;
 pub mod gate;
+pub mod issue_classifier;
 pub mod mission;
+pub mod mission_selector;
+pub mod mission_type;
+pub mod packet_parser;
+pub mod repo_state;
 pub mod runner;
 pub mod claude_code_runner;
 pub mod codex_runner;
 pub mod runner_test;
+pub mod stage;
 pub mod stop_reason;
+pub mod surface_policy;
 pub mod workspace;
