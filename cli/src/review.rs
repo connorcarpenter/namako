@@ -634,7 +634,7 @@ fn normalize_step_kind<'a>(keyword: &str, last_keyword: &mut &'a str) -> &'a str
     }
 }
 
-fn estimate_scenario_end(scenario: &Scenario, lines: &[&str]) -> u32 {
+fn estimate_scenario_end(scenario: &Scenario, _lines: &[&str]) -> u32 {
     if scenario.steps.is_empty() {
         return scenario.position.line as u32;
     }

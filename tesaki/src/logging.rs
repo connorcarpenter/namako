@@ -34,14 +34,6 @@ pub struct JsonlLogger {
 }
 
 impl JsonlLogger {
-    pub fn new(path: Option<PathBuf>) -> Self {
-        Self {
-            path,
-            counter: AtomicU64::new(0),
-            console: ConsoleMode::Off,
-        }
-    }
-
     pub fn new_with_console(path: Option<PathBuf>, console: ConsoleMode) -> Self {
         Self {
             path,

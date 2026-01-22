@@ -15,7 +15,7 @@ use serde::Serialize;
 use walkdir::WalkDir;
 
 use namako_engine::engine::ResolutionEngine;
-use namako_engine::npap::{ResolvedPlan, SemanticStepRegistry, HASH_CONTRACT_VERSION};
+use namako_engine::npap::SemanticStepRegistry;
 
 /// Arguments for the explain command.
 #[derive(Args, Debug)]
@@ -107,43 +107,6 @@ pub struct SourceSpan {
 pub struct StepInfo {
     pub kind: String,
     pub text: String,
-}
-
-/// Contract context
-#[derive(Debug, Clone, Serialize)]
-pub struct ContractContext {
-    pub normative_excerpt: Vec<NormativeExcerpt>,
-}
-
-/// Normative excerpt
-#[derive(Debug, Clone, Serialize)]
-pub struct NormativeExcerpt {
-    pub heading: String,
-    pub text: String,
-}
-
-/// Resolution info
-#[derive(Debug, Clone, Serialize)]
-pub struct ResolutionInfo {
-    pub binding_resolutions: Vec<BindingResolution>,
-}
-
-/// Binding resolution info
-#[derive(Debug, Clone, Serialize)]
-pub struct BindingResolution {
-    pub kind: String,
-    pub step_text: String,
-    pub binding_id: String,
-    pub impl_hash: String,
-    pub binding_source: BindingSource,
-}
-
-/// Binding source location
-#[derive(Debug, Clone, Serialize)]
-pub struct BindingSource {
-    pub path: String,
-    pub start_line: u32,
-    pub end_line: u32,
 }
 
 /// Notes and limitations
@@ -359,131 +322,6 @@ fn normalize_step_keyword(keyword: &str) -> String {
         "And" | "But" | "*" => kw.to_string(), // Keep original for context
         _ => kw.to_string(),
     }
-}
-
-fn extract_contract_context(source: &str) -> ContractContext {
-    let mut excerpts = Vec::new();
-    let lines: Vec<&str> = source.lines().collect();
-
-    let mut current_heading = String::new();
-    let mut current_text = Vec::new();
-    let mut in_contract_section = false;
-
-    for line in &lines {
-        let trimmed = line.trim();
-
-        // Look for NORMATIVE CONTRACT MIRROR or similar headings
-        if trimmed.contains("NORMATIVE CONTRACT")
-            || trimmed.contains("CONTRACT MIRROR")
-            || trimmed.starts_with("### ")
-            || trimmed.starts_with("## ") {
-
-            // Save previous section if exists
-            if !current_heading.is_empty() && !current_text.is_empty() {
-                excerpts.push(NormativeExcerpt {
-                    heading: current_heading.clone(),
-                    text: current_text.join("\n"),
-                });
-            }
-
-            current_heading = trimmed.trim_start_matches('#').trim().to_string();
-            current_text.clear();
-            in_contract_section = trimmed.contains("NORMATIVE") || trimmed.contains("CONTRACT");
-            continue;
-        }
-
-        // Collect text in contract sections
-        if in_contract_section && !trimmed.is_empty()
-            && !trimmed.starts_with("Feature:")
-            && !trimmed.starts_with("Scenario:")
-            && !trimmed.starts_with("Rule:")
-            && !trimmed.starts_with("Given ")
-            && !trimmed.starts_with("When ")
-            && !trimmed.starts_with("Then ")
-            && !trimmed.starts_with("And ")
-            && !trimmed.starts_with("But ") {
-            current_text.push(trimmed.to_string());
-        }
-
-        // Stop at next major section
-        if trimmed.starts_with("Rule:") || trimmed.starts_with("Scenario:") {
-            in_contract_section = false;
-        }
-    }
-
-    // Save final section
-    if !current_heading.is_empty() && !current_text.is_empty() {
-        excerpts.push(NormativeExcerpt {
-            heading: current_heading,
-            text: current_text.join("\n"),
-        });
-    }
-
-    // If no excerpts found, include a summary
-    if excerpts.is_empty() {
-        // Extract feature description as fallback
-        let desc_lines: Vec<&str> = lines.iter()
-            .skip_while(|l| !l.trim().starts_with("Feature:"))
-            .skip(1)
-            .take_while(|l| !l.trim().starts_with("Rule:") && !l.trim().starts_with("Scenario:"))
-            .filter(|l| !l.trim().is_empty() && !l.trim().starts_with("#") && !l.trim().starts_with("@"))
-            .copied()
-            .collect();
-
-        if !desc_lines.is_empty() {
-            excerpts.push(NormativeExcerpt {
-                heading: "Feature Description".to_string(),
-                text: desc_lines.join("\n").trim().to_string(),
-            });
-        }
-    }
-
-    ContractContext {
-        normative_excerpt: excerpts,
-    }
-}
-
-fn build_resolution_info(
-    scenario: &namako_engine::npap::ResolvedScenario,
-    registry: &SemanticStepRegistry,
-) -> Result<ResolutionInfo> {
-    let mut binding_resolutions = Vec::new();
-
-    for step in &scenario.steps {
-        // Find the binding in registry
-        let binding = registry.bindings.iter()
-            .find(|b| b.binding_id == step.binding_id);
-
-        let (impl_hash, binding_source) = if let Some(b) = binding {
-            (
-                b.impl_hash.clone(),
-                BindingSource {
-                    path: format!("naia/test/tests/src/steps/*.rs"),  // Best effort
-                    start_line: 0,  // Would need source mapping
-                    end_line: 0,
-                },
-            )
-        } else {
-            (
-                "UNKNOWN".to_string(),
-                BindingSource {
-                    path: "UNKNOWN".to_string(),
-                    start_line: 0,
-                    end_line: 0,
-                },
-            )
-        };
-
-        binding_resolutions.push(BindingResolution {
-            kind: step.effective_kind.clone(),
-            step_text: step.step_text.clone(),
-            binding_id: step.binding_id.clone(),
-            impl_hash,
-            binding_source,
-        });
-    }
-
-    Ok(ResolutionInfo { binding_resolutions })
 }
 
 /// Build ExplainStep list with binding metadata per GOLD_PLAN §10.5.4.

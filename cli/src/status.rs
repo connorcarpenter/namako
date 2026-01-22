@@ -186,11 +186,9 @@ pub struct DriftDetail {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RecommendedAction {
-    RunLint,
     FixLint,
     Run,
     FixRun,
-    RunVerify,
     NeedsUpdateCertApproval,
     Done,
 }
@@ -232,14 +230,14 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
     let timestamp_utc = chrono::Utc::now().to_rfc3339();
 
     // Attempt to compute identity from sources
-    let (identity_result, lint_ok, lint_summary) = compute_identity_with_diagnostics(args);
+    let (identity_result, _lint_ok, lint_summary) = compute_identity_with_diagnostics(args);
 
     // Load baseline certification if it exists
     let baseline_result = load_baseline(&args.certification);
     let identity_baseline = baseline_result.as_ref().ok().map(|c| IdentityFields::from(c.identity.clone()));
 
     // Determine gates status
-    let (gates, drift, recommended_action) = match &identity_result {
+    let (gates, drift, base_action) = match &identity_result {
         Ok(identity) => {
             // Lint passed - we have a valid identity
             let lint = GateResult { ok: true, code: 0, summary: lint_summary };
@@ -312,14 +310,27 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
         resolved_plan_hash: "UNKNOWN".to_string(),
     });
 
-    // Load run report failures if recommended action involves fixing run failures
-    // or if run report exists and has failures
+    // Load run report failures for failure targeting.
     let last_run_failures = load_run_failures(&args.run_report);
 
     // Convert gates to status values
     let lint_status = if gates.lint.ok { StatusValue::Pass } else { StatusValue::Fail };
     let run_status = if gates.run.ok { StatusValue::Pass } else if gates.run.summary.as_ref().map(|s| s.contains("Cannot run")).unwrap_or(false) { StatusValue::NotRun } else { StatusValue::Fail };
-    let verify_status = if gates.verify.ok { StatusValue::Pass } else if gates.verify.summary.as_ref().map(|s| s.contains("Cannot verify") || s.contains("No baseline")).unwrap_or(false) { StatusValue::NotRun } else { StatusValue::Fail };
+    let verify_status = if gates.verify.ok {
+        StatusValue::Pass
+    } else if gates.verify.summary.as_ref().map(|s| s.contains("Drift detected")).unwrap_or(false) {
+        StatusValue::Stale
+    } else if gates.verify.summary.as_ref().map(|s| s.contains("Cannot verify") || s.contains("No baseline")).unwrap_or(false) {
+        StatusValue::NotRun
+    } else {
+        StatusValue::Fail
+    };
+
+    let recommended_action = if matches!(base_action, RecommendedAction::Done) && !last_run_failures.is_empty() {
+        RecommendedAction::FixRun
+    } else {
+        base_action
+    };
 
     Ok(StatusOutput {
         version: 1,
