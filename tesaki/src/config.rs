@@ -14,6 +14,8 @@
 //! # Optional
 //! runner = "mock"           # mock, cmd, or claude
 //! runner_cmd = "..."        # only used when runner = "cmd"
+//! planner = "mock"          # mock or cmd
+//! planner_cmd = "..."       # only used when planner = "cmd"
 //! max_retries = 2
 //! max_cert_updates = 3
 //! max_runtime_seconds = 600
@@ -51,6 +53,14 @@ pub struct Config {
     /// Command template for cmd runner (use {mission_dir} placeholder)
     #[serde(default)]
     pub runner_cmd: Option<String>,
+
+    /// Planner backend for interactive REPL (mock, cmd)
+    #[serde(default)]
+    pub planner: Option<String>,
+
+    /// Command template for cmd planner (use {input_file} placeholder)
+    #[serde(default)]
+    pub planner_cmd: Option<String>,
 
     /// Maximum retry attempts on runner failure
     #[serde(default)]
@@ -110,6 +120,12 @@ pub struct ResolvedConfig {
 
     /// Runner command template
     pub runner_cmd: Option<String>,
+
+    /// Planner backend
+    pub planner: Option<String>,
+
+    /// Planner command template
+    pub planner_cmd: Option<String>,
 
     /// Maximum retry attempts
     pub max_retries: Option<u32>,
@@ -220,6 +236,8 @@ fn resolve_config(config: Config, config_root: &Path, config_path: &Path) -> Res
         adapter_cmd,
         runner: config.runner,
         runner_cmd: config.runner_cmd,
+        planner: config.planner,
+        planner_cmd: config.planner_cmd,
         max_retries: config.max_retries,
         max_cert_updates: config.max_cert_updates,
         max_runtime_seconds: config.max_runtime_seconds,
@@ -282,6 +300,12 @@ runner = "mock"
 
 # Optional: Command for cmd runner (use {mission_dir} placeholder)
 # runner_cmd = "my-agent --mission {mission_dir}"
+
+# Optional: Planner backend for REPL (mock or cmd)
+planner = "mock"
+
+# Optional: Command for cmd planner (use {input_file} placeholder)
+# planner_cmd = "my-planner --input {input_file}"
 
 # Optional: Budget limits
 max_retries = 2
@@ -422,6 +446,8 @@ adapter_cmd = "test"
             ConfigDiscoveryResult::Found(config) => {
                 assert!(config.runner.is_none());
                 assert!(config.runner_cmd.is_none());
+                assert!(config.planner.is_none());
+                assert!(config.planner_cmd.is_none());
                 assert!(config.max_retries.is_none());
                 assert!(config.max_cert_updates.is_none());
                 assert!(config.max_runtime_seconds.is_none());
@@ -443,6 +469,8 @@ specs_dir = "specs"
 adapter_cmd = "test"
 runner = "claude"
 runner_cmd = "my-cmd {mission_dir}"
+planner = "cmd"
+planner_cmd = "my-planner {input_file}"
 max_retries = 5
 max_cert_updates = 10
 max_runtime_seconds = 1200
@@ -464,6 +492,8 @@ patterns = ["src/**"]
             ConfigDiscoveryResult::Found(config) => {
                 assert_eq!(config.runner, Some("claude".to_string()));
                 assert_eq!(config.runner_cmd, Some("my-cmd {mission_dir}".to_string()));
+                assert_eq!(config.planner, Some("cmd".to_string()));
+                assert_eq!(config.planner_cmd, Some("my-planner {input_file}".to_string()));
                 assert_eq!(config.max_retries, Some(5));
                 assert_eq!(config.max_cert_updates, Some(10));
                 assert_eq!(config.max_runtime_seconds, Some(1200));

@@ -1,0 +1,126 @@
+//! Session state for the interactive REPL.
+
+use serde::{Deserialize, Serialize};
+
+use crate::stage::Stage;
+use crate::surface_policy::{SurfaceLock, SurfacePolicy};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionIntent {
+    pub stage: Option<Stage>,
+    pub surface_overrides: Option<SurfacePolicy>,
+    pub focus: Option<String>,
+}
+
+impl SessionIntent {
+    pub fn apply_user_message(&mut self, message: &str) -> bool {
+        let mut updated = false;
+        let msg = message.to_ascii_lowercase();
+
+        if msg.contains("refine") {
+            self.stage = Some(Stage::RefineSpec);
+            updated = true;
+        } else if msg.contains("structure") {
+            self.stage = Some(Stage::StructureSpec);
+            updated = true;
+        } else if msg.contains("tests") || msg.contains("bindings") {
+            self.stage = Some(Stage::ImplementTests);
+            updated = true;
+        } else if msg.contains("sut") || msg.contains("implementation") {
+            self.stage = Some(Stage::ImplementSut);
+            updated = true;
+        } else if msg.contains("finalize") || msg.contains("finish") {
+            self.stage = Some(Stage::Finalize);
+            updated = true;
+        }
+
+        let mut overrides = self.surface_overrides.clone()
+            .unwrap_or_else(|| self.stage.map(|s| s.default_surface_policy()).unwrap_or_else(SurfacePolicy::for_finalize));
+
+        if msg.contains("lock spec") {
+            overrides.spec = SurfaceLock::Locked;
+            updated = true;
+        }
+        if msg.contains("unlock spec") {
+            overrides.spec = SurfaceLock::Unlocked;
+            updated = true;
+        }
+        if msg.contains("lock tests") || msg.contains("lock bindings") {
+            overrides.tests_bindings = SurfaceLock::Locked;
+            updated = true;
+        }
+        if msg.contains("unlock tests") || msg.contains("unlock bindings") {
+            overrides.tests_bindings = SurfaceLock::Unlocked;
+            updated = true;
+        }
+        if msg.contains("lock sut") {
+            overrides.sut = SurfaceLock::Locked;
+            updated = true;
+        }
+        if msg.contains("unlock sut") {
+            overrides.sut = SurfaceLock::Unlocked;
+            updated = true;
+        }
+
+        if updated {
+            self.surface_overrides = Some(overrides);
+        }
+
+        if let Some(tag) = extract_scenario_tag(message) {
+            self.focus = Some(tag);
+            updated = true;
+        }
+
+        updated
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingMission {
+    pub proposal: crate::runner::MissionProposal,
+    pub approved: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionState {
+    pub intent: SessionIntent,
+    pub last_packets_fingerprint: Option<String>,
+    pub pending_mission: Option<PendingMission>,
+    pub recent_missions: Vec<String>,
+    pub chat_summary: Option<String>,
+    pub last_repo_state_summary: Option<String>,
+}
+
+fn extract_scenario_tag(message: &str) -> Option<String> {
+    let start = message.find("@Scenario(")?;
+    let end = message[start..].find(')')?;
+    Some(message[start..start + end + 1].to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intent_detects_stage() {
+        let mut intent = SessionIntent::default();
+        intent.apply_user_message("let's focus on tests");
+        assert_eq!(intent.stage, Some(Stage::ImplementTests));
+    }
+
+    #[test]
+    fn intent_detects_locking() {
+        let mut intent = SessionIntent::default();
+        intent.apply_user_message("unlock spec and lock sut");
+        let overrides = intent.surface_overrides.unwrap();
+        assert_eq!(overrides.spec, SurfaceLock::Unlocked);
+        assert_eq!(overrides.sut, SurfaceLock::Locked);
+    }
+
+    #[test]
+    fn intent_extracts_scenario_tag() {
+        let mut intent = SessionIntent::default();
+        intent.apply_user_message("check @Scenario(03) failures");
+        assert_eq!(intent.focus, Some("@Scenario(03)".to_string()));
+    }
+}

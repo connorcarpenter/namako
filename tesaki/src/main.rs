@@ -19,14 +19,19 @@
 mod config;
 mod gate;
 mod issue_classifier;
+mod allowlist;
+mod chat_plan;
+mod chat_planner;
 mod mission;
 mod mission_selector;
 mod mission_type;
 mod packet_parser;
+mod repl;
 mod repo_state;
 mod runner;
 mod claude_code_runner;
 mod runner_test;
+mod session;
 mod stage;
 mod stop_reason;
 mod surface_policy;
@@ -67,7 +72,7 @@ struct IdentitySnapshot {
 #[command(about = "AI-friendly task orchestrator for Namako spec-driven development")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -295,14 +300,14 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Next {
+        Some(Commands::Next {
             spec_root,
             adapter,
             out,
             namako_cli,
             max_cert_updates,
             current_status,
-        } => {
+        }) => {
             // Resolve config: CLI flags override config file values
             let resolved = resolve_config_or_flags(spec_root, adapter, max_cert_updates, None, None, None, None, None)?;
             run_next(
@@ -315,7 +320,7 @@ fn main() -> Result<()> {
             )
         },
 
-        Commands::Run {
+        Some(Commands::Run {
             spec_root,
             adapter,
             namako_cli,
@@ -328,7 +333,7 @@ fn main() -> Result<()> {
             mode,
             stage,
             current_status,
-        } => {
+        }) => {
             // Resolve config: CLI flags override config file values
             let resolved = resolve_config_or_flags(
                 spec_root,
@@ -353,15 +358,18 @@ fn main() -> Result<()> {
                 &mode.unwrap_or_else(|| "BOOTSTRAP".to_string()),
                 stage,
                 resolved.surfaces.clone(),
+                None,
                 current_status,
             )
         },
 
-        Commands::Config { action } => {
+        Some(Commands::Config { action }) => {
             match action {
                 ConfigAction::Print => run_config_print(),
             }
         },
+
+        None => repl::run_repl(std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
     }
 }
 
@@ -469,6 +477,12 @@ fn run_config_print() -> Result<()> {
             }
             if let Some(ref runner_cmd) = cfg.runner_cmd {
                 println!("  runner_cmd: {}", runner_cmd);
+            }
+            if let Some(ref planner) = cfg.planner {
+                println!("  planner: {}", planner);
+            }
+            if let Some(ref planner_cmd) = cfg.planner_cmd {
+                println!("  planner_cmd: {}", planner_cmd);
             }
             if let Some(max_retries) = cfg.max_retries {
                 println!("  max_retries: {}", max_retries);
@@ -1260,6 +1274,7 @@ fn run_run(
     mode: &str,
     stage: Option<String>,
     surfaces: Option<config::SurfacesConfig>,
+    surface_overrides: Option<crate::surface_policy::SurfacePolicy>,
     current_status: Option<PathBuf>,
 ) -> Result<()> {
     use crate::mission::{MissionBundle, MissionBudgets, MissionInputs};
@@ -1323,18 +1338,7 @@ fn run_run(
     }
 
     // Determine namako CLI command
-    let namako = namako_cli.unwrap_or_else(|| {
-        let namako_root = spec_root
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-            .map(|p| p.join("namako"))
-            .unwrap_or_else(|| PathBuf::from("/home/ccarpenter/Personal/specops/namako"));
-        format!(
-            "cargo run -p namako-cli --manifest-path {}/Cargo.toml -q --",
-            namako_root.display()
-        )
-    });
+    let namako = resolve_namako_cli(namako_cli, &spec_root);
 
     // Create the runner backend
     let runner: Box<dyn Runner> = match runner_name {
@@ -1411,7 +1415,7 @@ fn run_run(
     eprintln!("[3/6] Selecting mission...");
     let constraint = StageConstraint {
         stage: if stage.is_some() { Some(stage_override) } else { None },
-        surface_overrides: None,
+        surface_overrides,
     };
 
     let selection = select_with_constraints(&repo_state, &constraint);
@@ -1718,6 +1722,21 @@ fn run_namako_gate_json(namako: &str, adapter: &str, spec_root: &PathBuf) -> Res
     }
 
     Ok(stdout)
+}
+
+fn resolve_namako_cli(namako_cli: Option<String>, spec_root: &PathBuf) -> String {
+    namako_cli.unwrap_or_else(|| {
+        let namako_root = spec_root
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .map(|p| p.join("namako"))
+            .unwrap_or_else(|| PathBuf::from("/home/ccarpenter/Personal/specops/namako"));
+        format!(
+            "cargo run -p namako-cli --manifest-path {}/Cargo.toml -q --",
+            namako_root.display()
+        )
+    })
 }
 
 /// Emit the run result to .tesaki/last_run.json.

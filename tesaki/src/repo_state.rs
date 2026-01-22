@@ -491,6 +491,51 @@ impl RepoState {
             + self.binding_issues.len()
             + self.sut_issues.len()
     }
+
+    pub fn propagation_summary(&self) -> PropagationSummary {
+        PropagationSummary {
+            spec: !self.spec_issues.is_empty(),
+            structure: !self.structure_issues.is_empty(),
+            tests: !self.binding_issues.is_empty(),
+            sut: !self.sut_issues.is_empty(),
+            finalize: self.total_issue_count() == 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PropagationSummary {
+    pub spec: bool,
+    pub structure: bool,
+    pub tests: bool,
+    pub sut: bool,
+    pub finalize: bool,
+}
+
+impl PropagationSummary {
+    pub fn to_line(&self) -> String {
+        let mut items = Vec::new();
+        if self.spec {
+            items.push("Spec");
+        }
+        if self.structure {
+            items.push("Structure");
+        }
+        if self.tests {
+            items.push("Tests");
+        }
+        if self.sut {
+            items.push("SUT");
+        }
+        if self.finalize {
+            items.push("Finalize");
+        }
+        if items.is_empty() {
+            "None".to_string()
+        } else {
+            items.join(" -> ")
+        }
+    }
 }
 
 fn gate_status_from_packet(status: &PacketStatusValue, gate_pass: bool) -> GateStatus {
@@ -843,6 +888,23 @@ mod tests {
         };
 
         assert_eq!(state.total_issue_count(), 4);
+    }
+
+    #[test]
+    fn test_propagation_summary_line() {
+        let state = RepoState {
+            binding_issues: vec![BindingIssue {
+                kind: BindingIssueKind::MissingBinding,
+                scenario_key: None,
+                step_text: Some("Given a step".into()),
+                description: "Missing".into(),
+            }],
+            ..Default::default()
+        };
+
+        let summary = state.propagation_summary();
+        assert!(summary.tests);
+        assert!(summary.to_line().contains("Tests"));
     }
 
     fn status_stub() -> StatusPacket {

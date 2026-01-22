@@ -1,86 +1,114 @@
-//! Runner abstraction for v1.7 Runner Integration.
-//!
-//! Per GOLD_PLAN.md §10.7.4, the runner is an internal Tesaki abstraction.
-//! This module defines the core trait and types for runner backends.
-//!
-//! # Important: Runner Scope
-//!
-//! The runner operates on the **specs repository only**. It executes missions
-//! that modify project files according to the configured edit surfaces.
-//! The runner NEVER edits Namako/Tesaki toolchain code.
-
-use serde::{Deserialize, Serialize};
-use std::path::Path;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
-/// Configuration for runner execution.
+/// Configuration for mission execution.
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
-    /// Maximum runtime in seconds before killing the runner.
-    pub max_runtime_seconds: u32,
-
     /// Working directory for the runner (typically the workspace root).
-    pub working_dir: std::path::PathBuf,
+    pub working_dir: PathBuf,
+
+    /// Maximum runtime for the runner in seconds.
+    pub max_runtime_seconds: u32,
 
     /// Operating mode (BOOTSTRAP or CONSUMPTION).
     pub mode: String,
 }
 
-/// Outcome of a runner execution.
+/// Outcome of a mission execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerOutcome {
-    /// Exit status of the runner (0 = success).
     pub exit_code: Option<i32>,
-
-    /// Classification of the outcome.
     pub classification: OutcomeClassification,
-
-    /// Elapsed time in seconds.
     pub elapsed_seconds: f64,
-
-    /// Path to captured stdout (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stdout_path: Option<String>,
-
-    /// Path to captured stderr (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stderr_path: Option<String>,
-
-    /// Error message (if any).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
 }
 
-/// Classification of runner outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OutcomeClassification {
-    /// Runner completed successfully (exit code 0).
     Ok,
-    /// Runner exited with non-zero status.
     Failed,
-    /// Runner exceeded time budget.
     Timeout,
-    /// Runner could not be started (command not found, etc.).
     EnvironmentError,
 }
 
-/// Trait for runner backends.
-///
-/// Runners execute missions and return outcomes. They are stateless
-/// and receive all context via the mission directory.
+/// Mission execution interface (unchanged in spirit).
 pub trait Runner: Send + Sync {
-    /// Execute the runner against a mission bundle.
-    ///
-    /// The runner should:
-    /// 1. Read MISSION.md for instructions
-    /// 2. Read POLICY.md for constraints
-    /// 3. Perform the requested work
-    /// 4. Write attempt_report.md to RUNNER_OUTPUT/
-    ///
-    /// Returns the outcome of the execution.
     fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome>;
+    fn name(&self) -> &'static str;
+}
 
-    /// Return the name of this runner backend.
+/// A single allowlisted command request from the chat planner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllowedCommand {
+    /// Must be "namako" or "tesaki". Enforced by Tesaki allowlist.
+    pub tool: String,
+    /// Args only (no shell). Enforced by Tesaki allowlist.
+    pub args: Vec<String>,
+    /// Optional explanation for UX.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Optional mission proposal emitted by the chat planner.
+/// Tesaki still validates/normalizes this into a real mission bundle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionProposal {
+    pub mission_type: String,   // e.g. "CreateMissingBindings"
+    pub stage: String,          // e.g. "Implement Tests & Bindings"
+    pub target: String,         // e.g. "@Scenario(03)"
+    pub surfaces: SurfacePolicy,
+    pub objective: String,
+    pub validation: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurfacePolicy {
+    pub spec: SurfaceLock,
+    pub tests: SurfaceLock,
+    pub sut: SurfaceLock,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SurfaceLock { Locked, Unlocked }
+
+/// The plan-only result for one REPL “turn step”.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatPlan {
+    pub say: String,
+    #[serde(default)]
+    pub run: Vec<AllowedCommand>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_proposal: Option<MissionProposal>,
+    pub done: bool,
+}
+
+/// Input to the chat planner (small, structured; no repo access).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatTurnInput {
+    pub user_message: String,
+    pub session_state_json: serde_json::Value,
+    pub recent_command_results: Vec<CommandResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandResult {
+    pub tool: String,
+    pub args: Vec<String>,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Plan-only chat interface. Implement this for ClaudeCodeRunner and CodexRunner.
+pub trait ChatPlanner: Send + Sync {
+    fn plan_turn(&self, input: &ChatTurnInput) -> Result<ChatPlan>;
     fn name(&self) -> &'static str;
 }

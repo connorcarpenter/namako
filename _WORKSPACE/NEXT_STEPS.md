@@ -45,333 +45,134 @@ This document bridges the gap with a phased implementation plan.
 
 ---
 
-## Phase 0: v1.7 Validation & Transition (Current)
+## Phase 5: Interactive Sessions (v1.8)
 
-**Goal:** Verify v1.7 end-to-end, then transition to CONSUMPTION mode.
+**Goal:** Implement `tesaki` (no subcommand) as an interactive TTY REPL that feels like Claude Code, while enforcing: **the model can only “think + talk” and request allowlisted `namako`/`tesaki` commands**. Tesaki is the only process that executes commands or dispatches mission Runners.
 
-**Status:** Ready for testing.
+**Key idea:** *Stateless LLM chat planner per turn* + *allowlisted CLI execution* + *explicit commit point (mission proposal → execute)*.
 
-### Steps
+### Non-negotiable constraints (safety + simplicity)
 
-1. **Test `tesaki run` with mock runner**
-   ```bash
-   cd naia && tesaki run --runner mock
-   ```
+1. The model never reads the repo directly.
+2. The model never runs shell commands directly.
+3. The only “world observations” the model receives are **stdout/stderr from allowlisted commands** that Tesaki executed.
+4. The model can propose a mission, but Tesaki creates the mission bundle and only executes it when the user explicitly approves (or default-autopilot mode is enabled).
 
-2. **Test `tesaki run` with Claude Code**
-   ```bash
-   cd naia && tesaki run --runner claude
-   ```
+### REPL loop (high level)
 
-3. **Validate mission bundle structure**
-   - Check `.tesaki/missions/<id>/` contains expected files
-   - Verify gate_result.json is written correctly
+Each user message triggers a small loop until the “turn” is complete:
 
-4. **Transition to CONSUMPTION mode**
-   - Update CURRENT_STATUS.md: `MODE: CONSUMPTION`
-   - Select first CORE scenario to validate full loop
+1) Tesaki calls a **Chat Planner** (LLM) with:
+   - user message
+   - `SessionState` (small, structured)
+   - recent command results (stdout/stderr for this turn)
+2) Chat Planner returns a **ChatPlan JSON**:
+   - `say` (text to print)
+   - `run[]` (allowlisted `namako`/`tesaki` commands to execute next)
+   - optional `mission_proposal` (typed mission candidate)
+   - `done` (bool)
+3) Tesaki:
+   - prints `say`
+   - executes `run[]` **only if commands are allowlisted**
+   - appends command results and (if `done=false`) calls the Chat Planner again
+4) If a mission is proposed:
+   - Tesaki shows it as a **MISSION PROPOSAL** (type, target, surfaces, validation)
+   - waits for user approval (`run it` / `execute`)
+5) On approval:
+   - Tesaki writes the mission bundle
+   - Tesaki dispatches the configured **Runner** for exactly one mission
+   - Tesaki runs `namako gate --json` and summarizes results
+   - loop continues with updated RepoState
 
-### Exit Criteria
+### SessionState (what persists between turns)
 
-- [ ] `tesaki run` completes successfully with mock runner
-- [ ] Mission bundle contains all required files
-- [ ] Gate validation correctly classifies Pass/FailVerifyOnly/FailOther
-- [ ] CONSUMPTION mode first mission completes
+Persist only small, structured state (no giant transcript):
 
----
+- `intent` (stage lens + surface locks + scope/focus)
+- `last_packets_fingerprint` (detect when we need to refresh)
+- `pending_mission_id` (or full proposal struct)
+- `recent_missions` (IDs + stop reasons)
+- optional `chat_summary` (short rolling summary; bounded)
 
-## Phase 1: RepoState Model (Foundation for v1.8)
+### UX Flow (example)
 
-**Goal:** Build the computed RepoState model that powers v1.8 features.
-
-**Rationale:** Every v1.8 feature (stages, surface policies, mission types, intents) depends on having a rich, computed view of repository state. This is the foundation.
-
-### Implementation
-
-Create `tesaki/src/repo_state.rs`:
-
-```rust
-pub struct RepoState {
-    // From namako status --json
-    pub lint_status: GateStatus,
-    pub run_status: GateStatus,
-    pub verify_status: GateStatus,
-    pub drift: Option<DriftInfo>,
-    pub last_run_failures: Vec<FailureInfo>,
-
-    // From namako review
-    pub spec_issues: Vec<SpecIssue>,
-    pub structure_issues: Vec<StructureIssue>,
-    pub binding_issues: Vec<BindingIssue>,
-    pub sut_issues: Vec<SutIssue>,
-    pub global_blockers: Vec<Blocker>,
-
-    // Computed task queue
-    pub candidate_tasks: Vec<CandidateTask>,
-
-    // Identity
-    pub current_identity: Identity,
-    pub baseline_identity: Option<Identity>,
-}
 ```
 
-### Deliverables
-
-| File | Description |
-|------|-------------|
-| `tesaki/src/repo_state.rs` | RepoState struct + computation from packets |
-| `tesaki/src/issue_classifier.rs` | Classify issues by category (spec/structure/binding/sut) |
-| Tests | 10+ unit tests for state computation |
-
-### Exit Criteria
-
-- [ ] RepoState correctly computed from packets
-- [ ] Issue classification matches DEV_EX §3 categories
-- [ ] Candidate task queue derived from issues
-
----
-
-## Phase 2: Edit-Surface Policies
-
-**Goal:** Implement explicit Spec/Tests/SUT surface locks.
-
-**Rationale:** v1.8 stages are fundamentally about controlling which surfaces can be edited. This must be in place before stages.
-
-### Implementation
-
-Create `tesaki/src/surface_policy.rs`:
-
-```rust
-#[derive(Clone, Debug)]
-pub enum SurfaceLock {
-    Locked,
-    Unlocked,
-}
-
-#[derive(Clone, Debug)]
-pub struct SurfacePolicy {
-    pub spec: SurfaceLock,
-    pub tests_bindings: SurfaceLock,
-    pub sut: SurfaceLock,
-}
-```
-
-### Default Policies by Stage
-
-| Stage | Spec | Tests/Bindings | SUT |
-|-------|------|----------------|-----|
-| Refine Spec | UNLOCKED | LOCKED | LOCKED |
-| Structure Spec | UNLOCKED (structure only) | LOCKED | LOCKED |
-| Implement Tests | LOCKED | UNLOCKED | LOCKED |
-| Implement SUT | LOCKED | LOCKED | UNLOCKED |
-| Finalize | LOCKED | LOCKED | LOCKED |
-
-### Mission Bundle Integration
-
-Update `POLICY.md` generation to include surface policy:
-
-```markdown
-## Edit Surfaces
-
-| Surface | Policy | Allowed Paths |
-|---------|--------|---------------|
-| Spec | LOCKED | `test/specs/**/*.feature` |
-| Tests/Bindings | UNLOCKED | `test/tests/**`, `test/harness/**` |
-| SUT | LOCKED | `src/**`, `client/**`, `server/**` |
-```
-
-### Exit Criteria
-
-- [ ] SurfacePolicy struct implemented
-- [ ] POLICY.md includes surface locks
-- [ ] Runner can validate surface violations (optional: deferred if complex)
-
----
-
-## Phase 3: Mission Types
-
-**Goal:** Implement typed mission templates per DEV_EX §5.3.
-
-**Rationale:** Mission types encode the "shape" of tasks: what inputs are needed, which surfaces are allowed, what validation signals indicate success.
-
-### Core Mission Types (Priority 1)
-
-| Type | Stage | Description |
-|------|-------|-------------|
-| `CreateMissingBindings` | Tests & Bindings | Create step bindings for runnable scenarios |
-| `ImplementBehaviorForScenario` | SUT | Implement SUT to pass a failing scenario |
-| `FixRegressionFromGateFailure` | SUT | Fix a gate failure |
-
-### Spec Mission Types (Priority 2)
-
-| Type | Stage | Description |
-|------|-------|-------------|
-| `RefineFeatureIntent` | Refine Spec | Improve feature intent comments |
-| `AddOrClarifyScenario` | Refine Spec | Add/adjust scenarios |
-| `NormalizeIdentityTags` | Structure Spec | Ensure @Feature/@Rule/@Scenario tags |
-
-### Test Mission Types (Priority 2)
-
-| Type | Stage | Description |
-|------|-------|-------------|
-| `StrengthenThenAssertions` | Tests & Bindings | Improve assertion quality |
-| `RefactorBindingsForClarity` | Tests & Bindings | Clean step reuse |
-
-### Meta Mission Types (Priority 3)
-
-| Type | Stage | Description |
-|------|-------|-------------|
-| `ExplainState` | N/A | Synthesize state from packets (no runner) |
-| `TriageFailures` | N/A | Cluster gate failures |
-
-### Implementation
-
-Create `tesaki/src/mission_type.rs`:
-
-```rust
-pub enum MissionType {
-    // Core
-    CreateMissingBindings { scenario_key: String },
-    ImplementBehaviorForScenario { scenario_key: String },
-    FixRegressionFromGateFailure { failure: FailureInfo },
-
-    // Spec
-    RefineFeatureIntent { feature_path: String },
-    AddOrClarifyScenario { feature_path: String },
-    NormalizeIdentityTags { feature_path: String },
-
-    // Tests
-    StrengthenThenAssertions { scenario_key: String },
-    RefactorBindingsForClarity { binding_ids: Vec<String> },
-
-    // Meta
-    ExplainState,
-    TriageFailures,
-}
-
-impl MissionType {
-    pub fn default_surface_policy(&self) -> SurfacePolicy { ... }
-    pub fn expected_evidence_change(&self) -> EvidenceChange { ... }
-    pub fn generate_mission_brief(&self, state: &RepoState) -> String { ... }
-}
-```
-
-### Exit Criteria
-
-- [ ] All Priority 1 mission types implemented
-- [ ] Mission type selection based on RepoState
-- [ ] Mission brief generation per type
-
----
-
-## Phase 4: 5-Stage Workflow
-
-**Goal:** Implement the stage lens as a filter over task selection.
-
-**Rationale:** With RepoState, surface policies, and mission types in place, stages become a thin coordination layer.
-
-### Stage Definition
-
-```rust
-pub enum Stage {
-    RefineSpec,
-    StructureSpec,
-    ImplementTests,
-    ImplementSut,
-    Finalize,
-}
-
-impl Stage {
-    pub fn default_surface_policy(&self) -> SurfacePolicy { ... }
-    pub fn applicable_mission_types(&self) -> Vec<MissionType> { ... }
-    pub fn auto_advance_condition(&self, state: &RepoState) -> bool { ... }
-}
-```
-
-### Auto-Stage Detection
-
-Tesaki should infer the appropriate stage from RepoState:
-
-1. **Refine Spec** — If spec has ambiguity or missing coverage
-2. **Structure Spec** — If identity tags are missing
-3. **Implement Tests** — If bindings are missing
-4. **Implement SUT** — If tests exist but fail
-5. **Finalize** — If all gates pass
-
-### Exit Criteria
-
-- [ ] Stage enum and default policies implemented
-- [ ] Auto-stage detection from RepoState
-- [ ] Stage displayed in mission bundle
-
----
-
-## Phase 5: Interactive Sessions
-
-**Goal:** Implement `tesaki` (no subcommand) for interactive TTY sessions.
-
-**Rationale:** This is the capstone v1.8 feature. With all prior infrastructure, interactive sessions become "natural language over RepoState + mission dispatch."
-
-### UX Flow
-
-```
 $ tesaki
+
 > Reading repo state...
 > Spec: 1 issue • Structure: 0 • Bindings: 4 missing • SUT: 2 failing
 
-> Stage: Implement Tests
+> Stage: Implement Tests & Bindings
 > Surfaces: Spec LOCKED • Tests UNLOCKED • SUT LOCKED
 > Proposed: CreateMissingBindings for @Scenario(03)
 
 You: Why is Scenario(03) missing bindings?
 
-> Checking... The steps in Scenario(03) don't match existing binding patterns.
+> Running: namako explain --json (target: Scenario(03))
+> ...
+> The steps in Scenario(03) don't match any binding patterns currently registered.
 > Options:
->   1) Create new bindings (stay in Tests stage)
->   2) Reword scenario (switch to Refine Spec)
+>
+> 1. Create new bindings (stay in Tests stage)
+> 2. Reword scenario (unlock Spec)
 
 You: Create new bindings.
 
 > Interpreted: Stage = Tests; Spec LOCKED.
-> Running mission...
-```
+> MISSION PROPOSAL ready: CreateMissingBindings for @Scenario(03).
+> Say "run it" to execute, or ask questions.
+
+You: run it
+
+> Executing mission via Runner...
+> Post-gate: missing bindings decreased (4 → 1). New failures: none.
+> Next proposal: CreateMissingBindings for @Scenario(05)
+
+````
 
 ### Implementation Scope
 
 | Component | Description |
 |-----------|-------------|
-| `tesaki/src/session.rs` | Session state management |
-| `tesaki/src/intent_parser.rs` | Natural language → constraints |
-| `tesaki/src/repl.rs` | TTY REPL loop |
-| Integration | Connect to RepoState, missions, runners |
+| `tesaki/src/repl.rs` | TTY loop, input handling, printing, turn iteration |
+| `tesaki/src/session.rs` | `SessionState` + persistence (in-memory for v1.8) |
+| `tesaki/src/chat_plan.rs` | JSON schema structs (`ChatPlan`, `AllowedCommand`, `MissionProposal`) |
+| `tesaki/src/chat_planner.rs` | Calls LLM backend (Claude Code / Codex) in *plan-only* mode; parses JSON |
+| `tesaki/src/allowlist.rs` | Enforces only `namako` + `tesaki` commands; rejects everything else |
+| Integration | Connect to RepoState computation, mission selection, bundle writer, and Runner dispatch |
 
 ### Deferred (v1.9+)
 
-- Multi-turn context tracking
-- Undo/rollback capabilities
-- Session persistence
+- Session persistence across process restarts (resume/continue)
+- Richer multi-turn memory beyond bounded `chat_summary`
+- Undo/rollback primitives
+- UI niceties (search history, bookmarks, etc.)
 
 ### Exit Criteria
 
-- [ ] `tesaki` starts interactive session
-- [ ] User can view current state
-- [ ] User can adjust stage/surface constraints
-- [ ] User can trigger mission execution
+- [ ] `tesaki` starts interactive session and prints computed RepoState summary
+- [ ] Chat Planner can only request allowlisted `namako`/`tesaki` commands (enforced)
+- [ ] User can set stage + surface locks via natural language
+- [ ] Tesaki can present a Mission Proposal, wait for approval, then dispatch Runner
+- [ ] After execution, Tesaki re-runs `namako gate --json` and summarizes deltas
+
 
 ---
 
 ## Phase 6: Mission Bundle v1.8 Updates
 
-**Goal:** Align mission bundle structure with DEV_EX §8.
+**Goal:** Align mission bundle structure with DEV_EX §8, and support mission proposals coming from the interactive session.
 
 ### Structure Changes
 
 | v1.7 | v1.8 | Change |
 |------|------|--------|
-| `NEXT_TASK.md` | `MISSION.md` | Rename + add mission type metadata |
+| `NEXT_TASK.md` | `MISSION.md` | Rename + include mission type + surfaces + validation |
 | `OUTPUT/` | `RUNNER_OUTPUT/` | Rename |
 | `OUTPUT/gate_result.json` | `POST_GATE.json` | Move to root |
-| N/A | `stop_reason.json` | Add structured stop reason |
+| N/A | `RUNNER_OUTPUT/stop_reason.json` | Add structured stop reason |
+| N/A | `INPUTS/packets/*` | Store relevant Namako packets used to justify mission |
 
 ### MISSION.md Content
 
@@ -379,7 +180,7 @@ You: Create new bindings.
 # Mission 001-create-bindings-abc123
 
 **Type:** CreateMissingBindings
-**Stage:** Implement Tests
+**Stage:** Implement Tests & Bindings
 **Target:** @Scenario(03) "client connects"
 
 ## Surfaces
@@ -394,67 +195,73 @@ You: Create new bindings.
 
 Create step bindings for the missing steps in Scenario(03).
 
-## Missing Bindings
+## Inputs
 
-- `Given a server running on port {int}`
-- `When the client connects`
-- `Then the client receives a connection event`
+- `INPUTS/packets/status.json`
+- `INPUTS/packets/review.json`
+- `INPUTS/packets/explain_scenario_03.json` (if produced)
 
 ## Validation
 
 After runner exit:
-1. `namako gate --json` must pass
-2. Scenario(03) should be executable (not @Deferred)
+1. Run `namako gate --json` and save as `POST_GATE.json`
+2. Missing bindings count must decrease for Scenario(03)
+3. No new gate failures introduced (unless explicitly acknowledged)
 
 ---
 *Generated by Tesaki v1.8*
-```
+````
 
 ### Exit Criteria
 
-- [ ] Mission bundle structure matches DEV_EX §8
-- [ ] MISSION.md includes mission type and surface policy
-- [ ] POST_GATE.json at root level
+* [ ] Mission bundle structure matches DEV_EX §8
+* [ ] `MISSION.md` includes mission type + stage + surface policy + validation
+* [ ] `POST_GATE.json` at root level
+* [ ] `RUNNER_OUTPUT/stop_reason.json` always present
 
 ---
 
-## Immediate Actions
+## Immediate Actions (updated)
 
 ### For v1.7 Validation (Now)
 
-1. [ ] Run `tesaki run --runner mock` on clean naia specs
-2. [ ] Verify mission bundle creation
-3. [ ] Test Claude Code runner integration
-4. [ ] Document any issues found
+1. [ ] Run `tesaki run --runner mock` on a clean specs repo
+2. [ ] Verify v1.7 mission bundle creation + post-gate storage
+3. [ ] Verify Claude Code Runner integration still works
+4. [ ] Capture any runner quirks that will affect Phase 5 planning mode
 
 ### For v1.8 Phase 1 (Next)
 
-1. [ ] Create `tesaki/src/repo_state.rs`
-2. [ ] Define RepoState struct
-3. [ ] Implement packet → RepoState computation
-4. [ ] Add unit tests
+1. [ ] Create `tesaki/src/chat_plan.rs` with the ChatPlan JSON structs
+2. [ ] Implement `tesaki/src/allowlist.rs` for `namako` + `tesaki` commands only
+3. [ ] Implement `tesaki/src/chat_planner.rs` in “plan-only JSON” mode
+4. [ ] Implement `tesaki/src/repl.rs` turn loop (print → plan → run commands → plan → done)
+5. [ ] Integrate mission proposal → bundle writer → Runner dispatch → post-gate summary
 
 ---
 
-## Success Metrics
+## Success Metrics (updated)
 
 ### v1.7 Complete (Current Milestone)
 
-| Metric | Target | Status |
-|--------|--------|--------|
-| `tesaki run` works | Yes | ✅ Ready for test |
-| Mission bundle valid | Yes | ✅ Implemented |
-| 54 tests pass | Yes | ✅ Complete |
+| Metric               | Target              | Status           |
+| -------------------- | ------------------- | ---------------- |
+| `tesaki run` works   | Yes                 | ✅ Ready for test |
+| Mission bundle valid | Yes                 | ✅ Implemented    |
+| Runner integration   | Claude Code + Codex | ✅ Implemented    |
 
 ### v1.8 Complete (Target Milestone)
 
-| Metric | Target |
-|--------|--------|
-| Interactive session works | `tesaki` starts REPL |
-| 5 stages implemented | All stage transitions work |
-| 10+ mission types | Core + spec + test types |
-| RepoState model | Correctly computed from packets |
-| Surface policies | Enforced in mission bundles |
+| Metric                    | Target                                                      |
+| ------------------------- | ----------------------------------------------------------- |
+| Interactive session works | `tesaki` starts REPL                                        |
+| Plan-only chat            | LLM can only request allowlisted `namako`/`tesaki` commands |
+| 5 stages implemented      | All stage transitions + surface locks work                  |
+| Mission proposals         | Generated in-session and require approval to execute        |
+| Mission execution         | `tesaki run` executes exactly one mission cycle             |
+| Post-gate summaries       | Show deltas after every mission                             |
+
+````
 
 ---
 

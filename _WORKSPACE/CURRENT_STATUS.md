@@ -69,6 +69,22 @@ cargo run -p tesaki -- run \
 
 ---
 
+## v1.8 Interactive Developer Experience — IMPLEMENTED
+
+**Scope:** Interactive REPL session, allowlisted command execution, session intents, mission proposals with explicit approval, and post-gate summaries.
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| REPL entrypoint | ✅ | `tesaki` (no subcommand) starts interactive session |
+| Chat planner | ✅ | Plan-only JSON planner (`mock`/`cmd`) |
+| Allowlist | ✅ | Only `namako`/`tesaki` commands permitted |
+| Session state | ✅ | Stage lens + surface locks + pending mission tracking |
+| Mission proposals | ✅ | Proposal display with explicit approval gating |
+| Propagation summary | ✅ | RepoState ripple summary printed in-session |
+| Post-gate summaries | ✅ | Post-mission gate run + RepoState refresh |
+
+---
+
 ## 1. Gates Snapshot
 
 ### Commands

@@ -5,6 +5,9 @@
 pub mod config;
 pub mod gate;
 pub mod issue_classifier;
+pub mod allowlist;
+pub mod chat_plan;
+pub mod chat_planner;
 pub mod mission;
 pub mod mission_selector;
 pub mod mission_type;
@@ -14,6 +17,7 @@ pub mod runner;
 pub mod claude_code_runner;
 pub mod codex_runner;
 pub mod runner_test;
+pub mod session;
 pub mod stage;
 pub mod stop_reason;
 pub mod surface_policy;
