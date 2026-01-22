@@ -355,7 +355,7 @@ patterns = ["src/**", "client/**", "server/**"]
 pub fn print_config_error() {
     eprintln!("Error: No configuration found.");
     eprintln!();
-    eprintln!("Either provide -s and -a flags, or create .tesaki/config.toml");
+    eprintln!("Create .tesaki/config.toml in your repository.");
     eprintln!();
     eprintln!("Minimal example config:");
     eprintln!("------------------------");

@@ -63,7 +63,7 @@ pub struct RunnerInvocation {
 /// A single allowlisted command request from the chat planner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AllowedCommand {
-    /// Must be "namako" or "tesaki". Enforced by Tesaki allowlist.
+    /// Must be "namako". Enforced by Tesaki allowlist.
     pub tool: String,
     /// Args only (no shell). Enforced by Tesaki allowlist.
     pub args: Vec<String>,

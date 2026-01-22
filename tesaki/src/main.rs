@@ -4,17 +4,17 @@
 //! - Consumes Namako status and review packets
 //! - Generates NEXT_TASK.md with specific, actionable instructions
 //! - Never modifies source files (only writes to artifact directories)
-//! - May run update-cert up to --max-cert-updates times per run (governed by CLI flag)
+//! - May run update-cert up to max-cert-updates times per run (governed by config)
 //!
 //! # v1.7 Runner Integration
 //!
-//! With v1.7, Tesaki can orchestrate an autonomous coding agent (runner) via `tesaki run`.
+//! With v1.7, Tesaki can orchestrate an autonomous coding agent (runner) via the REPL.
 //! The runner operates on the specs repository only - it never edits Namako/Tesaki code.
 //!
 //! # Configuration Discovery
 //!
-//! When `-s` or `-a` flags are omitted, Tesaki searches for `.tesaki/config.toml` in the
-//! current directory and parent directories. See `tesaki config print` for details.
+//! Tesaki searches for `.tesaki/config.toml` in the current directory and parent
+//! directories. See the Tesaki README for details.
 
 mod config;
 mod gate;
@@ -42,7 +42,7 @@ mod surface_policy;
 mod workspace;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -74,137 +74,9 @@ struct IdentitySnapshot {
 #[derive(Parser)]
 #[command(name = "tesaki")]
 #[command(about = "AI-friendly task orchestrator for Namako spec-driven development")]
-#[command(after_help = "Run without a subcommand to start the interactive REPL.")]
-struct Cli {
-    /// Path to JSONL log file (enables persistent diagnostics)
-    #[arg(long, global = true)]
-    log_file: Option<PathBuf>,
-
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Generate the next task based on current Namako state
-    Next {
-        /// Path to the specs root directory (uses config discovery if omitted)
-        #[arg(short = 's', long)]
-        spec_root: Option<PathBuf>,
-
-        /// Adapter command (uses config discovery if omitted)
-        #[arg(short = 'a', long)]
-        adapter: Option<String>,
-
-        /// Output directory for artifacts (default: <spec_root>/target/namako_artifacts/tesaki/)
-        #[arg(short = 'o', long)]
-        out: Option<PathBuf>,
-
-        /// Path to the namako CLI (default: searches in parent workspace)
-        #[arg(long)]
-        namako_cli: Option<String>,
-
-        /// Maximum number of autonomous update-cert operations per run (0 to disable)
-        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=999))]
-        max_cert_updates: Option<u32>,
-    },
-
-    /// Run the autonomous development loop (v1.7)
-    ///
-    /// Creates a mission bundle, invokes the runner, and validates results.
-    /// The runner operates on the specs repository only.
-    Run {
-        /// Path to the specs root directory (uses config discovery if omitted)
-        #[arg(short = 's', long)]
-        spec_root: Option<PathBuf>,
-
-        /// Adapter command (uses config discovery if omitted)
-        #[arg(short = 'a', long)]
-        adapter: Option<String>,
-
-        /// Path to the namako CLI (default: searches in parent workspace)
-        #[arg(long)]
-        namako_cli: Option<String>,
-
-        /// Maximum number of autonomous update-cert operations per session (0 to disable)
-        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=999))]
-        max_cert_updates: Option<u32>,
-
-        /// Runner backend to use
-        #[arg(long, value_parser = ["mock", "claude", "codex", "cmd"])]
-        runner: Option<String>,
-
-        /// Command template for cmd runner (use {mission_dir} placeholder)
-        #[arg(long)]
-        runner_cmd: Option<String>,
-
-        /// Maximum runtime in seconds per mission
-        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=3600))]
-        max_runtime_seconds: Option<u32>,
-
-        /// Maximum files the runner may change per mission
-        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
-        max_files_changed: Option<u32>,
-
-        /// Maximum retry attempts on runner failure
-        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=10))]
-        max_retries: Option<u32>,
-
-        /// Model to use for AI runner (e.g., "haiku", "sonnet", "opus", "o3", "o4-mini")
-        #[arg(long)]
-        model: Option<String>,
-
-        /// Stream runner output to terminal in real-time
-        #[arg(long)]
-        stream_output: bool,
-
-        /// Stage lens override (refine, structure, tests, sut, finalize)
-        #[arg(long, value_parser = ["refine", "structure", "tests", "sut", "finalize"])]
-        stage: Option<String>,
-    },
-
-    /// Print a short, deterministic repo status summary
-    Status {
-        /// Path to the specs root directory (uses config discovery if omitted)
-        #[arg(short = 's', long)]
-        spec_root: Option<PathBuf>,
-
-        /// Adapter command (uses config discovery if omitted)
-        #[arg(short = 'a', long)]
-        adapter: Option<String>,
-
-        /// Path to the namako CLI (default: searches in parent workspace)
-        #[arg(long)]
-        namako_cli: Option<String>,
-    },
-
-    /// Explain why the next mission was selected
-    Explain {
-        /// Path to the specs root directory (uses config discovery if omitted)
-        #[arg(short = 's', long)]
-        spec_root: Option<PathBuf>,
-
-        /// Adapter command (uses config discovery if omitted)
-        #[arg(short = 'a', long)]
-        adapter: Option<String>,
-
-        /// Path to the namako CLI (default: searches in parent workspace)
-        #[arg(long)]
-        namako_cli: Option<String>,
-    },
-
-    /// Configuration management
-    Config {
-        #[command(subcommand)]
-        action: ConfigAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum ConfigAction {
-    /// Print the resolved configuration (exits non-zero if none found)
-    Print,
-}
+#[command(disable_version_flag = true)]
+#[command(after_help = "Run `tesaki` to start the interactive REPL.")]
+struct Cli {}
 
 /// Status JSON structure from `namako status --json`
 #[derive(Debug, Deserialize)]
@@ -301,150 +173,20 @@ fn main() -> Result<()> {
     // Initialize logging - configure via RUST_LOG env var
     logging::init();
 
-    let cli = Cli::parse();
-    match cli.command {
-        Some(Commands::Next {
-            spec_root,
-            adapter,
-            out,
-            namako_cli,
-            max_cert_updates,
-        }) => {
-            let log_path = cli
-                .log_file
-                .clone()
-                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
-            let logger = logging::JsonlLogger::new(log_path);
-            // Resolve config: CLI flags override config file values
-            let resolved = resolve_config_or_flags(spec_root, adapter, max_cert_updates, None, None, None, None, None)?;
-            let namako = resolve_namako_cli(namako_cli, resolved.namako_cli.clone(), &resolved.specs_dir);
-            run_next(
-                &resolved.specs_dir,
-                &resolved.adapter_cmd,
-                out,
-                namako,
-                resolved.max_cert_updates.unwrap_or(3),
-                &logger,
-            )
-        },
-
-        Some(Commands::Run {
-            spec_root,
-            adapter,
-            namako_cli,
-            max_cert_updates,
-            runner,
-            runner_cmd,
-            max_runtime_seconds,
-            max_files_changed,
-            max_retries,
-            model,
-            stream_output,
-            stage,
-        }) => {
-            let log_path = cli
-                .log_file
-                .clone()
-                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
-            let logger = logging::JsonlLogger::new(log_path);
-            // Resolve config: CLI flags override config file values
-            let resolved = resolve_config_or_flags(
-                spec_root,
-                adapter,
-                max_cert_updates,
-                runner,
-                runner_cmd,
-                max_retries,
-                max_runtime_seconds.map(|v| v as u64),
-                max_files_changed.map(|v| v as usize),
-            )?;
-            let namako = resolve_namako_cli(namako_cli, resolved.namako_cli.clone(), &resolved.specs_dir);
-            // CLI flags override config for model and stream_output
-            let effective_model = model.or(resolved.model);
-            let effective_stream = stream_output || resolved.stream_output;
-            run_run(
-                &resolved.specs_dir,
-                &resolved.adapter_cmd,
-                namako,
-                resolved.max_cert_updates.unwrap_or(3),
-                &resolved.runner.unwrap_or_else(|| "mock".to_string()),
-                resolved.runner_cmd,
-                resolved.max_runtime_seconds.unwrap_or(600) as u32,
-                resolved.max_files_changed.unwrap_or(10) as u32,
-                resolved.max_retries.unwrap_or(2),
-                effective_model,
-                effective_stream,
-                stage,
-                resolved.surfaces.clone(),
-                None,
-                &logger,
-            )
-        },
-
-        Some(Commands::Config { action }) => {
-            match action {
-                ConfigAction::Print => run_config_print(),
-            }
-        },
-
-        Some(Commands::Status {
-            spec_root,
-            adapter,
-            namako_cli,
-        }) => {
-            let log_path = cli
-                .log_file
-                .clone()
-                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
-            let logger = logging::JsonlLogger::new(log_path);
-            let resolved = resolve_config_or_flags(spec_root, adapter, None, None, None, None, None, None)?;
-            let namako = resolve_namako_cli(namako_cli, resolved.namako_cli.clone(), &resolved.specs_dir);
-            run_status_cmd(
-                &resolved.specs_dir,
-                &resolved.adapter_cmd,
-                namako,
-                &logger,
-            )
-        }
-
-        Some(Commands::Explain {
-            spec_root,
-            adapter,
-            namako_cli,
-        }) => {
-            let log_path = cli
-                .log_file
-                .clone()
-                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
-            let logger = logging::JsonlLogger::new(log_path);
-            let resolved = resolve_config_or_flags(spec_root, adapter, None, None, None, None, None, None)?;
-            let namako = resolve_namako_cli(namako_cli, resolved.namako_cli.clone(), &resolved.specs_dir);
-            run_explain_cmd(
-                &resolved.specs_dir,
-                &resolved.adapter_cmd,
-                namako,
-                &logger,
-            )
-        }
-
-        None => {
-            let log_path = cli
-                .log_file
-                .clone()
-                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
-            let logger = logging::JsonlLogger::new_with_console(
-                log_path,
-                logging::ConsoleMode::Commands,
-            );
-            repl::run_repl(
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                &logger,
-            )
-        }
-    }
+    let _cli = Cli::parse();
+    let log_path = std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from);
+    let logger = logging::JsonlLogger::new_with_console(
+        log_path,
+        logging::ConsoleMode::Commands,
+    );
+    repl::run_repl(
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        &logger,
+    )
 }
 
 /// Resolved configuration from CLI flags and/or config file
+#[allow(dead_code)]
 struct ResolvedArgs {
     specs_dir: PathBuf,
     adapter_cmd: String,
@@ -462,6 +204,7 @@ struct ResolvedArgs {
 
 /// Resolve configuration from CLI flags, falling back to config file if flags are missing.
 /// CLI flags always override config file values.
+#[allow(dead_code)]
 fn resolve_config_or_flags(
     spec_root: Option<PathBuf>,
     adapter: Option<String>,
@@ -528,8 +271,8 @@ fn resolve_config_or_flags(
             // Check if we have at least partial flags
             if spec_root.is_some() || adapter.is_some() {
                 anyhow::bail!(
-                    "Both -s/--spec-root and -a/--adapter are required when no config file is found.\n\n\
-                    Create .tesaki/config.toml or provide both flags."
+                    "Configuration is required when no config file is found.\n\n\
+                    Create .tesaki/config.toml in your repository."
                 );
             }
 
@@ -539,7 +282,8 @@ fn resolve_config_or_flags(
     }
 }
 
-/// Run `tesaki config print`
+/// Print resolved configuration (internal helper).
+#[allow(dead_code)]
 fn run_config_print() -> Result<()> {
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
     let discovery = config::discover_config(&cwd)?;
@@ -601,6 +345,7 @@ fn run_config_print() -> Result<()> {
     }
 }
 
+#[allow(dead_code)]
 fn run_status_cmd(
     spec_root: &PathBuf,
     adapter: &str,
@@ -647,6 +392,7 @@ fn run_status_cmd(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn run_explain_cmd(
     spec_root: &PathBuf,
     adapter: &str,
@@ -744,6 +490,7 @@ fn canonicalize_adapter_cmd(adapter: &str) -> Result<String> {
     Ok(result.join(" "))
 }
 
+#[allow(dead_code)]
 fn run_next(
     spec_root: &PathBuf,
     adapter: &str,
@@ -832,7 +579,7 @@ fn run_next(
         review.promotion_candidates.len()
     );
 
-    // Step 3: Handle NEEDS_UPDATE_CERT_APPROVAL with --max-cert-updates governance
+    // Step 3: Handle NEEDS_UPDATE_CERT_APPROVAL with update-cert governance
     let mut update_cert_message: Option<String> = None;
     if action == "NEEDS_UPDATE_CERT_APPROVAL" {
         eprintln!("[3/4] Checking update-cert governance...");
@@ -849,9 +596,9 @@ fn run_next(
                 "Cannot attempt autonomous update: run_report.json not found. Run `namako run` first.".to_string()
             );
         } else if max_cert_updates == 0 {
-            eprintln!("  Autonomous updates disabled (--max-cert-updates=0)");
+            eprintln!("  Autonomous updates disabled (max_cert_updates=0)");
             update_cert_message = Some(
-                "Autonomous updates disabled. Use --max-cert-updates=N (N>0) to enable.".to_string()
+                "Autonomous updates disabled. Set max_cert_updates in .tesaki/config.toml to enable.".to_string()
             );
         } else if updates_this_run >= max_cert_updates {
             eprintln!("  Update limit reached for this run");
@@ -1336,7 +1083,7 @@ fn generate_next_task(
 }
 
 // ============================================================================
-// v1.7 Runner Integration: `tesaki run` command
+// v1.7 Runner Integration: single-mission run loop
 // ============================================================================
 
 /// Run the autonomous development loop (v1.7).

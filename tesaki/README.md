@@ -40,54 +40,14 @@ max_files_changed = 10
 
 ```bash
 # From anywhere in your repo (config discovery works from any subdirectory)
-tesaki run
-
-# Or run with explicit flags (flags override config)
-tesaki run -s test/specs -a "cargo run -p npa --" --runner mock
-
-# See the resolved config
-tesaki config print
+tesaki
 ```
 
-## Commands
-
-### `tesaki run`
-
-The autonomous development loop (v1.7). Creates a mission bundle, invokes the runner, and validates results.
-
-```bash
-tesaki run [OPTIONS]
-```
-
-Options:
-- `-s, --spec-root <PATH>` — Path to specs directory (uses config if omitted)
-- `-a, --adapter <CMD>` — Adapter command (uses config if omitted)
-- `--runner <RUNNER>` — Runner backend: `mock`, `cmd`, or `claude`
-- `--runner-cmd <CMD>` — Command template for cmd runner
-- `--max-retries <N>` — Maximum retry attempts (default: 2)
-- `--max-cert-updates <N>` — Maximum update-cert operations (default: 3)
-- `--max-runtime-seconds <N>` — Maximum runtime per mission (default: 600)
-- `--max-files-changed <N>` — Maximum files runner may change (default: 10)
-
-### `tesaki next`
-
-Generate the next task based on current Namako state. Outputs `NEXT_TASK.md`.
-
-```bash
-tesaki next [OPTIONS]
-```
-
-### `tesaki config print`
-
-Print the resolved configuration and where it was found.
-
-```bash
-tesaki config print
-```
+Tesaki starts an interactive REPL. Use natural language prompts, and approve missions when prompted.
 
 ## Configuration Discovery
 
-When `-s` or `-a` flags are omitted, Tesaki searches for configuration in this order:
+Tesaki searches for configuration in this order:
 
 1. Look for `.tesaki/config.toml` in the current directory
 2. Walk up parent directories until found
@@ -111,25 +71,13 @@ max_runtime_seconds = 600           # Runtime budget
 max_files_changed = 10              # File change limit
 ```
 
-### Flag Override Rules
-
-CLI flags always override config file values. Partial overrides are supported:
-
-```bash
-# Use config for everything except runner
-tesaki run --runner claude
-
-# Use config for adapter, override specs_dir
-tesaki run -s ../other/specs
-```
-
 ## Alternative: Direct Cargo Run
 
 If you prefer not to use the shim:
 
 ```bash
 cd /path/to/namako
-cargo run -p tesaki -- run -s ../naia/test/specs -a "..."
+cargo run -p tesaki
 ```
 
 ## Development

@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::allowlist::{validate_command, AllowedTool};
+use crate::allowlist::validate_command;
 use crate::chat_planner::{CmdChatPlanner, MockChatPlanner};
 use crate::config::{self, ConfigDiscoveryResult};
 use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
@@ -492,31 +492,19 @@ fn execute_allowed_command(
     namako_cmd: &str,
     logger: &crate::logging::JsonlLogger,
 ) -> Result<CommandResult> {
-    let tool = match validate_command(command) {
-        Ok(tool) => tool,
-        Err(err) => {
-            logger.log_event(crate::logging::LogEvent::AllowlistReject {
-                tool: command.tool.clone(),
-                args: command.args.clone(),
-                reason: err.to_string(),
-            });
-            return Err(err);
-        }
-    };
-    let (program, base_args) = match tool {
-        AllowedTool::Namako => split_command(namako_cmd)?,
-        AllowedTool::Tesaki => {
-            let exe = std::env::current_exe().context("Failed to locate tesaki binary")?;
-            (exe.to_string_lossy().to_string(), vec![])
-        }
-    };
+    if let Err(err) = validate_command(command) {
+        logger.log_event(crate::logging::LogEvent::AllowlistReject {
+            tool: command.tool.clone(),
+            args: command.args.clone(),
+            reason: err.to_string(),
+        });
+        return Err(err);
+    }
 
+    let (program, base_args) = split_command(namako_cmd)?;
     let mut args = base_args;
     args.extend(command.args.clone());
-
-    if tool == AllowedTool::Namako {
-        args = augment_namako_args(args, adapter);
-    }
+    args = augment_namako_args(args, adapter);
 
     crate::log_command_run(logger, &command.tool, &command.args, spec_root, None);
     let output = Command::new(&program)

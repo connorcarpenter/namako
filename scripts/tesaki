@@ -6,12 +6,11 @@
 # current local checkout. It's intended for development and iteration.
 #
 # Usage:
-#   /path/to/namako/scripts/tesaki run
-#   /path/to/namako/scripts/tesaki next -s specs -a "adapter"
-#   /path/to/namako/scripts/tesaki config print
+#   /path/to/namako/scripts/tesaki
+#   /path/to/namako/scripts/tesaki --help
 #
 # After running scripts/install-tesaki-dev-shim, you can simply use:
-#   tesaki run
+#   tesaki
 #
 
 set -euo pipefail

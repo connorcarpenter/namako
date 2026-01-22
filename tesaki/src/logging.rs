@@ -5,7 +5,7 @@
 //! 2. Optional JSONL file logging for machine-readable diagnostics
 //!
 //! Configure console verbosity via `RUST_LOG` environment variable.
-//! Example: `RUST_LOG=tesaki=debug tesaki run`
+//! Example: `RUST_LOG=tesaki=debug tesaki`
 
 use log::{debug, info, warn};
 use serde::Serialize;

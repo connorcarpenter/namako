@@ -4,21 +4,6 @@ use anyhow::{bail, Result};
 
 use crate::runner::AllowedCommand;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AllowedTool {
-    Namako,
-    Tesaki,
-}
-
-impl AllowedTool {
-    fn as_str(&self) -> &'static str {
-        match self {
-            AllowedTool::Namako => "namako",
-            AllowedTool::Tesaki => "tesaki",
-        }
-    }
-}
-
 const NAMAKO_SUBCOMMANDS: &[&str] = &[
     "status",
     "review",
@@ -30,26 +15,15 @@ const NAMAKO_SUBCOMMANDS: &[&str] = &[
     "run",
 ];
 
-const TESAKI_SUBCOMMANDS: &[&str] = &["config", "next", "run", "status", "explain"];
-
-pub fn validate_command(command: &AllowedCommand) -> Result<AllowedTool> {
-    let tool = match command.tool.as_str() {
-        "namako" => AllowedTool::Namako,
-        "tesaki" => AllowedTool::Tesaki,
-        other => bail!("Command tool '{}' is not allowlisted", other),
-    };
+pub fn validate_command(command: &AllowedCommand) -> Result<()> {
+    if command.tool.as_str() != "namako" {
+        bail!("Command tool '{}' is not allowlisted", command.tool);
+    }
 
     if let Some(first) = command.args.first() {
-        let allowed = match tool {
-            AllowedTool::Namako => NAMAKO_SUBCOMMANDS.contains(&first.as_str()),
-            AllowedTool::Tesaki => TESAKI_SUBCOMMANDS.contains(&first.as_str()),
-        };
+        let allowed = NAMAKO_SUBCOMMANDS.contains(&first.as_str());
         if !allowed {
-            bail!(
-                "Command '{}' is not allowlisted for {}",
-                first,
-                tool.as_str()
-            );
+            bail!("Command '{}' is not allowlisted for namako", first);
         }
     }
 
@@ -57,7 +31,7 @@ pub fn validate_command(command: &AllowedCommand) -> Result<AllowedTool> {
         bail!("Command args contain forbidden shell metacharacters");
     }
 
-    Ok(tool)
+    Ok(())
 }
 
 fn contains_shell_meta(value: &str) -> bool {
@@ -82,8 +56,7 @@ mod tests {
             args: vec!["gate".to_string(), "--json".to_string()],
             reason: None,
         };
-        let tool = validate_command(&cmd).unwrap();
-        assert_eq!(tool, AllowedTool::Namako);
+        assert!(validate_command(&cmd).is_ok());
     }
 
     #[test]

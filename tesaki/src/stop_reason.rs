@@ -93,7 +93,7 @@ impl std::fmt::Display for StopReason {
     }
 }
 
-/// Result of a `tesaki run` invocation.
+/// Result of a mission run invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
     /// The stop reason (why we stopped).

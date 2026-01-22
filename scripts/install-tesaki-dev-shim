@@ -9,8 +9,8 @@
 #   ./scripts/install-tesaki-dev-shim
 #
 # After installation:
-#   tesaki run
-#   tesaki config print
+#   tesaki
+#   tesaki --help
 #
 
 set -euo pipefail
@@ -68,8 +68,8 @@ if [[ -L "$LINK_PATH" ]]; then
         echo "You can now run 'tesaki' from anywhere!"
         echo ""
         echo "Try:"
+        echo "  tesaki"
         echo "  tesaki --help"
-        echo "  tesaki config print"
     fi
 else
     echo "Error: Failed to create symlink" >&2

@@ -41,8 +41,8 @@ Review the drift details above. Common causes:
 1. Review the drift details carefully
 2. **STOP AND WAIT** for Connor's approval
 {% if max_cert_updates > 0 %}
-3. Autonomous updates are enabled (--max-cert-updates={{ max_cert_updates }}). Run tesaki again to auto-update.
+3. Autonomous updates are enabled (max_cert_updates={{ max_cert_updates }}). Run tesaki again to auto-update.
 {% else %}
-3. Autonomous updates are disabled (--max-cert-updates=0). Use --max-cert-updates=N to enable.
+3. Autonomous updates are disabled (max_cert_updates=0). Set max_cert_updates in `.tesaki/config.toml` to enable.
 {% endif %}
 4. Or manually: run `namako update-cert`
