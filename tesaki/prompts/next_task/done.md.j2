@@ -1,0 +1,53 @@
+{# DONE action variant for NEXT_TASK.md #}
+{#
+Required context:
+- eligible_candidates: Vec<Candidate>
+- missing_bindings: Vec<MissingBinding>
+- update_cert_message: Option<String>
+#}
+## Task: Propose Micro-Milestone Batch
+
+All gates are green. The system is stable.
+
+{% if update_cert_message %}
+### Baseline Update
+
+{{ update_cert_message }}
+
+{% endif %}
+### Recommended Next Steps
+
+{% if eligible_candidates %}
+Consider promoting the top 3 scenarios from Deferred → Executable:
+
+{% for candidate in eligible_candidates[:3] %}
+  {{ loop.index }}. **{{ candidate.scenario_name }}**
+     - Feature: `{{ candidate.feature_path }}`
+     - Rule: {{ candidate.rule_name }}
+     - Reuse score: {{ candidate.reuse_score }}, New steps: {{ candidate.new_step_texts_estimate }}
+
+{% endfor %}
+{% else %}
+No promotion candidates available. Consider:
+- Adding new @Deferred scenarios to feature files
+- Expanding to new feature files
+
+{% endif %}
+### Missing Bindings to Implement
+
+{% if missing_bindings %}
+{% for mb in missing_bindings[:3] %}
+  - **{{ mb.candidate_name }}**: {% if mb.missing_step_texts %}{{ mb.missing_step_texts | join(", ") }}{% else %}(all steps covered){% endif %}
+
+{% endfor %}
+{% else %}
+  (none)
+{% endif %}
+
+### Instructions
+
+1. Uncomment/enable the top candidate scenarios in their `.feature` files
+2. Implement missing step bindings in the test harness
+3. Run `bash scripts/namako_ci.sh` until green
+4. Run `bash scripts/determinism_check.sh` to verify determinism
+5. If baseline drift is detected, request `update-cert` approval

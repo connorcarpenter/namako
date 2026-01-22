@@ -27,6 +27,7 @@ mod mission;
 mod mission_selector;
 mod mission_type;
 mod packet_parser;
+mod prompts;
 mod repl;
 mod repo_state;
 mod runner;
@@ -1161,6 +1162,16 @@ fn generate_next_task(
     update_cert_message: Option<&String>,
     max_cert_updates: u32,
 ) -> Result<()> {
+    use prompts::{
+        render_next_task_base, render_next_task_done, render_next_task_fix_lint,
+        render_next_task_fix_run, render_next_task_needs_approval, render_next_task_run_gate,
+        render_next_task_unknown, render_next_task_artifacts,
+        NextTaskBaseContext, NextTaskDoneContext, NextTaskFixLintContext, NextTaskFixRunContext,
+        NextTaskNeedsApprovalContext, NextTaskRunGateContext, NextTaskArtifactsContext,
+        CandidateContext, MissingBindingContext, FailureDisplayContext, DriftDetailContext,
+        TESAKI_VERSION,
+    };
+
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     // Filter out stubs (defense-in-depth)
@@ -1174,231 +1185,151 @@ fn generate_next_task(
         .map(|d| d.kind.as_str())
         .unwrap_or("NONE");
 
-    let mut content = String::new();
+    // Render base header
+    let base_ctx = NextTaskBaseContext {
+        timestamp: timestamp.clone(),
+        action: action.to_string(),
+        executable_scenarios_total: review.coverage_summary.executable_scenarios_total,
+        deferred_items_total: review.coverage_summary.deferred_items_total,
+        promotion_candidates_total: review.promotion_candidates.len(),
+        eligible_candidates_count: eligible_candidates.len(),
+        drift_kind: drift_kind.to_string(),
+    };
 
-    // Header
-    content.push_str("# NEXT_TASK.md — Tesaki Generated Task\n\n");
-    content.push_str(&format!("**Generated:** {}\n", timestamp));
-    content.push_str(&format!("**Action:** `{}`\n\n", action));
-    content.push_str("---\n\n");
+    let mut content = render_next_task_base(&base_ctx)
+        .unwrap_or_else(|e| {
+            log::error!("Failed to render next_task base: {}", e);
+            format!("# NEXT_TASK.md\n\n**Action:** `{}`\n\n---\n\n", action)
+        });
 
-    // Current Status
-    content.push_str("## Current Status\n\n");
-    content.push_str("| Metric | Value |\n");
-    content.push_str("|--------|-------|\n");
-    content.push_str(&format!(
-        "| Executable Scenarios | {} |\n",
-        review.coverage_summary.executable_scenarios_total
-    ));
-    content.push_str(&format!(
-        "| Deferred Items | {} |\n",
-        review.coverage_summary.deferred_items_total
-    ));
-    content.push_str(&format!(
-        "| Promotion Candidates | {} (total), {} (eligible) |\n",
-        review.promotion_candidates.len(),
-        eligible_candidates.len()
-    ));
-    content.push_str(&format!("| Drift Status | {} |\n\n", drift_kind));
-    content.push_str("---\n\n");
+    // Convert candidates to context
+    let candidate_contexts: Vec<CandidateContext> = eligible_candidates
+        .iter()
+        .take(3)
+        .map(|c| CandidateContext {
+            scenario_name: c.scenario_name.clone(),
+            feature_path: c.feature_path.clone(),
+            rule_name: c.rule_name.clone(),
+            reuse_score: c.reuse_score,
+            new_step_texts_estimate: c.new_step_texts_estimate,
+        })
+        .collect();
+
+    let missing_binding_contexts: Vec<MissingBindingContext> = review
+        .missing_bindings_for_top_candidates
+        .iter()
+        .take(3)
+        .map(|mb| MissingBindingContext {
+            candidate_name: mb.candidate_name.clone(),
+            missing_step_texts: mb.missing_step_texts.clone(),
+        })
+        .collect();
 
     // Action-specific content
-    match action {
+    let action_content = match action {
         "DONE" => {
-            content.push_str("## Task: Propose Micro-Milestone Batch\n\n");
-            content.push_str("All gates are green. The system is stable.\n\n");
-
-            // Show update-cert message if an autonomous update just occurred
-            if let Some(msg) = update_cert_message {
-                content.push_str("### Baseline Update\n\n");
-                content.push_str(&format!("{}\n\n", msg));
-            }
-
-            content.push_str("### Recommended Next Steps\n\n");
-
-            if !eligible_candidates.is_empty() {
-                content.push_str("Consider promoting the top 3 scenarios from Deferred → Executable:\n\n");
-                for (i, candidate) in eligible_candidates.iter().take(3).enumerate() {
-                    content.push_str(&format!(
-                        "  {}. **{}**\n     - Feature: `{}`\n     - Rule: {}\n     - Reuse score: {:.1}, New steps: {}\n\n",
-                        i + 1,
-                        candidate.scenario_name,
-                        candidate.feature_path,
-                        candidate.rule_name,
-                        candidate.reuse_score,
-                        candidate.new_step_texts_estimate
-                    ));
-                }
-            } else {
-                content.push_str("No promotion candidates available. Consider:\n");
-                content.push_str("- Adding new @Deferred scenarios to feature files\n");
-                content.push_str("- Expanding to new feature files\n\n");
-            }
-
-            content.push_str("### Missing Bindings to Implement\n\n");
-            if !review.missing_bindings_for_top_candidates.is_empty() {
-                for mb in review.missing_bindings_for_top_candidates.iter().take(3) {
-                    let missing = if mb.missing_step_texts.is_empty() {
-                        "(all steps covered)".to_string()
-                    } else {
-                        mb.missing_step_texts.join(", ")
-                    };
-                    content.push_str(&format!("  - **{}**: {}\n", mb.candidate_name, missing));
-                }
-            } else {
-                content.push_str("  (none)\n");
-            }
-            content.push_str("\n");
-
-            content.push_str("### Instructions\n\n");
-            content.push_str("1. Uncomment/enable the top candidate scenarios in their `.feature` files\n");
-            content.push_str("2. Implement missing step bindings in the test harness\n");
-            content.push_str("3. Run `bash scripts/namako_ci.sh` until green\n");
-            content.push_str("4. Run `bash scripts/determinism_check.sh` to verify determinism\n");
-            content.push_str("5. If baseline drift is detected, request `update-cert` approval\n\n");
+            let ctx = NextTaskDoneContext {
+                eligible_candidates: candidate_contexts,
+                missing_bindings: missing_binding_contexts,
+                update_cert_message: update_cert_message.cloned(),
+            };
+            render_next_task_done(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task done: {}", e);
+                "## Task: DONE\n\nAll gates are green.\n".to_string()
+            })
         }
 
         "FIX_LINT" => {
-            content.push_str("## Task: Fix Lint Errors\n\n");
-            content.push_str("Lint failed. Missing step bindings or spec errors detected.\n\n");
-
-            content.push_str("### Top Candidates with Missing Bindings\n\n");
-            if !review.missing_bindings_for_top_candidates.is_empty() {
-                for mb in review.missing_bindings_for_top_candidates.iter().take(3) {
-                    let missing = if mb.missing_step_texts.is_empty() {
-                        "(all steps covered)".to_string()
-                    } else {
-                        mb.missing_step_texts.join(", ")
-                    };
-                    content.push_str(&format!("  - **{}**: {}\n", mb.candidate_name, missing));
-                }
-            } else {
-                content.push_str("  (none)\n");
-            }
-            content.push_str("\n");
-
-            content.push_str("### Instructions\n\n");
-            content.push_str("1. Review the lint errors\n");
-            content.push_str("2. Implement missing step bindings in the test harness\n");
-            content.push_str("3. Run `bash scripts/namako_ci.sh` to verify fix\n");
-            content.push_str("4. Repeat until lint passes\n\n");
+            let ctx = NextTaskFixLintContext {
+                missing_bindings: missing_binding_contexts,
+            };
+            render_next_task_fix_lint(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task fix_lint: {}", e);
+                "## Task: Fix Lint Errors\n\nLint failed.\n".to_string()
+            })
         }
 
         "FIX_RUN" => {
-            content.push_str("## Task: Fix Failing Scenarios\n\n");
-            content.push_str("Test execution failed. Debug and fix step implementations.\n\n");
+            let failures: Vec<FailureDisplayContext> = status
+                .last_run_failures
+                .iter()
+                .map(|f| FailureDisplayContext {
+                    scenario_key: f.scenario_key.clone(),
+                    scenario_name: f.scenario_name.clone(),
+                    failure_kind: f.failure_kind.clone(),
+                })
+                .collect();
 
-            content.push_str("### Failing Scenarios\n\n");
-            if !status.last_run_failures.is_empty() {
-                for failure in &status.last_run_failures {
-                    content.push_str(&format!(
-                        "  - {}: {} [{}]\n",
-                        failure.scenario_key, failure.scenario_name, failure.failure_kind
-                    ));
-                }
-            } else {
-                content.push_str("  (no failure details available)\n");
-            }
-            content.push_str("\n");
-
-            content.push_str("### Explain Packet\n\n");
-            if let Some(explain) = explain_path {
-                content.push_str(&format!("See: `{}`\n\n", explain.display()));
-            } else {
-                content.push_str("(No explain packet generated — failure details may not be machine-readable yet)\n\n");
-            }
-
-            content.push_str("### Fix Categories\n\n");
-            content.push_str("- **Binding Bug:** Step implementation is incorrect\n");
-            content.push_str("- **Harness Gap:** Test harness missing capability\n");
-            content.push_str("- **SUT Behavior Mismatch:** System under test behaves differently than specified\n\n");
-
-            content.push_str("### Instructions\n\n");
-            content.push_str("1. Identify the root cause from the failure output\n");
-            content.push_str("2. Fix the binding, harness, or investigate SUT behavior\n");
-            content.push_str("3. Run `bash scripts/namako_ci.sh` to verify fix\n");
-            content.push_str("4. If behavior differs from spec, file a clarification request\n\n");
+            let ctx = NextTaskFixRunContext {
+                failures,
+                explain_path: explain_path.map(|p| p.display().to_string()),
+            };
+            render_next_task_fix_run(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task fix_run: {}", e);
+                "## Task: Fix Failing Scenarios\n\nTest execution failed.\n".to_string()
+            })
         }
 
         "NEEDS_UPDATE_CERT_APPROVAL" => {
-            content.push_str("## STOP: Approval Required\n\n");
-            content.push_str("Drift detected between current state and baseline certification.\n\n");
+            let drift_details: Vec<DriftDetailContext> = status
+                .drift
+                .as_ref()
+                .map(|d| {
+                    d.details
+                        .iter()
+                        .map(|detail| DriftDetailContext {
+                            field: detail.field.clone(),
+                            baseline: detail.baseline.clone(),
+                            current: detail.current.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
 
-            // Show update-cert message if available
-            if let Some(msg) = update_cert_message {
-                content.push_str("### Update Status\n\n");
-                content.push_str(&format!("{}\n\n", msg));
-            }
-
-            content.push_str("### Drift Details\n\n");
-            if let Some(drift) = &status.drift {
-                for detail in &drift.details {
-                    content.push_str(&format!(
-                        "  - {}: {} → {}\n",
-                        detail.field, detail.baseline, detail.current
-                    ));
-                }
-            } else {
-                content.push_str("  (unable to parse drift details)\n");
-            }
-            content.push_str("\n");
-
-            content.push_str("### DO NOT PROCEED WITHOUT EXPLICIT APPROVAL\n\n");
-            content.push_str("The baseline certification must be updated, but this requires Connor's explicit approval.\n\n");
-
-            content.push_str("### What Changed\n\n");
-            content.push_str("Review the drift details above. Common causes:\n");
-            content.push_str("- Feature file content changed (intentional spec update)\n");
-            content.push_str("- Step bindings changed (implementation fix)\n");
-            content.push_str("- Step registry changed (new/modified bindings)\n\n");
-
-            content.push_str("### Instructions\n\n");
-            content.push_str("1. Review the drift details carefully\n");
-            content.push_str("2. **STOP AND WAIT** for Connor's approval\n");
-            if max_cert_updates > 0 {
-                content.push_str(&format!(
-                    "3. Autonomous updates are enabled (--max-cert-updates={}). Run tesaki again to auto-update.\n",
-                    max_cert_updates
-                ));
-            } else {
-                content.push_str("3. Autonomous updates are disabled (--max-cert-updates=0). Use --max-cert-updates=N to enable.\n");
-            }
-            content.push_str("4. Or manually: run `namako update-cert`\n\n");
+            let ctx = NextTaskNeedsApprovalContext {
+                drift_details,
+                update_cert_message: update_cert_message.cloned(),
+                max_cert_updates,
+            };
+            render_next_task_needs_approval(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task needs_approval: {}", e);
+                "## STOP: Approval Required\n\nDrift detected.\n".to_string()
+            })
         }
 
         "RUN_LINT" | "RUN" | "RUN_VERIFY" => {
-            content.push_str(&format!("## Task: Run Gate `{}`\n\n", action));
-            content.push_str("The pipeline needs to be executed.\n\n");
-
-            content.push_str("### Instructions\n\n");
-            content.push_str("1. Run: `bash scripts/namako_ci.sh`\n");
-            content.push_str("2. This will execute lint → run → verify pipeline\n");
-            content.push_str("3. If any step fails, follow the appropriate fix instructions\n\n");
+            let ctx = NextTaskRunGateContext {
+                action: action.to_string(),
+            };
+            render_next_task_run_gate(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task run_gate: {}", e);
+                format!("## Task: Run Gate `{}`\n\nThe pipeline needs to be executed.\n", action)
+            })
         }
 
         _ => {
-            content.push_str(&format!("## Task: Unknown State `{}`\n\n", action));
-            content.push_str("The recommended action is not recognized.\n\n");
-
-            content.push_str("### Instructions\n\n");
-            content.push_str("1. Check the status.json for more details\n");
-            content.push_str("2. Manually investigate the state\n");
-            content.push_str("3. Run: `bash scripts/namako_ci.sh` to attempt recovery\n\n");
+            render_next_task_unknown(action).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task unknown: {}", e);
+                format!("## Task: Unknown State `{}`\n\nThe recommended action is not recognized.\n", action)
+            })
         }
-    }
+    };
+
+    content.push_str("\n");
+    content.push_str(&action_content);
 
     // Artifacts section
-    content.push_str("---\n\n");
-    content.push_str("## Artifacts\n\n");
-    content.push_str("| Artifact | Path |\n");
-    content.push_str("|----------|------|\n");
-    content.push_str(&format!("| Status | `{}/status.json` |\n", out_dir.display()));
-    content.push_str(&format!("| Review | `{}/review.json` |\n", out_dir.display()));
-    if let Some(explain) = explain_path {
-        content.push_str(&format!("| Explain (Failure) | `{}` |\n", explain.display()));
-    }
-    content.push_str("\n---\n\n");
-    content.push_str("*Generated by tesaki — Tesaki v2 (--max-cert-updates governance)*\n");
+    let artifacts_ctx = NextTaskArtifactsContext {
+        out_dir: out_dir.display().to_string(),
+        explain_path: explain_path.map(|p| p.display().to_string()),
+        version: TESAKI_VERSION.to_string(),
+    };
+
+    content.push_str("\n");
+    content.push_str(&render_next_task_artifacts(&artifacts_ctx).unwrap_or_else(|e| {
+        log::error!("Failed to render next_task artifacts: {}", e);
+        format!("\n---\n\n## Artifacts\n\n| Artifact | Path |\n|----------|------|\n| Status | `{}/status.json` |\n", out_dir.display())
+    }));
 
     fs::write(path, content)?;
     Ok(())

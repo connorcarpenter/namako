@@ -1,0 +1,15 @@
+{# Brief for RefactorBindingsForClarity mission type #}
+{#
+Required context:
+- binding_ids: Vec<String>
+#}
+{% set count = binding_ids | length %}
+**Title:** Refactor bindings for clarity
+
+**Objective:** Improve binding clarity and reuse without changing behavior.
+
+**Context:**
+Refactor {{ count }} binding(s).
+
+**Validation Criteria:**
+1. Bindings remain green under gate

@@ -1,0 +1,40 @@
+{# FIX_RUN action variant for NEXT_TASK.md #}
+{#
+Required context:
+- failures: Vec<Failure>
+- explain_path: Option<String>
+#}
+## Task: Fix Failing Scenarios
+
+Test execution failed. Debug and fix step implementations.
+
+### Failing Scenarios
+
+{% if failures %}
+{% for failure in failures %}
+  - {{ failure.scenario_key }}: {{ failure.scenario_name }} [{{ failure.failure_kind }}]
+{% endfor %}
+{% else %}
+  (no failure details available)
+{% endif %}
+
+### Explain Packet
+
+{% if explain_path %}
+See: `{{ explain_path }}`
+{% else %}
+(No explain packet generated — failure details may not be machine-readable yet)
+{% endif %}
+
+### Fix Categories
+
+- **Binding Bug:** Step implementation is incorrect
+- **Harness Gap:** Test harness missing capability
+- **SUT Behavior Mismatch:** System under test behaves differently than specified
+
+### Instructions
+
+1. Identify the root cause from the failure output
+2. Fix the binding, harness, or investigate SUT behavior
+3. Run `bash scripts/namako_ci.sh` to verify fix
+4. If behavior differs from spec, file a clarification request

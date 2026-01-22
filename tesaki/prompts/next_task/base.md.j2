@@ -1,0 +1,23 @@
+{# Base header/footer for NEXT_TASK.md #}
+{#
+Required context:
+- timestamp: String
+- action: String
+#}
+# NEXT_TASK.md — Tesaki Generated Task
+
+**Generated:** {{ timestamp }}
+**Action:** `{{ action }}`
+
+---
+
+## Current Status
+
+| Metric | Value |
+|--------|-------|
+| Executable Scenarios | {{ executable_scenarios_total }} |
+| Deferred Items | {{ deferred_items_total }} |
+| Promotion Candidates | {{ promotion_candidates_total }} (total), {{ eligible_candidates_count }} (eligible) |
+| Drift Status | {{ drift_kind }} |
+
+---

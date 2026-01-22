@@ -38,4 +38,7 @@ blake3 = "1.5"
 # Temporary files for planner input
 tempfile = "3.15"
 
+# Templating for prompt generation
+minijinja = { version = "2.6", features = ["loader"] }
+
 [dev-dependencies]

@@ -1,0 +1,24 @@
+{# Brief for CreateMissingBindings mission type #}
+{#
+Required context:
+- scenario_key: String
+- missing_steps: Vec<String>
+#}
+{% set step_count = missing_steps | length %}
+**Title:** Create bindings for {{ scenario_key }}
+
+**Objective:** Create step bindings for {{ step_count }} missing step{% if step_count != 1 %}s{% endif %} in scenario '{{ scenario_key }}'.
+
+**Context:**
+This scenario is currently missing bindings:
+{% if missing_steps %}
+{% for step in missing_steps %}
+- `{{ step }}`
+{% endfor %}
+{% else %}
+No missing steps listed.
+{% endif %}
+
+**Validation Criteria:**
+1. Scenario '{{ scenario_key }}' is executable (not @Deferred)
+2. namako gate --json shows lint passes

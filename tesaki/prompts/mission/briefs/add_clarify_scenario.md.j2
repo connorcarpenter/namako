@@ -1,0 +1,15 @@
+{# Brief for AddOrClarifyScenario mission type #}
+{#
+Required context:
+- feature_path: String
+- rule_name: Option<String>
+#}
+**Title:** Add or clarify scenario in {{ feature_path }}
+
+**Objective:** Add or clarify scenarios to improve coverage.
+
+**Context:**
+Coverage gaps detected in {{ feature_path }}{% if rule_name %} ({{ rule_name }}){% endif %}.
+
+**Validation Criteria:**
+1. New scenario(s) added
