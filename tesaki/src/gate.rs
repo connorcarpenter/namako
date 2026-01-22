@@ -88,6 +88,7 @@ impl GateOutcome {
     }
 
     /// Returns true if this outcome allows update-cert.
+    #[allow(dead_code)]
     pub fn allows_update_cert(&self) -> bool {
         matches!(self, GateOutcome::FailVerifyOnly)
     }
@@ -100,6 +101,7 @@ impl GateOutcome {
 
 /// Summary of update-cert operation for logging.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct UpdateCertSummary {
     /// Mission ID (if applicable).
     pub mission_id: Option<String>,
@@ -133,6 +135,7 @@ pub struct UpdateCertResult {
     /// Captured stderr (bounded to 10KB).
     pub stderr: String,
     /// Elapsed time in seconds.
+    #[allow(dead_code)]
     pub elapsed_seconds: f64,
 }
 
@@ -151,6 +154,7 @@ pub trait UpdateCertInvoker: Send + Sync {
     ) -> UpdateCertResult;
 
     /// Run gate --json and return the raw JSON output.
+    #[allow(dead_code)]
     fn run_gate_json(
         &self,
         namako_cmd: &str,

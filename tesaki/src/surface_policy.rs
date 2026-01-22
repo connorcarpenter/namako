@@ -93,6 +93,7 @@ impl SurfacePolicy {
         }
     }
 
+    #[allow(dead_code)]
     pub fn to_markdown_table(&self) -> String {
         let mut content = String::new();
         content.push_str("| Surface | Policy |\n");
@@ -104,6 +105,7 @@ impl SurfacePolicy {
     }
 }
 
+#[allow(dead_code)]
 fn lock_label(lock: SurfaceLock) -> &'static str {
     match lock {
         SurfaceLock::Locked => "LOCKED",

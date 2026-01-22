@@ -14,6 +14,7 @@ pub mod mission_type;
 pub mod packet_parser;
 pub mod repo_state;
 pub mod runner;
+pub(crate) mod base_runner;
 pub mod claude_code_runner;
 pub mod codex_runner;
 pub mod runner_test;

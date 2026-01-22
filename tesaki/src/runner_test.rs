@@ -40,6 +40,7 @@ impl MockRunner {
     }
 
     /// Create a mock runner that fails.
+    #[allow(dead_code)]
     pub fn failure() -> Self {
         Self {
             should_succeed: false,
@@ -48,6 +49,7 @@ impl MockRunner {
     }
 
     /// Configure to create a file (simulating edits).
+    #[allow(dead_code)]
     pub fn with_file(mut self, path: impl Into<String>, content: impl Into<String>) -> Self {
         self.create_file = Some((path.into(), content.into()));
         self
@@ -113,7 +115,8 @@ mod tests {
         let config = RunnerConfig {
             max_runtime_seconds: 60,
             working_dir: temp_dir.path().to_path_buf(),
-            mode: "BOOTSTRAP".to_string(),
+            model: None,
+            stream_output: false,
         };
 
         let outcome = runner.run(&mission_dir, &config).unwrap();
@@ -132,7 +135,8 @@ mod tests {
         let config = RunnerConfig {
             max_runtime_seconds: 60,
             working_dir: temp_dir.path().to_path_buf(),
-            mode: "BOOTSTRAP".to_string(),
+            model: None,
+            stream_output: false,
         };
 
         let outcome = runner.run(&mission_dir, &config).unwrap();

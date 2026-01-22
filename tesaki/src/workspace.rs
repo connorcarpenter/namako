@@ -31,9 +31,6 @@ pub struct WorkspaceConfig {
     /// Adapter invocation string.
     pub adapter_cmd: String,
 
-    /// Operating mode (BOOTSTRAP or CONSUMPTION).
-    pub mode: String,
-
     /// Budget configuration.
     pub budgets: crate::mission::MissionBudgets,
 }
@@ -66,7 +63,6 @@ pub struct ChangesSummary {
 /// # Runner Scope
 ///
 /// The runner operates ONLY on the specs repository. Edit surfaces are
-/// controlled by the operating mode (BOOTSTRAP vs CONSUMPTION) and
 /// configured in the mission's POLICY.md.
 ///
 /// The runner NEVER edits the Namako/Tesaki toolchain repository.
@@ -77,6 +73,7 @@ pub struct Workspace {
 
 impl Workspace {
     /// Create a new Workspace from the given configuration.
+    #[allow(dead_code)]
     pub fn new(config: WorkspaceConfig) -> Self {
         Self { config }
     }
@@ -88,7 +85,6 @@ impl Workspace {
     pub fn from_specs_dir(
         specs_dir: &Path,
         adapter_cmd: &str,
-        mode: &str,
         budgets: crate::mission::MissionBudgets,
     ) -> Result<Self> {
         let specs_dir = std::fs::canonicalize(specs_dir)
@@ -101,7 +97,6 @@ impl Workspace {
             repo_root,
             specs_dir,
             adapter_cmd: adapter_cmd.to_string(),
-            mode: mode.to_string(),
             budgets,
         };
 
@@ -109,6 +104,7 @@ impl Workspace {
     }
 
     /// Get the workspace configuration.
+    #[allow(dead_code)]
     pub fn config(&self) -> &WorkspaceConfig {
         &self.config
     }
@@ -349,16 +345,15 @@ mod tests {
             repo_root: PathBuf::from("/test/myproject"),
             specs_dir: PathBuf::from("/test/myproject/test/specs"),
             adapter_cmd: "cargo run -p npa --".to_string(),
-            mode: "CONSUMPTION".to_string(),
             budgets: crate::mission::MissionBudgets::default(),
         };
 
         let json = serde_json::to_string_pretty(&config).unwrap();
         assert!(json.contains("repo_root"));
-        assert!(json.contains("CONSUMPTION"));
+        assert!(json.contains("adapter_cmd"));
 
         // Can deserialize back
         let parsed: WorkspaceConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.mode, "CONSUMPTION");
+        assert_eq!(parsed.adapter_cmd, "cargo run -p npa --");
     }
 }

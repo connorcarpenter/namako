@@ -11,8 +11,11 @@ pub struct RunnerConfig {
     /// Maximum runtime for the runner in seconds.
     pub max_runtime_seconds: u32,
 
-    /// Operating mode (BOOTSTRAP or CONSUMPTION).
-    pub mode: String,
+    /// Model to use for the AI runner (e.g., "haiku", "sonnet", "opus").
+    pub model: Option<String>,
+
+    /// Stream runner output to terminal in real-time.
+    pub stream_output: bool,
 }
 
 /// Outcome of a mission execution.
@@ -36,12 +39,25 @@ pub enum OutcomeClassification {
     Failed,
     Timeout,
     EnvironmentError,
+    /// Rate limited by the AI provider (Claude, Codex, etc.)
+    RateLimited,
 }
 
 /// Mission execution interface (unchanged in spirit).
 pub trait Runner: Send + Sync {
     fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome>;
     fn name(&self) -> &'static str;
+    fn planned_invocation(&self, _mission_dir: &Path, _config: &RunnerConfig) -> Option<RunnerInvocation> {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunnerInvocation {
+    pub program: String,
+    pub args: Vec<String>,
+    pub working_dir: String,
+    pub env: Vec<(String, String)>,
 }
 
 /// A single allowlisted command request from the chat planner.
@@ -112,5 +128,6 @@ pub struct CommandResult {
 /// Plan-only chat interface. Implement this for ClaudeCodeRunner and CodexRunner.
 pub trait ChatPlanner: Send + Sync {
     fn plan_turn(&self, input: &ChatTurnInput) -> Result<ChatPlan>;
+    #[allow(dead_code)]
     fn name(&self) -> &'static str;
 }

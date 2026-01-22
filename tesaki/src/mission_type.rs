@@ -64,6 +64,7 @@ pub enum MissionType {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum EvidenceChange {
     BindingCountIncreases,
     FailingScenarioDecreases,
@@ -126,10 +127,12 @@ impl MissionType {
         }
     }
 
+    #[allow(dead_code)]
     pub fn requires_runner(&self) -> bool {
         !matches!(self, Self::ExplainState | Self::TriageFailures)
     }
 
+    #[allow(dead_code)]
     pub fn expected_evidence_change(&self) -> Vec<EvidenceChange> {
         match self {
             Self::CreateMissingBindings { .. } => vec![EvidenceChange::BindingCountIncreases],

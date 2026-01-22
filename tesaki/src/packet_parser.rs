@@ -13,8 +13,11 @@ use serde::Deserialize;
 /// Parsed output from `namako status --json`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StatusPacket {
+    #[allow(dead_code)]
     pub version: u32,
+    #[allow(dead_code)]
     pub spec_root: String,
+    #[allow(dead_code)]
     pub recommended_next_action: String,
     pub lint_status: StatusValue,
     pub run_status: StatusValue,
@@ -25,8 +28,10 @@ pub struct StatusPacket {
     pub last_run_failures: Vec<FailureRecord>,
     pub identity: IdentitySection,
     #[serde(default)]
+    #[allow(dead_code)]
     pub metadata: Option<StatusMetadata>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub gates: Option<LegacyGateStatus>,
 }
 
@@ -55,6 +60,7 @@ pub struct IdentityFields {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct StatusMetadata {
     pub timestamp: String,
     pub namako_version: String,
@@ -82,6 +88,7 @@ pub struct DriftDetail {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct LegacyGateStatus {
     pub lint: LegacyGateResult,
     pub run: LegacyGateResult,
@@ -89,6 +96,7 @@ pub struct LegacyGateStatus {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct LegacyGateResult {
     pub ok: bool,
     pub code: i32,
@@ -103,26 +111,34 @@ pub struct LegacyGateResult {
 /// Parsed output from `namako review --json`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReviewPacket {
+    #[allow(dead_code)]
     pub version: u32,
+    #[allow(dead_code)]
     pub spec_root: String,
+    #[allow(dead_code)]
     pub identity_current: IdentityFields,
     pub features: Vec<FeatureReview>,
+    #[allow(dead_code)]
     pub coverage_summary: CoverageSummary,
     #[serde(default)]
     pub deferred_items: Vec<DeferredScenarioItem>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub promotion_candidates: Vec<PromotionCandidate>,
     #[serde(default)]
     pub missing_bindings_for_top_candidates: Vec<MissingBindingInfo>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub harness_gaps: Vec<HarnessGap>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub suggested_binding_bundle: Option<SuggestedBindingBundle>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FeatureReview {
     pub feature_path: String,
+    #[allow(dead_code)]
     pub feature_name: String,
     pub rules: Vec<RuleReview>,
 }
@@ -130,13 +146,16 @@ pub struct FeatureReview {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuleReview {
     pub rule_name: String,
+    #[allow(dead_code)]
     pub source_span: SourceSpan,
     pub executable_scenarios: Vec<ScenarioReview>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub deferred_items: Vec<DeferredItem>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct SourceSpan {
     pub start_line: u32,
     pub end_line: u32,
@@ -144,18 +163,23 @@ pub struct SourceSpan {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScenarioReview {
+    #[allow(dead_code)]
     pub name: String,
+    #[allow(dead_code)]
     pub source_span: SourceSpan,
+    #[allow(dead_code)]
     pub steps: Vec<StepInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct StepInfo {
     pub kind: String,
     pub text: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct CoverageSummary {
     pub rules_total: u32,
     pub rules_with_zero_executable: u32,
@@ -166,13 +190,17 @@ pub struct CoverageSummary {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeferredScenarioItem {
     pub scenario_key: String,
+    #[allow(dead_code)]
     pub scenario_name: String,
+    #[allow(dead_code)]
     pub feature_path: String,
+    #[allow(dead_code)]
     pub rule_name: String,
     pub blocker: BlockerType,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct DeferredItem {
     pub text: String,
     pub source_span: SourceSpan,
@@ -180,6 +208,7 @@ pub struct DeferredItem {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct PromotionCandidate {
     pub feature_path: String,
     pub rule_name: String,
@@ -199,18 +228,21 @@ pub struct MissingBindingInfo {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct HarnessGap {
     pub capability: String,
     pub blocked_count: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct SuggestedBindingBundle {
     pub steps: Vec<BundleStepInfo>,
     pub rationale: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct BundleStepInfo {
     pub kind: String,
     pub text: String,
@@ -238,6 +270,7 @@ pub struct GatePacket {
     pub run: GatePhase,
     pub verify: GatePhase,
     #[serde(default)]
+    #[allow(dead_code)]
     pub determinism: Option<GateDeterminism>,
 }
 
@@ -245,6 +278,7 @@ pub struct GatePacket {
 pub struct GatePhase {
     pub status: GatePhaseStatus,
     #[serde(default)]
+    #[allow(dead_code)]
     pub reason: Option<String>,
 }
 
@@ -257,6 +291,7 @@ pub enum GatePhaseStatus {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct GateDeterminism {
     pub status: GatePhaseStatus,
     #[serde(default)]
@@ -269,6 +304,7 @@ pub struct GateDeterminism {
 
 /// Parsed output from `namako explain --json`.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct ExplainPacket {
     pub version: u32,
     pub scenario_key: String,
@@ -285,6 +321,7 @@ pub struct ExplainPacket {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct ExplainStep {
     pub step_kind: String,
     pub step_text: String,
@@ -313,6 +350,7 @@ pub fn parse_gate_json(content: &str) -> Result<GatePacket> {
         .context("Failed to parse gate.json")
 }
 
+#[allow(dead_code)]
 pub fn parse_explain_json(content: &str) -> Result<ExplainPacket> {
     serde_json::from_str::<ExplainPacket>(content)
         .context("Failed to parse explain.json")

@@ -33,15 +33,20 @@ pub enum StopReason {
 
     /// Gate failed (lint/run/verify issues) and retries exhausted.
     GateFailed,
+
+    /// Rate limited by AI provider - no retry, wait for limit reset.
+    RateLimited,
 }
 
 impl StopReason {
     /// Returns true if this is a success condition.
+    #[allow(dead_code)]
     pub fn is_success(&self) -> bool {
         matches!(self, StopReason::Done)
     }
 
     /// Returns true if this requires human intervention.
+    #[allow(dead_code)]
     pub fn requires_human(&self) -> bool {
         matches!(self, StopReason::HumanRequired | StopReason::Blocked)
     }
@@ -57,6 +62,7 @@ impl StopReason {
     /// - HumanRequired: requires human intervention
     /// - EnvironmentError: toolchain/setup issues
     /// - Budget: limits reached (retrying would violate budget)
+    /// - RateLimited: would just hit rate limit again
     /// - Done/Blocked: not failures
     pub fn is_retryable(&self) -> bool {
         matches!(
@@ -76,6 +82,7 @@ impl StopReason {
             StopReason::RunnerFailed => "Runner failed after retries",
             StopReason::NoProgress => "No progress made after retries",
             StopReason::GateFailed => "Gate failed after retries",
+            StopReason::RateLimited => "Rate limited by AI provider",
         }
     }
 }

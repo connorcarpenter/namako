@@ -17,7 +17,7 @@ use crate::surface_policy::{SurfaceLock, SurfacePolicy};
 
 const MAX_TURN_STEPS: usize = 5;
 
-pub fn run_repl(start_dir: PathBuf) -> Result<()> {
+pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Result<()> {
     let config = match config::discover_config(&start_dir)? {
         ConfigDiscoveryResult::Found(config) => config,
         ConfigDiscoveryResult::NotFound { .. } => {
@@ -34,7 +34,17 @@ pub fn run_repl(start_dir: PathBuf) -> Result<()> {
     let max_cert_updates = config.max_cert_updates.unwrap_or(0);
     let max_runtime_seconds = config.max_runtime_seconds.unwrap_or(600) as u32;
     let max_files_changed = config.max_files_changed.unwrap_or(10) as u32;
-    let namako_cmd = crate::resolve_namako_cli(None, &spec_root);
+    let namako_resolution = crate::resolve_namako_cli(None, config.namako_cli.clone(), &spec_root);
+    let namako_cmd = namako_resolution.command.clone();
+
+    crate::log_session_start(
+        logger,
+        &spec_root,
+        &adapter,
+        &namako_resolution,
+        Some(&runner_name),
+        config.planner.as_deref(),
+    );
 
     let planner: Box<dyn ChatPlanner> = match config.planner.as_deref().unwrap_or("mock") {
         "mock" => Box::new(MockChatPlanner::new(ChatPlan {
@@ -52,7 +62,7 @@ pub fn run_repl(start_dir: PathBuf) -> Result<()> {
     };
 
     let mut session = SessionState::default();
-    refresh_repo_state(&spec_root, &adapter, &namako_cmd, &mut session)?;
+    refresh_repo_state(&spec_root, &adapter, &namako_cmd, &mut session, logger)?;
 
     println!("Tesaki v1.8 REPL");
     println!("Spec root: {}", spec_root.display());
@@ -95,6 +105,7 @@ pub fn run_repl(start_dir: PathBuf) -> Result<()> {
             max_runtime_seconds,
             max_files_changed,
             &mut session,
+            logger,
         )? {
             continue;
         }
@@ -118,21 +129,58 @@ pub fn run_repl(start_dir: PathBuf) -> Result<()> {
                 planner_hint: planner_hint.clone(),
             };
 
-            let plan = match planner.plan_turn(&planner_input) {
+            let simulate_bad_plan = std::env::var("TESAKI_SIMULATE_BAD_PLAN")
+                .ok()
+                .as_deref()
+                == Some("1");
+            let plan_result = if simulate_bad_plan {
+                Err(anyhow::anyhow!("Simulated invalid JSON from planner"))
+            } else {
+                planner.plan_turn(&planner_input)
+            };
+
+            let plan = match plan_result {
                 Ok(plan) => plan,
                 Err(err) => {
+                    logger.log_event(crate::logging::LogEvent::PlannerPlan {
+                        parse_status: "invalid".to_string(),
+                        plan_json: None,
+                        error: Some(err.to_string()),
+                    });
                     if planner_hint.is_none() {
                         planner_hint = Some("Return ONLY valid JSON matching the ChatPlan schema.".to_string());
                         println!("Planner returned invalid response; retrying with strict JSON requirement.");
                         continue;
                     }
-                    println!("Planner failed to return valid JSON: {}", err);
-                    break;
+                    let details = format!("Planner failed to return valid JSON after retry: {}", err);
+                    logger.log_event(crate::logging::LogEvent::SessionEnd {
+                        stop_reason: "FAILED".to_string(),
+                        details: Some(details.clone()),
+                    });
+                    println!("FAILED: {}", details);
+                    return Err(anyhow::anyhow!(details));
                 }
             };
+            if let Ok(plan_json) = serde_json::to_string(&plan) {
+                logger.log_event(crate::logging::LogEvent::PlannerPlan {
+                    parse_status: "ok".to_string(),
+                    plan_json: Some(plan_json),
+                    error: None,
+                });
+            }
             print_plan(&plan);
 
             if let Some(proposal) = handle_mission_proposal(&plan, &mut session) {
+                logger.log_event(crate::logging::LogEvent::MissionProposed {
+                    mission_type: proposal.mission_type.clone(),
+                    stage: proposal.stage.clone(),
+                    target: proposal.target.clone(),
+                    surfaces: crate::logging::SurfaceLog {
+                        spec: format!("{:?}", proposal.surfaces.spec),
+                        tests: format!("{:?}", proposal.surfaces.tests),
+                        sut: format!("{:?}", proposal.surfaces.sut),
+                    },
+                });
                 show_mission_proposal(&proposal);
             }
 
@@ -145,13 +193,16 @@ pub fn run_repl(start_dir: PathBuf) -> Result<()> {
 
             recent_results.clear();
             for command in plan.run {
-                let result = execute_allowed_command(
+                match execute_allowed_command(
                     &command,
                     &spec_root,
                     &adapter,
                     &namako_cmd,
-                )?;
-                recent_results.push(result);
+                    logger,
+                ) {
+                    Ok(result) => recent_results.push(result),
+                    Err(_) => {}
+                }
             }
 
             if plan.done {
@@ -160,11 +211,21 @@ pub fn run_repl(start_dir: PathBuf) -> Result<()> {
         }
     }
 
+    logger.log_event(crate::logging::LogEvent::SessionEnd {
+        stop_reason: "DONE".to_string(),
+        details: None,
+    });
     Ok(())
 }
 
-fn refresh_repo_state(spec_root: &Path, adapter: &str, namako_cmd: &str, session: &mut SessionState) -> Result<()> {
-    let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf())?;
+fn refresh_repo_state(
+    spec_root: &Path,
+    adapter: &str,
+    namako_cmd: &str,
+    session: &mut SessionState,
+    logger: &crate::logging::JsonlLogger,
+) -> Result<()> {
+    let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
     let gate_packet = parse_gate_json(&gate_json)?;
 
     let out_dir = spec_root.join("target/namako_artifacts/tesaki");
@@ -172,8 +233,8 @@ fn refresh_repo_state(spec_root: &Path, adapter: &str, namako_cmd: &str, session
     let status_path = out_dir.join("status.json");
     let review_path = out_dir.join("review.json");
 
-    crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), &status_path, None)?;
-    crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), &review_path)?;
+    crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), &status_path, None, logger)?;
+    crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), &review_path, logger)?;
 
     let status_json = std::fs::read_to_string(&status_path)?;
     let review_json = std::fs::read_to_string(&review_path)?;
@@ -214,6 +275,7 @@ fn handle_mission_approval(
     max_runtime_seconds: u32,
     max_files_changed: u32,
     session: &mut SessionState,
+    logger: &crate::logging::JsonlLogger,
 ) -> Result<bool> {
     let approve = matches!(line, "run it" | "execute" | "go" | "run");
     let cancel = matches!(line, "cancel" | "skip" | "no");
@@ -248,6 +310,7 @@ fn handle_mission_approval(
         max_files_changed,
         &pending.proposal,
         session,
+        logger,
     )?;
     Ok(true)
 }
@@ -264,6 +327,7 @@ fn execute_proposed_mission(
     max_files_changed: u32,
     proposal: &MissionProposal,
     session: &mut SessionState,
+    logger: &crate::logging::JsonlLogger,
 ) -> Result<()> {
     println!("Executing mission...");
 
@@ -280,21 +344,22 @@ fn execute_proposed_mission(
     crate::run_run(
         &spec_root.to_path_buf(),
         adapter,
-        Some(namako_cmd.to_string()),
+        crate::NamakoCliResolution::explicit(namako_cmd.to_string()),
         max_cert_updates,
         runner_name,
         runner_cmd,
         max_runtime_seconds,
         max_files_changed,
         max_retries,
-        "CONSUMPTION",
+        None,  // model - use default
+        false, // stream_output - don't stream in REPL context (planner is interactive)
         Some(stage_to_arg(stage)),
         None,
         constraint.surface_overrides,
-        None,
+        logger,
     )?;
 
-    refresh_repo_state(spec_root, adapter, namako_cmd, session)?;
+    refresh_repo_state(spec_root, adapter, namako_cmd, session, logger)?;
     if let Some(summary) = &session.last_repo_state_summary {
         println!("RepoState: {}", summary);
     }
@@ -351,13 +416,6 @@ fn convert_lock(lock: crate::runner::SurfaceLock) -> SurfaceLock {
 fn print_plan(plan: &ChatPlan) {
     if !plan.say.trim().is_empty() {
         println!("{}", plan.say.trim());
-    }
-    for cmd in &plan.run {
-        if let Some(reason) = &cmd.reason {
-            println!("> Running {} {} ({})", cmd.tool, cmd.args.join(" "), reason);
-        } else {
-            println!("> Running {} {}", cmd.tool, cmd.args.join(" "));
-        }
     }
 }
 
@@ -432,8 +490,19 @@ fn execute_allowed_command(
     spec_root: &Path,
     adapter: &str,
     namako_cmd: &str,
+    logger: &crate::logging::JsonlLogger,
 ) -> Result<CommandResult> {
-    let tool = validate_command(command)?;
+    let tool = match validate_command(command) {
+        Ok(tool) => tool,
+        Err(err) => {
+            logger.log_event(crate::logging::LogEvent::AllowlistReject {
+                tool: command.tool.clone(),
+                args: command.args.clone(),
+                reason: err.to_string(),
+            });
+            return Err(err);
+        }
+    };
     let (program, base_args) = match tool {
         AllowedTool::Namako => split_command(namako_cmd)?,
         AllowedTool::Tesaki => {
@@ -449,11 +518,13 @@ fn execute_allowed_command(
         args = augment_namako_args(args, adapter);
     }
 
+    crate::log_command_run(logger, &command.tool, &command.args, spec_root, None);
     let output = Command::new(&program)
         .args(&args)
         .current_dir(spec_root)
         .output()
         .context("Failed to execute allowlisted command")?;
+    crate::log_command_result(logger, &command.tool, &command.args, &output);
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();

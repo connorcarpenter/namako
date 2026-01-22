@@ -193,6 +193,7 @@ pub struct SurfaceDefinitions {
 pub struct MissionBundle {
     pub id: MissionId,
     pub path: PathBuf,
+    #[allow(dead_code)]
     pub budgets: MissionBudgets,
 }
 
@@ -213,7 +214,6 @@ impl MissionBundle {
         surface_definitions: &SurfaceDefinitions,
         inputs: &MissionInputs,
         budgets: MissionBudgets,
-        mode: &str,
     ) -> Result<Self> {
         // Generate identity data for hash
         let identity_data = format!(
@@ -242,7 +242,7 @@ impl MissionBundle {
         fs::write(mission_dir.join("MISSION.md"), &mission_content)?;
 
         // Write POLICY.md
-        let policy_content = Self::generate_policy_content(&budgets, mode, surface_policy, surface_definitions);
+        let policy_content = Self::generate_policy_content(&budgets, surface_policy, surface_definitions);
         fs::write(mission_dir.join("POLICY.md"), &policy_content)?;
 
         // Write INPUTS
@@ -303,6 +303,7 @@ impl MissionBundle {
     }
 
     /// Check if the runner wrote an attempt report.
+    #[allow(dead_code)]
     pub fn has_attempt_report(&self) -> bool {
         self.path.join("RUNNER_OUTPUT").join("attempt_report.md").exists()
     }
@@ -381,7 +382,6 @@ impl MissionBundle {
     /// Generate POLICY.md content.
     fn generate_policy_content(
         budgets: &MissionBudgets,
-        mode: &str,
         surface_policy: &SurfacePolicy,
         surface_definitions: &SurfaceDefinitions,
     ) -> String {
@@ -400,20 +400,11 @@ impl MissionBundle {
         content.push_str("## Allowed Edit Surfaces\n\n");
         content.push_str("**IMPORTANT: You operate on the specs repository ONLY.**\n");
         content.push_str("**You must NEVER edit files in the Namako/Tesaki toolchain.**\n\n");
-
-        if mode == "BOOTSTRAP" {
-            content.push_str("**MODE: BOOTSTRAP** — You may only edit:\n\n");
-            content.push_str("- `test/**` (test harness, specs, bindings)\n\n");
-            content.push_str("**FORBIDDEN in BOOTSTRAP mode:**\n");
-            content.push_str("- Core project code outside `test/**`\n");
-            content.push_str("- Any file outside this repository\n\n");
-        } else {
-            content.push_str("**MODE: CONSUMPTION** — You may edit:\n\n");
-            content.push_str("- `test/**` (test harness, specs, bindings)\n");
-            content.push_str("- Core project code as needed to satisfy specs\n\n");
-            content.push_str("**FORBIDDEN (always):**\n");
-            content.push_str("- Any file outside this repository (especially Namako/Tesaki)\n\n");
-        }
+        content.push_str("You may edit:\n\n");
+        content.push_str("- `test/**` (test harness, specs, bindings)\n");
+        content.push_str("- Core project code as needed to satisfy specs\n\n");
+        content.push_str("**FORBIDDEN (always):**\n");
+        content.push_str("- Any file outside this repository (especially Namako/Tesaki)\n\n");
 
         content.push_str("## Surface Policy\n\n");
         content.push_str("| Surface | Policy | Paths |\n");
@@ -555,7 +546,6 @@ mod tests {
             &surface_definitions,
             &inputs,
             MissionBudgets::default(),
-            "BOOTSTRAP",
         ).unwrap();
 
         // Verify directory structure
@@ -574,7 +564,6 @@ mod tests {
         // Verify content includes key elements
         let policy = fs::read_to_string(bundle.path.join("POLICY.md")).unwrap();
         assert!(policy.contains("NO COMMITS"));
-        assert!(policy.contains("BOOTSTRAP"));
         assert!(policy.contains("specs repository ONLY"));
         assert!(policy.contains("NEVER edit files in the Namako"));
     }
@@ -612,7 +601,6 @@ mod tests {
             &surface_definitions,
             &inputs,
             MissionBudgets::default(),
-            "BOOTSTRAP",
         ).unwrap();
 
         let original_path = bundle.path.clone();
@@ -666,7 +654,6 @@ mod tests {
             &surface_definitions,
             &inputs,
             MissionBudgets::default(),
-            "BOOTSTRAP",
         ).unwrap();
 
         let gate_result = r#"{"lint": {"status": "pass"}, "run": {"status": "pass"}, "verify": {"status": "pass"}}"#;

@@ -22,6 +22,7 @@ mod issue_classifier;
 mod allowlist;
 mod chat_plan;
 mod chat_planner;
+mod logging;
 mod mission;
 mod mission_selector;
 mod mission_type;
@@ -29,6 +30,7 @@ mod packet_parser;
 mod repl;
 mod repo_state;
 mod runner;
+mod base_runner;
 mod claude_code_runner;
 mod codex_runner;
 mod runner_test;
@@ -42,8 +44,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 /// Log file name for update-cert audit trail
 const UPDATE_CERT_LOG: &str = "update_cert_log.jsonl";
@@ -73,6 +75,10 @@ struct IdentitySnapshot {
 #[command(about = "AI-friendly task orchestrator for Namako spec-driven development")]
 #[command(after_help = "Run without a subcommand to start the interactive REPL.")]
 struct Cli {
+    /// Path to JSONL log file (enables persistent diagnostics)
+    #[arg(long, global = true)]
+    log_file: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -100,11 +106,6 @@ enum Commands {
         /// Maximum number of autonomous update-cert operations per run (0 to disable)
         #[arg(long, value_parser = clap::value_parser!(u32).range(0..=999))]
         max_cert_updates: Option<u32>,
-
-        /// Path to CURRENT_STATUS.md for mode-aware filtering (optional)
-        /// If provided, CORE blockers will be filtered in BOOTSTRAP mode.
-        #[arg(long)]
-        current_status: Option<PathBuf>,
     },
 
     /// Run the autonomous development loop (v1.7)
@@ -148,17 +149,17 @@ enum Commands {
         #[arg(long, value_parser = clap::value_parser!(u32).range(0..=10))]
         max_retries: Option<u32>,
 
-        /// Operating mode (auto-detected from CURRENT_STATUS.md if not specified)
-        #[arg(long, value_parser = ["BOOTSTRAP", "CONSUMPTION"])]
-        mode: Option<String>,
+        /// Model to use for AI runner (e.g., "haiku", "sonnet", "opus", "o3", "o4-mini")
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Stream runner output to terminal in real-time
+        #[arg(long)]
+        stream_output: bool,
 
         /// Stage lens override (refine, structure, tests, sut, finalize)
         #[arg(long, value_parser = ["refine", "structure", "tests", "sut", "finalize"])]
         stage: Option<String>,
-
-        /// Path to CURRENT_STATUS.md for mode detection (optional)
-        #[arg(long)]
-        current_status: Option<PathBuf>,
     },
 
     /// Print a short, deterministic repo status summary
@@ -253,7 +254,7 @@ struct CoverageSummary {
 
 /// Blocker classification matching namako review output.
 /// - HARNESS_ONLY: Can be unblocked with test harness changes only
-/// - CORE: Requires changes to the core codebase (blocked in BOOTSTRAP mode)
+/// - CORE: Requires changes to the core codebase
 /// - EXTERNAL: Requires external dependencies
 /// - UNKNOWN: No blocker annotation found
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -279,6 +280,7 @@ struct PromotionCandidate {
     reuse_score: f32,
     new_step_texts_estimate: u32,
     #[serde(default)]
+    #[allow(dead_code)]
     blocker: BlockerType,
     /// Whether this is a stub scenario (should always be false in promotion_candidates,
     /// since namako review filters them out; kept for defense-in-depth)
@@ -293,44 +295,12 @@ struct MissingBindings {
     missing_step_texts: Vec<String>,
 }
 
-/// Operating mode from CURRENT_STATUS.md
-#[derive(Debug, Clone, PartialEq)]
-enum OperatingMode {
-    Bootstrap,
-    Consumption,
-    Unknown,
-}
-
-/// Read the operating mode from CURRENT_STATUS.md.
-/// Looks for "MODE: BOOTSTRAP" or "MODE: CONSUMPTION" in the file.
-fn read_current_status_mode(status_path: &PathBuf) -> OperatingMode {
-    let content = match fs::read_to_string(status_path) {
-        Ok(c) => c,
-        Err(_) => return OperatingMode::Unknown,
-    };
-
-    // Look for MODE: ... in the content
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("MODE:") || trimmed.starts_with("**MODE:**") {
-            let mode_str = trimmed
-                .trim_start_matches("MODE:")
-                .trim_start_matches("**MODE:**")
-                .trim();
-            return match mode_str.to_uppercase().as_str() {
-                "BOOTSTRAP" => OperatingMode::Bootstrap,
-                "CONSUMPTION" => OperatingMode::Consumption,
-                _ => OperatingMode::Unknown,
-            };
-        }
-    }
-
-    OperatingMode::Unknown
-}
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // Initialize logging - configure via RUST_LOG env var
+    logging::init();
 
+    let cli = Cli::parse();
     match cli.command {
         Some(Commands::Next {
             spec_root,
@@ -338,17 +308,22 @@ fn main() -> Result<()> {
             out,
             namako_cli,
             max_cert_updates,
-            current_status,
         }) => {
+            let log_path = cli
+                .log_file
+                .clone()
+                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
+            let logger = logging::JsonlLogger::new(log_path);
             // Resolve config: CLI flags override config file values
             let resolved = resolve_config_or_flags(spec_root, adapter, max_cert_updates, None, None, None, None, None)?;
+            let namako = resolve_namako_cli(namako_cli, resolved.namako_cli.clone(), &resolved.specs_dir);
             run_next(
                 &resolved.specs_dir,
                 &resolved.adapter_cmd,
                 out,
-                namako_cli,
+                namako,
                 resolved.max_cert_updates.unwrap_or(3),
-                current_status,
+                &logger,
             )
         },
 
@@ -362,10 +337,15 @@ fn main() -> Result<()> {
             max_runtime_seconds,
             max_files_changed,
             max_retries,
-            mode,
+            model,
+            stream_output,
             stage,
-            current_status,
         }) => {
+            let log_path = cli
+                .log_file
+                .clone()
+                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
+            let logger = logging::JsonlLogger::new(log_path);
             // Resolve config: CLI flags override config file values
             let resolved = resolve_config_or_flags(
                 spec_root,
@@ -377,21 +357,26 @@ fn main() -> Result<()> {
                 max_runtime_seconds.map(|v| v as u64),
                 max_files_changed.map(|v| v as usize),
             )?;
+            let namako = resolve_namako_cli(namako_cli, resolved.namako_cli.clone(), &resolved.specs_dir);
+            // CLI flags override config for model and stream_output
+            let effective_model = model.or(resolved.model);
+            let effective_stream = stream_output || resolved.stream_output;
             run_run(
                 &resolved.specs_dir,
                 &resolved.adapter_cmd,
-                namako_cli,
+                namako,
                 resolved.max_cert_updates.unwrap_or(3),
                 &resolved.runner.unwrap_or_else(|| "mock".to_string()),
                 resolved.runner_cmd,
                 resolved.max_runtime_seconds.unwrap_or(600) as u32,
                 resolved.max_files_changed.unwrap_or(10) as u32,
                 resolved.max_retries.unwrap_or(2),
-                &mode.unwrap_or_else(|| "BOOTSTRAP".to_string()),
+                effective_model,
+                effective_stream,
                 stage,
                 resolved.surfaces.clone(),
                 None,
-                current_status,
+                &logger,
             )
         },
 
@@ -406,8 +391,19 @@ fn main() -> Result<()> {
             adapter,
             namako_cli,
         }) => {
+            let log_path = cli
+                .log_file
+                .clone()
+                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
+            let logger = logging::JsonlLogger::new(log_path);
             let resolved = resolve_config_or_flags(spec_root, adapter, None, None, None, None, None, None)?;
-            run_status_cmd(&resolved.specs_dir, &resolved.adapter_cmd, namako_cli)
+            let namako = resolve_namako_cli(namako_cli, resolved.namako_cli.clone(), &resolved.specs_dir);
+            run_status_cmd(
+                &resolved.specs_dir,
+                &resolved.adapter_cmd,
+                namako,
+                &logger,
+            )
         }
 
         Some(Commands::Explain {
@@ -415,11 +411,35 @@ fn main() -> Result<()> {
             adapter,
             namako_cli,
         }) => {
+            let log_path = cli
+                .log_file
+                .clone()
+                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
+            let logger = logging::JsonlLogger::new(log_path);
             let resolved = resolve_config_or_flags(spec_root, adapter, None, None, None, None, None, None)?;
-            run_explain_cmd(&resolved.specs_dir, &resolved.adapter_cmd, namako_cli)
+            let namako = resolve_namako_cli(namako_cli, resolved.namako_cli.clone(), &resolved.specs_dir);
+            run_explain_cmd(
+                &resolved.specs_dir,
+                &resolved.adapter_cmd,
+                namako,
+                &logger,
+            )
         }
 
-        None => repl::run_repl(std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+        None => {
+            let log_path = cli
+                .log_file
+                .clone()
+                .or_else(|| std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from));
+            let logger = logging::JsonlLogger::new_with_console(
+                log_path,
+                logging::ConsoleMode::Commands,
+            );
+            repl::run_repl(
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                &logger,
+            )
+        }
     }
 }
 
@@ -427,6 +447,7 @@ fn main() -> Result<()> {
 struct ResolvedArgs {
     specs_dir: PathBuf,
     adapter_cmd: String,
+    namako_cli: Option<String>,
     max_cert_updates: Option<u32>,
     runner: Option<String>,
     runner_cmd: Option<String>,
@@ -434,6 +455,8 @@ struct ResolvedArgs {
     max_runtime_seconds: Option<u64>,
     max_files_changed: Option<usize>,
     surfaces: Option<config::SurfacesConfig>,
+    model: Option<String>,
+    stream_output: bool,
 }
 
 /// Resolve configuration from CLI flags, falling back to config file if flags are missing.
@@ -456,6 +479,7 @@ fn resolve_config_or_flags(
         return Ok(ResolvedArgs {
             specs_dir: spec_root,
             adapter_cmd: adapter,
+            namako_cli: None,
             max_cert_updates,
             runner,
             runner_cmd,
@@ -463,6 +487,8 @@ fn resolve_config_or_flags(
             max_runtime_seconds,
             max_files_changed,
             surfaces: None,
+            model: None,
+            stream_output: false,
         });
     }
 
@@ -485,6 +511,7 @@ fn resolve_config_or_flags(
             Ok(ResolvedArgs {
                 specs_dir,
                 adapter_cmd,
+                namako_cli: cfg.namako_cli.clone(),
                 max_cert_updates: max_cert_updates.or(cfg.max_cert_updates),
                 runner: runner.or(cfg.runner),
                 runner_cmd: runner_cmd.or(cfg.runner_cmd),
@@ -492,6 +519,8 @@ fn resolve_config_or_flags(
                 max_runtime_seconds: max_runtime_seconds.or(cfg.max_runtime_seconds),
                 max_files_changed: max_files_changed.or(cfg.max_files_changed),
                 surfaces: cfg.surfaces,
+                model: cfg.model,
+                stream_output: cfg.stream_output,
             })
         }
         config::ConfigDiscoveryResult::NotFound { .. } => {
@@ -522,6 +551,12 @@ fn run_config_print() -> Result<()> {
             println!("Resolved values:");
             println!("  specs_dir: {}", cfg.specs_dir.display());
             println!("  adapter_cmd: {}", cfg.adapter_cmd);
+            let namako = resolve_namako_cli(None, cfg.namako_cli.clone(), &cfg.specs_dir);
+            println!(
+                "  namako_cli: {} ({})",
+                namako.command,
+                namako.source.label()
+            );
             if let Some(ref runner) = cfg.runner {
                 println!("  runner: {}", runner);
             }
@@ -565,13 +600,26 @@ fn run_config_print() -> Result<()> {
     }
 }
 
-fn run_status_cmd(spec_root: &PathBuf, adapter: &str, namako_cli: Option<String>) -> Result<()> {
+fn run_status_cmd(
+    spec_root: &PathBuf,
+    adapter: &str,
+    namako_cli: NamakoCliResolution,
+    logger: &logging::JsonlLogger,
+) -> Result<()> {
     use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
     use crate::repo_state::RepoState;
     use crate::stage::detect_stage;
 
-    let namako = resolve_namako_cli(namako_cli, spec_root);
-    let gate_json = run_namako_gate_json(&namako, adapter, spec_root)?;
+    let namako = namako_cli.command.clone();
+    log_session_start(
+        logger,
+        spec_root,
+        adapter,
+        &namako_cli,
+        None,
+        None,
+    );
+    let gate_json = run_namako_gate_json(&namako, adapter, spec_root, logger)?;
     let gate_packet = parse_gate_json(&gate_json)?;
 
     let out_dir = spec_root.join("target/namako_artifacts/tesaki");
@@ -579,8 +627,8 @@ fn run_status_cmd(spec_root: &PathBuf, adapter: &str, namako_cli: Option<String>
     let status_path = out_dir.join("status.json");
     let review_path = out_dir.join("review.json");
 
-    run_namako_status(&namako, adapter, spec_root, &status_path, None)?;
-    run_namako_review(&namako, adapter, spec_root, &review_path)?;
+    run_namako_status(&namako, adapter, spec_root, &status_path, None, logger)?;
+    run_namako_review(&namako, adapter, spec_root, &review_path, logger)?;
 
     let status_json = fs::read_to_string(&status_path)?;
     let review_json = fs::read_to_string(&review_path)?;
@@ -594,17 +642,31 @@ fn run_status_cmd(spec_root: &PathBuf, adapter: &str, namako_cli: Option<String>
     println!("Stage: {}", stage.name());
     println!("Propagation: {}", repo_state.propagation_summary().to_line());
 
+    log_session_end(logger, stop_reason::StopReason::Done, None);
     Ok(())
 }
 
-fn run_explain_cmd(spec_root: &PathBuf, adapter: &str, namako_cli: Option<String>) -> Result<()> {
+fn run_explain_cmd(
+    spec_root: &PathBuf,
+    adapter: &str,
+    namako_cli: NamakoCliResolution,
+    logger: &logging::JsonlLogger,
+) -> Result<()> {
     use crate::mission_selector::select_mission_type;
     use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
     use crate::repo_state::RepoState;
     use crate::stage::detect_stage;
 
-    let namako = resolve_namako_cli(namako_cli, spec_root);
-    let gate_json = run_namako_gate_json(&namako, adapter, spec_root)?;
+    let namako = namako_cli.command.clone();
+    log_session_start(
+        logger,
+        spec_root,
+        adapter,
+        &namako_cli,
+        None,
+        None,
+    );
+    let gate_json = run_namako_gate_json(&namako, adapter, spec_root, logger)?;
     let gate_packet = parse_gate_json(&gate_json)?;
 
     let out_dir = spec_root.join("target/namako_artifacts/tesaki");
@@ -612,8 +674,8 @@ fn run_explain_cmd(spec_root: &PathBuf, adapter: &str, namako_cli: Option<String
     let status_path = out_dir.join("status.json");
     let review_path = out_dir.join("review.json");
 
-    run_namako_status(&namako, adapter, spec_root, &status_path, None)?;
-    run_namako_review(&namako, adapter, spec_root, &review_path)?;
+    run_namako_status(&namako, adapter, spec_root, &status_path, None, logger)?;
+    run_namako_review(&namako, adapter, spec_root, &review_path, logger)?;
 
     let status_json = fs::read_to_string(&status_path)?;
     let review_json = fs::read_to_string(&review_path)?;
@@ -640,6 +702,7 @@ fn run_explain_cmd(spec_root: &PathBuf, adapter: &str, namako_cli: Option<String
         println!("Proposed mission: none (no work remaining)");
     }
 
+    log_session_end(logger, stop_reason::StopReason::Done, None);
     Ok(())
 }
 
@@ -684,19 +747,13 @@ fn run_next(
     spec_root: &PathBuf,
     adapter: &str,
     out: Option<PathBuf>,
-    namako_cli: Option<String>,
+    namako_cli: NamakoCliResolution,
     max_cert_updates: u32,
-    current_status: Option<PathBuf>,
+    logger: &logging::JsonlLogger,
 ) -> Result<()> {
     // Canonicalize spec_root to get absolute path
     let spec_root = fs::canonicalize(spec_root)
         .context("Failed to canonicalize spec_root path")?;
-
-    // Read operating mode from CURRENT_STATUS.md if provided
-    let mode = current_status
-        .as_ref()
-        .map(|p| read_current_status_mode(p))
-        .unwrap_or(OperatingMode::Unknown);
 
     // Canonicalize adapter command paths
     let adapter = canonicalize_adapter_cmd(adapter)?;
@@ -714,20 +771,15 @@ fn run_next(
     fs::create_dir_all(&out_dir).context("Failed to create output directory")?;
 
     // Determine namako CLI command
-    let namako = namako_cli.unwrap_or_else(|| {
-        // Try to find namako-cli in parent workspace
-        // Try to find namako-cli in a sibling directory
-        let namako_root = spec_root
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-            .map(|p| p.join("namako"))
-            .unwrap_or_else(|| PathBuf::from("/home/ccarpenter/Personal/specops/namako"));
-        format!(
-            "cargo run -p namako-cli --manifest-path {}/Cargo.toml -q --",
-            namako_root.display()
-        )
-    });
+    let namako = namako_cli.command.clone();
+    log_session_start(
+        logger,
+        &spec_root,
+        &adapter,
+        &namako_cli,
+        None,
+        None,
+    );
 
     // Define artifact paths used throughout
     let artifacts_dir = spec_root.join("target/namako_artifacts");
@@ -752,7 +804,7 @@ fn run_next(
     } else {
         None
     };
-    run_namako_status(&namako, &adapter, &spec_root, &status_path, run_report_opt)?;
+    run_namako_status(&namako, &adapter, &spec_root, &status_path, run_report_opt, logger)?;
 
     // Parse status
     let status_content = fs::read_to_string(&status_path).context("Failed to read status.json")?;
@@ -765,7 +817,7 @@ fn run_next(
     // Step 2: Run namako review
     eprintln!("[2/4] Running namako review...");
     let review_path = out_dir.join("review.json");
-    run_namako_review(&namako, &adapter, &spec_root, &review_path)?;
+    run_namako_review(&namako, &adapter, &spec_root, &review_path, logger)?;
 
     // Parse review
     let review_content = fs::read_to_string(&review_path).context("Failed to read review.json")?;
@@ -778,22 +830,6 @@ fn run_next(
         review.coverage_summary.deferred_items_total,
         review.promotion_candidates.len()
     );
-
-    // Check for CORE blockers in BOOTSTRAP mode
-    if mode == OperatingMode::Bootstrap {
-        let core_blockers: Vec<_> = review.promotion_candidates.iter()
-            .filter(|c| c.blocker == BlockerType::Core)
-            .collect();
-        if !core_blockers.is_empty() {
-            eprintln!(
-                "  ⚠️  {} CORE blocker(s) skipped in BOOTSTRAP mode:",
-                core_blockers.len()
-            );
-            for c in &core_blockers {
-                eprintln!("      - {} (blocked; wait for CONSUMPTION mode)", c.scenario_name);
-            }
-        }
-    }
 
     // Step 3: Handle NEEDS_UPDATE_CERT_APPROVAL with --max-cert-updates governance
     let mut update_cert_message: Option<String> = None;
@@ -833,6 +869,7 @@ fn run_next(
                 &spec_root,
                 &run_report_path,
                 &cert_path,
+                logger,
             );
 
             match result {
@@ -893,6 +930,7 @@ fn run_next(
             &spec_root,
             &first_failure.scenario_key,
             &explain_file,
+            logger,
         );
         Some(explain_file)
     } else {
@@ -909,7 +947,6 @@ fn run_next(
         &out_dir,
         update_cert_message.as_ref(),
         max_cert_updates,
-        &mode,
     )?;
 
     eprintln!();
@@ -929,30 +966,35 @@ fn run_namako_status(
     spec_root: &PathBuf,
     out_path: &PathBuf,
     run_report_path: Option<&PathBuf>,
+    logger: &logging::JsonlLogger,
 ) -> Result<()> {
     let args: Vec<&str> = namako.split_whitespace().collect();
     let (program, namako_args) = args.split_first().context("Empty namako command")?;
 
-    let mut cmd = Command::new(program);
-    cmd.args(namako_args)
-        .arg("status")
-        .arg("-a")
-        .arg(adapter)
-        .arg("--json")
-        .arg("--out")
-        .arg(out_path);
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("status".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+    cmd_args.push("--json".to_string());
+    cmd_args.push("--out".to_string());
+    cmd_args.push(out_path.display().to_string());
 
     // Pass --run-report automatically if the file exists (per TODO.md §2.1)
     if let Some(run_report) = run_report_path {
         if run_report.exists() {
-            cmd.arg("--run-report").arg(run_report);
+            cmd_args.push("--run-report".to_string());
+            cmd_args.push(run_report.display().to_string());
         }
     }
 
-    let output = cmd
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
+    let output = Command::new(program)
+        .args(&cmd_args)
         .current_dir(spec_root)
         .output()
         .context("Failed to run namako status")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -967,20 +1009,26 @@ fn run_namako_review(
     adapter: &str,
     spec_root: &PathBuf,
     out_path: &PathBuf,
+    logger: &logging::JsonlLogger,
 ) -> Result<()> {
     let args: Vec<&str> = namako.split_whitespace().collect();
     let (program, namako_args) = args.split_first().context("Empty namako command")?;
 
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("review".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+    cmd_args.push("--out".to_string());
+    cmd_args.push(out_path.display().to_string());
+
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
     let output = Command::new(program)
-        .args(namako_args)
-        .arg("review")
-        .arg("-a")
-        .arg(adapter)
-        .arg("--out")
-        .arg(out_path)
+        .args(&cmd_args)
         .current_dir(spec_root)
         .output()
         .context("Failed to run namako review")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -996,22 +1044,28 @@ fn run_namako_explain(
     spec_root: &PathBuf,
     scenario_key: &str,
     out_path: &PathBuf,
+    logger: &logging::JsonlLogger,
 ) -> Result<()> {
     let args: Vec<&str> = namako.split_whitespace().collect();
     let (program, namako_args) = args.split_first().context("Empty namako command")?;
 
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("explain".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+    cmd_args.push("--scenario-key".to_string());
+    cmd_args.push(scenario_key.to_string());
+    cmd_args.push("--out".to_string());
+    cmd_args.push(out_path.display().to_string());
+
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
     let output = Command::new(program)
-        .args(namako_args)
-        .arg("explain")
-        .arg("-a")
-        .arg(adapter)
-        .arg("--scenario-key")
-        .arg(scenario_key)
-        .arg("--out")
-        .arg(out_path)
+        .args(&cmd_args)
         .current_dir(spec_root)
         .output()
         .context("Failed to run namako explain")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1028,22 +1082,28 @@ fn run_namako_update_cert(
     spec_root: &PathBuf,
     run_report_path: &PathBuf,
     cert_output_path: &PathBuf,
+    logger: &logging::JsonlLogger,
 ) -> Result<()> {
     let args: Vec<&str> = namako.split_whitespace().collect();
     let (program, namako_args) = args.split_first().context("Empty namako command")?;
 
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("update-cert".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+    cmd_args.push("--run-report".to_string());
+    cmd_args.push(run_report_path.display().to_string());
+    cmd_args.push("--output".to_string());
+    cmd_args.push(cert_output_path.display().to_string());
+
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
     let output = Command::new(program)
-        .args(namako_args)
-        .arg("update-cert")
-        .arg("-a")
-        .arg(adapter)
-        .arg("--run-report")
-        .arg(run_report_path)
-        .arg("--output")
-        .arg(cert_output_path)
+        .args(&cmd_args)
         .current_dir(spec_root)
         .output()
         .context("Failed to run namako update-cert")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1100,24 +1160,14 @@ fn generate_next_task(
     out_dir: &PathBuf,
     update_cert_message: Option<&String>,
     max_cert_updates: u32,
-    mode: &OperatingMode,
 ) -> Result<()> {
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    // Filter out stubs (defense-in-depth) and CORE blockers in BOOTSTRAP mode
+    // Filter out stubs (defense-in-depth)
     // Per TODO.md §2: Tesaki must NEVER select @Stub scenarios as tasks.
-    let (eligible_candidates, blocked_candidates): (Vec<_>, Vec<_>) =
-        review.promotion_candidates.iter().partition(|c| {
-            // Stubs are never eligible (defense-in-depth; review.rs should already filter these)
-            if c.is_stub {
-                return false;
-            }
-            // In BOOTSTRAP mode, CORE blockers are not eligible
-            if *mode == OperatingMode::Bootstrap && c.blocker == BlockerType::Core {
-                return false;
-            }
-            true
-        });
+    let eligible_candidates: Vec<_> = review.promotion_candidates.iter()
+        .filter(|c| !c.is_stub)
+        .collect();
     let drift_kind = status
         .drift
         .as_ref()
@@ -1149,12 +1199,6 @@ fn generate_next_task(
         review.promotion_candidates.len(),
         eligible_candidates.len()
     ));
-    if !blocked_candidates.is_empty() {
-        content.push_str(&format!(
-            "| Blocked (CORE in BOOTSTRAP) | {} |\n",
-            blocked_candidates.len()
-        ));
-    }
     content.push_str(&format!("| Drift Status | {} |\n\n", drift_kind));
     content.push_str("---\n\n");
 
@@ -1168,19 +1212,6 @@ fn generate_next_task(
             if let Some(msg) = update_cert_message {
                 content.push_str("### Baseline Update\n\n");
                 content.push_str(&format!("{}\n\n", msg));
-            }
-
-            // Show blocked candidates warning
-            if !blocked_candidates.is_empty() {
-                content.push_str("### ⚠️ Blocked Scenarios (CORE in BOOTSTRAP mode)\n\n");
-                content.push_str("The following scenarios require CORE changes and are blocked in BOOTSTRAP mode:\n\n");
-                for candidate in &blocked_candidates {
-                    content.push_str(&format!(
-                        "  - **{}** — Blocked on CORE; wait until CONSUMPTION mode to address.\n",
-                        candidate.scenario_name
-                    ));
-                }
-                content.push_str("\n");
             }
 
             content.push_str("### Recommended Next Steps\n\n");
@@ -1392,18 +1423,19 @@ fn generate_next_task(
 fn run_run(
     spec_root: &PathBuf,
     adapter: &str,
-    namako_cli: Option<String>,
+    namako_cli: NamakoCliResolution,
     max_cert_updates: u32,
     runner_name: &str,
     runner_cmd: Option<String>,
     max_runtime_seconds: u32,
     max_files_changed: u32,
     max_retries: u32,
-    mode: &str,
+    model: Option<String>,
+    stream_output: bool,
     stage: Option<String>,
     surfaces: Option<config::SurfacesConfig>,
     surface_overrides: Option<crate::surface_policy::SurfacePolicy>,
-    current_status: Option<PathBuf>,
+    logger: &logging::JsonlLogger,
 ) -> Result<()> {
     use crate::mission::{MissionBundle, MissionBudgets, MissionInputs};
     use crate::mission::SurfaceDefinitions;
@@ -1427,17 +1459,6 @@ fn run_run(
     // Canonicalize adapter command
     let adapter = canonicalize_adapter_cmd(adapter)?;
 
-    // Determine operating mode
-    let mode = if let Some(ref status_path) = current_status {
-        match read_current_status_mode(status_path) {
-            OperatingMode::Bootstrap => "BOOTSTRAP",
-            OperatingMode::Consumption => "CONSUMPTION",
-            OperatingMode::Unknown => mode,
-        }
-    } else {
-        mode
-    };
-
     // Set up budgets
     let budgets = MissionBudgets {
         max_files_changed,
@@ -1448,7 +1469,7 @@ fn run_run(
     };
 
     // Set up workspace
-    let workspace = Workspace::from_specs_dir(&spec_root, &adapter, mode, budgets.clone())?;
+    let workspace = Workspace::from_specs_dir(&spec_root, &adapter, budgets.clone())?;
 
     // Check workspace is clean
     let workspace_state = workspace.check_clean()?;
@@ -1461,13 +1482,23 @@ fn run_run(
             ),
         );
         emit_run_result(&result, &spec_root)?;
+        log_session_end(logger, StopReason::HumanRequired, result.details.clone());
         eprintln!("STOP: {}", result.reason);
         eprintln!("Details: {}", result.details.as_deref().unwrap_or(""));
         return Ok(());
     }
 
     // Determine namako CLI command
-    let namako = resolve_namako_cli(namako_cli, &spec_root);
+    let namako = namako_cli.command.clone();
+
+    log_session_start(
+        logger,
+        &spec_root,
+        &adapter,
+        &namako_cli,
+        Some(runner_name),
+        None,
+    );
 
     // Create the runner backend
     let runner: Box<dyn Runner> = match runner_name {
@@ -1476,6 +1507,7 @@ fn run_run(
             if let Err(e) = ClaudeCodeRunner::check_available() {
                 let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
                 emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
                 eprintln!("STOP: {}", result.reason);
                 return Ok(());
             }
@@ -1485,6 +1517,7 @@ fn run_run(
             if let Err(e) = CodexRunner::check_available() {
                 let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
                 emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
                 eprintln!("STOP: {}", result.reason);
                 return Ok(());
             }
@@ -1495,13 +1528,12 @@ fn run_run(
 
     eprintln!("=== Tesaki v1.8 ===");
     eprintln!("Spec root: {}", spec_root.display());
-    eprintln!("Mode: {}", mode);
     eprintln!("Runner: {}", runner.name());
     eprintln!();
 
     // Step 1: Measure via Namako packets
     eprintln!("[1/6] Running namako gate --json (pre-mission state)...");
-    let gate_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
+    let gate_json = run_namako_gate_json(&namako, &adapter, &spec_root, logger)?;
     let gate_packet = parse_gate_json(&gate_json)?;
     let gate_outcome = GateOutcome::from_json_str(&gate_json);
     let gate_passes = gate_outcome == GateOutcome::Pass;
@@ -1526,8 +1558,8 @@ fn run_run(
         None
     };
 
-    run_namako_status(&namako, &adapter, &spec_root, &status_path, run_report_opt)?;
-    run_namako_review(&namako, &adapter, &spec_root, &review_path)?;
+    run_namako_status(&namako, &adapter, &spec_root, &status_path, run_report_opt, logger)?;
+    run_namako_review(&namako, &adapter, &spec_root, &review_path, logger)?;
 
     let status_json = fs::read_to_string(&status_path)?;
     let review_json = fs::read_to_string(&review_path)?;
@@ -1537,6 +1569,7 @@ fn run_run(
 
     let repo_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
     eprintln!("  RepoState: {}", repo_state.summary());
+    let pre_fingerprint = fingerprint_packets(&status_json, &review_json, &gate_json);
 
     let stage_override = match stage.as_deref() {
         Some(value) => Stage::from_str(value)
@@ -1563,15 +1596,31 @@ fn run_run(
             if repo_state.has_work() {
                 let result = RunResult::blocked("No eligible mission for the selected stage");
                 emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::Blocked, result.details.clone());
                 eprintln!("STOP: BLOCKED - No eligible mission for stage");
                 return Ok(());
             }
             let result = RunResult::done(0, 0);
             emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::Done, None);
             eprintln!("STOP: DONE - No work remaining");
             return Ok(());
         }
     };
+
+    if let Some(record) = load_no_progress_record(&spec_root) {
+        if record.matches(&mission_type, &pre_fingerprint) {
+            let details = format!(
+                "No new evidence since last no-progress mission ({}).",
+                record.mission_type
+            );
+            let result = RunResult::error(StopReason::NoProgress, details.clone());
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::NoProgress, Some(details));
+            eprintln!("STOP: NO_PROGRESS - cooldown in effect");
+            return Ok(());
+        }
+    }
 
     let brief = mission_type.generate_brief(&repo_state);
 
@@ -1585,6 +1634,7 @@ fn run_run(
         lock_label(surface_policy.tests_bindings),
         lock_label(surface_policy.sut)
     );
+    log_mission_proposed(logger, &mission_type, &active_stage, &surface_policy);
 
     let mut surface_definitions = SurfaceDefinitions {
         spec: SurfaceDefinition::spec(),
@@ -1646,7 +1696,6 @@ fn run_run(
             &surface_definitions,
             &inputs,
             budgets.clone(),
-            mode,
         )?;
         eprintln!("  Mission: {}", mission.id);
         eprintln!("  Path: {}", mission.path.display());
@@ -1657,12 +1706,29 @@ fn run_run(
         let runner_config = RunnerConfig {
             max_runtime_seconds,
             working_dir: workspace.working_dir().to_path_buf(),
-            mode: mode.to_string(),
+            model: model.clone(),
+            stream_output,
         };
+
+        let planned_invocation = runner.planned_invocation(&mission.path, &runner_config);
+        if let Some(invocation) = &planned_invocation {
+            log_command_run(
+                logger,
+                &invocation.program,
+                &invocation.args,
+                PathBuf::from(&invocation.working_dir).as_path(),
+                Some(invocation.env.clone()),
+            );
+        }
 
         let outcome = runner.run(&mission.path, &runner_config)?;
         eprintln!("  Outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
             outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
+
+        log_mission_executed(logger, mission.id.as_str(), runner.name(), &outcome);
+        if let Some(invocation) = &planned_invocation {
+            log_runner_command_result(logger, invocation, &outcome);
+        }
 
         let stop_reason_path = mission.path.join("RUNNER_OUTPUT").join("stop_reason.json");
         let stop_reason_json = serde_json::to_string_pretty(&outcome)
@@ -1676,6 +1742,7 @@ fn run_run(
             OutcomeClassification::Failed => Some(StopReason::RunnerFailed),
             OutcomeClassification::Timeout => Some(StopReason::Budget),
             OutcomeClassification::EnvironmentError => Some(StopReason::EnvironmentError),
+            OutcomeClassification::RateLimited => Some(StopReason::RateLimited),
         };
 
         // If runner failed, check if retryable
@@ -1686,6 +1753,7 @@ fn run_run(
                     .with_mission_path(failed_path.display().to_string())
                     .with_missions(attempts_made);
                 emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, stop.clone(), result.details.clone());
                 eprintln!("STOP: {} - After {} attempt(s)", stop, attempts_made);
                 eprintln!("Failed mission preserved at: {}", failed_path.display());
                 return Ok(());
@@ -1696,14 +1764,56 @@ fn run_run(
             continue;
         }
 
+        let changes = workspace.compute_changes()?;
+        if changes.total_files_changed == 0 {
+            let details = "Runner made no file changes.".to_string();
+            let failed_path = mission.preserve_failed()?;
+            let result = RunResult::error(StopReason::NoProgress, details.clone())
+                .with_mission_path(failed_path.display().to_string())
+                .with_missions(attempts_made);
+            emit_run_result(&result, &spec_root)?;
+            save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
+            log_session_end(logger, StopReason::NoProgress, Some(details));
+            eprintln!("STOP: NO_PROGRESS - Runner made no changes");
+            eprintln!("Failed mission preserved at: {}", failed_path.display());
+            return Ok(());
+        }
+
         // Step 6: Validate via namako gate --json
         eprintln!("[6/6] Validating (namako gate --json)...");
 
-        let post_gate_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
+        let post_gate_json = run_namako_gate_json(&namako, &adapter, &spec_root, logger)?;
         mission.write_gate_result(&post_gate_json)?;
 
         let gate_outcome = GateOutcome::from_json_str(&post_gate_json);
         eprintln!("  Gate outcome: {:?}", gate_outcome);
+        log_post_gate(logger, gate_outcome, mission.path.join("POST_GATE.json"));
+
+        let post_status_path = out_dir.join("status.post.json");
+        let post_review_path = out_dir.join("review.post.json");
+        run_namako_status(&namako, &adapter, &spec_root, &post_status_path, run_report_opt, logger)?;
+        run_namako_review(&namako, &adapter, &spec_root, &post_review_path, logger)?;
+
+        let post_status_json = fs::read_to_string(&post_status_path)?;
+        let post_review_json = fs::read_to_string(&post_review_path)?;
+        let post_status_packet = parse_status_json(&post_status_json)?;
+        let post_review_packet = parse_review_json(&post_review_json)?;
+        let post_gate_packet = parse_gate_json(&post_gate_json)?;
+        let post_state = RepoState::compute(&post_status_packet, &post_review_packet, &post_gate_packet, None)?;
+
+        if !has_progress(&repo_state, &post_state, &mission_type) {
+            let details = "Post-gate evidence shows no progress for the mission target.".to_string();
+            let failed_path = mission.preserve_failed()?;
+            let result = RunResult::error(StopReason::NoProgress, details.clone())
+                .with_mission_path(failed_path.display().to_string())
+                .with_missions(attempts_made);
+            emit_run_result(&result, &spec_root)?;
+            save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
+            log_session_end(logger, StopReason::NoProgress, Some(details));
+            eprintln!("STOP: NO_PROGRESS - No improvement detected");
+            eprintln!("Failed mission preserved at: {}", failed_path.display());
+            return Ok(());
+        }
 
         match gate_outcome {
             GateOutcome::Pass => {
@@ -1711,6 +1821,7 @@ fn run_run(
                 let result = RunResult::done(attempts_made, cert_updates_made)
                     .with_mission_path(mission.path.display().to_string());
                 emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::Done, None);
                 eprintln!("\nSUCCESS: Mission completed after {} attempt(s)", attempts_made);
                 eprintln!("Mission bundle: {}", mission.path.display());
                 return Ok(());
@@ -1734,12 +1845,29 @@ fn run_run(
                     let old_identity = read_certification_identity(&cert_path);
 
                     // Run update-cert
+                    let mut update_args: Vec<String> = namako.split_whitespace().map(|s| s.to_string()).collect();
+                    update_args.push("update-cert".to_string());
+                    update_args.push("-a".to_string());
+                    update_args.push(adapter.to_string());
+                    update_args.push("--run-report".to_string());
+                    update_args.push(run_report_path.display().to_string());
+                    update_args.push("--output".to_string());
+                    update_args.push(cert_path.display().to_string());
+                    log_command_run(logger, "namako", &update_args, &spec_root, None);
                     let update_result = invoker.run_update_cert(
                         &namako,
                         &adapter,
                         &spec_root,
                         &run_report_path,
                         &cert_path,
+                    );
+                    log_command_result_from_text(
+                        logger,
+                        "namako",
+                        &update_args,
+                        update_result.exit_status.unwrap_or(-1),
+                        Some(update_result.stdout.clone()),
+                        Some(update_result.stderr.clone()),
                     );
 
                     if update_result.success {
@@ -1763,7 +1891,7 @@ fn run_run(
 
                         // Re-gate to confirm
                         eprintln!("  Re-validating after update-cert...");
-                        let recheck_json = run_namako_gate_json(&namako, &adapter, &spec_root)?;
+                        let recheck_json = run_namako_gate_json(&namako, &adapter, &spec_root, logger)?;
 
                         // Write POST_GATE_AFTER_UPDATE_CERT.json per TODO.md §A4
                         let after_cert_path = mission.path.join("POST_GATE_AFTER_UPDATE_CERT.json");
@@ -1776,6 +1904,7 @@ fn run_run(
                             let result = RunResult::done(attempts_made, cert_updates_made)
                                 .with_mission_path(mission.path.display().to_string());
                             emit_run_result(&result, &spec_root)?;
+                            log_session_end(logger, StopReason::Done, None);
                             eprintln!("\nSUCCESS: Mission completed after {} attempt(s), {} cert update(s)",
                                 attempts_made, cert_updates_made);
                             return Ok(());
@@ -1803,6 +1932,7 @@ fn run_run(
                     .with_missions(attempts_made)
                     .with_cert_updates(cert_updates_made);
                 emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Verify still failing after update-cert");
                 eprintln!("Failed mission preserved at: {}", failed_path.display());
                 return Ok(());
@@ -1824,6 +1954,7 @@ fn run_run(
                     .with_mission_path(failed_path.display().to_string())
                     .with_missions(attempts_made);
                 emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Post-run validation failed");
                 eprintln!("Failed mission preserved at: {}", failed_path.display());
                 return Ok(());
@@ -1833,21 +1964,31 @@ fn run_run(
 }
 
 /// Run namako gate --json and return the JSON output.
-fn run_namako_gate_json(namako: &str, adapter: &str, spec_root: &PathBuf) -> Result<String> {
+fn run_namako_gate_json(
+    namako: &str,
+    adapter: &str,
+    spec_root: &PathBuf,
+    logger: &logging::JsonlLogger,
+) -> Result<String> {
     let args: Vec<&str> = namako.split_whitespace().collect();
     let (program, namako_args) = args.split_first().context("Empty namako command")?;
 
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("gate".to_string());
+    cmd_args.push("-s".to_string());
+    cmd_args.push(".".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+    cmd_args.push("--json".to_string());
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
+
     let output = Command::new(program)
-        .args(namako_args)
-        .arg("gate")
-        .arg("-s")
-        .arg(".")
-        .arg("-a")
-        .arg(adapter)
-        .arg("--json")
+        .args(&cmd_args)
         .current_dir(spec_root)
         .output()
         .context("Failed to run namako gate --json")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
 
     // gate --json outputs to stdout even on failure (with status in JSON)
     let stdout = String::from_utf8(output.stdout)
@@ -1862,19 +2003,416 @@ fn run_namako_gate_json(namako: &str, adapter: &str, spec_root: &PathBuf) -> Res
     Ok(stdout)
 }
 
-fn resolve_namako_cli(namako_cli: Option<String>, spec_root: &PathBuf) -> String {
-    namako_cli.unwrap_or_else(|| {
-        let namako_root = spec_root
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-            .map(|p| p.join("namako"))
-            .unwrap_or_else(|| PathBuf::from("/home/ccarpenter/Personal/specops/namako"));
-        format!(
-            "cargo run -p namako-cli --manifest-path {}/Cargo.toml -q --",
-            namako_root.display()
-        )
-    })
+#[derive(Debug, Clone, Copy)]
+enum NamakoCliSource {
+    Explicit,
+    Config,
+    Path,
+    WorkspaceDefault,
+}
+
+impl NamakoCliSource {
+    fn label(&self) -> &'static str {
+        match self {
+            NamakoCliSource::Explicit => "explicit",
+            NamakoCliSource::Config => "from config",
+            NamakoCliSource::Path => "from PATH",
+            NamakoCliSource::WorkspaceDefault => "workspace default",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct NamakoCliResolution {
+    command: String,
+    source: NamakoCliSource,
+}
+
+impl NamakoCliResolution {
+    pub(crate) fn explicit(command: String) -> Self {
+        Self {
+            command,
+            source: NamakoCliSource::Explicit,
+        }
+    }
+}
+
+fn resolve_namako_cli(
+    explicit: Option<String>,
+    config_value: Option<String>,
+    spec_root: &PathBuf,
+) -> NamakoCliResolution {
+    if let Some(cmd) = explicit {
+        return NamakoCliResolution {
+            command: cmd,
+            source: NamakoCliSource::Explicit,
+        };
+    }
+
+    if let Some(cmd) = config_value {
+        return NamakoCliResolution {
+            command: cmd,
+            source: NamakoCliSource::Config,
+        };
+    }
+
+    if let Some(path) = find_executable_on_path("namako") {
+        return NamakoCliResolution {
+            command: path.display().to_string(),
+            source: NamakoCliSource::Path,
+        };
+    }
+
+    let namako_root = spec_root
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .map(|p| p.join("namako"))
+        .unwrap_or_else(|| PathBuf::from("/home/ccarpenter/Personal/specops/namako"));
+    let namako_root = if namako_root.join("Cargo.toml").is_file() {
+        namako_root
+    } else {
+        PathBuf::from("/home/ccarpenter/Personal/specops/namako")
+    };
+    let command = format!(
+        "cargo run -p namako-cli --manifest-path {}/Cargo.toml -q --",
+        namako_root.display()
+    );
+    NamakoCliResolution {
+        command,
+        source: NamakoCliSource::WorkspaceDefault,
+    }
+}
+
+fn find_executable_on_path(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+pub(crate) fn log_session_start(
+    logger: &logging::JsonlLogger,
+    spec_root: &PathBuf,
+    adapter: &str,
+    namako_cli: &NamakoCliResolution,
+    runner: Option<&str>,
+    planner: Option<&str>,
+) {
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .display()
+        .to_string();
+    let config = logging::ConfigLog {
+        specs_dir: spec_root.display().to_string(),
+        adapter_cmd: adapter.to_string(),
+        namako_cli: Some(namako_cli.command.clone()),
+        namako_cli_source: Some(namako_cli.source.label().to_string()),
+        runner: runner.map(|s| s.to_string()),
+        planner: planner.map(|s| s.to_string()),
+    };
+    logger.log_event(logging::LogEvent::SessionStart {
+        cwd,
+        config: Some(config),
+        runner: runner.map(|s| s.to_string()),
+    });
+}
+
+pub(crate) fn log_session_end(
+    logger: &logging::JsonlLogger,
+    reason: stop_reason::StopReason,
+    details: Option<String>,
+) {
+    logger.log_event(logging::LogEvent::SessionEnd {
+        stop_reason: stop_reason_label(reason).to_string(),
+        details,
+    });
+}
+
+pub(crate) fn log_command_run(
+    logger: &logging::JsonlLogger,
+    tool: &str,
+    args: &[String],
+    cwd: &Path,
+    env: Option<Vec<(String, String)>>,
+) {
+    logger.log_event(logging::LogEvent::CommandRun {
+        tool: tool.to_string(),
+        args: args.to_vec(),
+        cwd: cwd.display().to_string(),
+        env,
+    });
+}
+
+pub(crate) fn log_command_result(
+    logger: &logging::JsonlLogger,
+    tool: &str,
+    args: &[String],
+    output: &Output,
+) {
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(-1);
+    let payload = logging::CommandResultLog {
+        tool: tool.to_string(),
+        args: args.to_vec(),
+        exit_code,
+        stdout: Some(stdout),
+        stderr: Some(stderr),
+        stdout_path: None,
+        stderr_path: None,
+    };
+    let logged = logger.log_command_result(payload);
+    logger.log_event(logging::LogEvent::CommandResult {
+        tool: logged.tool,
+        args: logged.args,
+        exit_code: logged.exit_code,
+        stdout: logged.stdout,
+        stderr: logged.stderr,
+        stdout_path: logged.stdout_path,
+        stderr_path: logged.stderr_path,
+    });
+}
+
+pub(crate) fn log_command_result_from_text(
+    logger: &logging::JsonlLogger,
+    tool: &str,
+    args: &[String],
+    exit_code: i32,
+    stdout: Option<String>,
+    stderr: Option<String>,
+) {
+    let payload = logging::CommandResultLog {
+        tool: tool.to_string(),
+        args: args.to_vec(),
+        exit_code,
+        stdout,
+        stderr,
+        stdout_path: None,
+        stderr_path: None,
+    };
+    let logged = logger.log_command_result(payload);
+    logger.log_event(logging::LogEvent::CommandResult {
+        tool: logged.tool,
+        args: logged.args,
+        exit_code: logged.exit_code,
+        stdout: logged.stdout,
+        stderr: logged.stderr,
+        stdout_path: logged.stdout_path,
+        stderr_path: logged.stderr_path,
+    });
+}
+
+fn surface_log(surface_policy: &crate::surface_policy::SurfacePolicy) -> logging::SurfaceLog {
+    logging::SurfaceLog {
+        spec: lock_label(surface_policy.spec).to_string(),
+        tests: lock_label(surface_policy.tests_bindings).to_string(),
+        sut: lock_label(surface_policy.sut).to_string(),
+    }
+}
+
+pub(crate) fn log_mission_proposed(
+    logger: &logging::JsonlLogger,
+    mission_type: &crate::mission_type::MissionType,
+    stage: &crate::stage::Stage,
+    surface_policy: &crate::surface_policy::SurfacePolicy,
+) {
+    let target = mission_type.target_label().unwrap_or_else(|| "none".to_string());
+    logger.log_event(logging::LogEvent::MissionProposed {
+        mission_type: mission_type.name().to_string(),
+        stage: stage.name().to_string(),
+        target,
+        surfaces: surface_log(surface_policy),
+    });
+}
+
+pub(crate) fn log_mission_executed(
+    logger: &logging::JsonlLogger,
+    mission_id: &str,
+    runner: &str,
+    outcome: &crate::runner::RunnerOutcome,
+) {
+    logger.log_event(logging::LogEvent::MissionExecuted {
+        mission_id: mission_id.to_string(),
+        runner: runner.to_string(),
+        outcome: outcome.clone(),
+    });
+}
+
+pub(crate) fn log_post_gate(
+    logger: &logging::JsonlLogger,
+    outcome: crate::gate::GateOutcome,
+    post_gate_path: PathBuf,
+) {
+    logger.log_event(logging::LogEvent::PostGate {
+        outcome: format!("{:?}", outcome),
+        post_gate_path: post_gate_path.display().to_string(),
+    });
+}
+
+pub(crate) fn log_runner_command_result(
+    logger: &logging::JsonlLogger,
+    invocation: &crate::runner::RunnerInvocation,
+    outcome: &crate::runner::RunnerOutcome,
+) {
+    let stdout = outcome
+        .stdout_path
+        .as_ref()
+        .and_then(|p| fs::read_to_string(p).ok());
+    let stderr = outcome
+        .stderr_path
+        .as_ref()
+        .and_then(|p| fs::read_to_string(p).ok());
+    log_command_result_from_text(
+        logger,
+        &invocation.program,
+        &invocation.args,
+        outcome.exit_code.unwrap_or(-1),
+        stdout,
+        stderr,
+    );
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct NoProgressRecord {
+    mission_type: String,
+    target: Option<String>,
+    packets_fingerprint: String,
+    timestamp_utc: String,
+}
+
+impl NoProgressRecord {
+    fn matches(&self, mission_type: &crate::mission_type::MissionType, fingerprint: &str) -> bool {
+        self.mission_type == mission_type.name()
+            && self.target == mission_type.target_label()
+            && self.packets_fingerprint == fingerprint
+    }
+}
+
+fn no_progress_path(spec_root: &PathBuf) -> PathBuf {
+    spec_root.join(".tesaki").join("no_progress.json")
+}
+
+fn load_no_progress_record(spec_root: &PathBuf) -> Option<NoProgressRecord> {
+    let path = no_progress_path(spec_root);
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn save_no_progress_record(
+    spec_root: &PathBuf,
+    mission_type: &crate::mission_type::MissionType,
+    fingerprint: &str,
+) -> Result<()> {
+    let record = NoProgressRecord {
+        mission_type: mission_type.name().to_string(),
+        target: mission_type.target_label(),
+        packets_fingerprint: fingerprint.to_string(),
+        timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+    let path = no_progress_path(spec_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&record)?;
+    fs::write(path, json)?;
+    Ok(())
+}
+
+fn fingerprint_packets(status: &str, review: &str, gate: &str) -> String {
+    let mut data = String::new();
+    data.push_str(status);
+    data.push_str(review);
+    data.push_str(gate);
+    let hash = blake3::hash(data.as_bytes());
+    hash.to_hex().to_string()
+}
+
+fn has_progress(
+    pre: &crate::repo_state::RepoState,
+    post: &crate::repo_state::RepoState,
+    mission_type: &crate::mission_type::MissionType,
+) -> bool {
+    let gate_improved = !pre.all_gates_pass() && post.all_gates_pass();
+    let issue_count_decrease = post.total_issue_count() < pre.total_issue_count();
+
+    match mission_type {
+        crate::mission_type::MissionType::CreateMissingBindings { scenario_key, .. } => {
+            let pre_target = count_missing_bindings(pre, Some(scenario_key));
+            let post_target = count_missing_bindings(post, Some(scenario_key));
+            (pre_target > 0 && post_target < pre_target)
+                || post.binding_issues.len() < pre.binding_issues.len()
+                || gate_improved
+        }
+        crate::mission_type::MissionType::ImplementBehaviorForScenario { scenario_key, .. } => {
+            let pre_target = count_failures(pre, scenario_key);
+            let post_target = count_failures(post, scenario_key);
+            (pre_target > 0 && post_target == 0)
+                || post.sut_issues.len() < pre.sut_issues.len()
+                || gate_improved
+        }
+        crate::mission_type::MissionType::FixRegressionFromGateFailure { failure } => {
+            let pre_target = count_failures(pre, &failure.scenario_key);
+            let post_target = count_failures(post, &failure.scenario_key);
+            (pre_target > 0 && post_target == 0)
+                || post.sut_issues.len() < pre.sut_issues.len()
+                || gate_improved
+        }
+        crate::mission_type::MissionType::NormalizeIdentityTags { .. }
+        | crate::mission_type::MissionType::RefineFeatureIntent { .. }
+        | crate::mission_type::MissionType::AddOrClarifyScenario { .. } => {
+            post.spec_issues.len() < pre.spec_issues.len()
+                || post.structure_issues.len() < pre.structure_issues.len()
+                || gate_improved
+        }
+        crate::mission_type::MissionType::StrengthenThenAssertions { .. }
+        | crate::mission_type::MissionType::RefactorBindingsForClarity { .. }
+        | crate::mission_type::MissionType::SummarizeAndClose
+        | crate::mission_type::MissionType::CleanupAfterSuccess => {
+            gate_improved || issue_count_decrease
+        }
+        crate::mission_type::MissionType::ExplainState
+        | crate::mission_type::MissionType::TriageFailures => true,
+    }
+}
+
+fn count_missing_bindings(state: &crate::repo_state::RepoState, scenario_key: Option<&str>) -> usize {
+    state
+        .binding_issues
+        .iter()
+        .filter(|issue| issue.kind == crate::repo_state::BindingIssueKind::MissingBinding)
+        .filter(|issue| match (scenario_key, issue.scenario_key.as_deref()) {
+            (Some(target), Some(key)) => key == target,
+            (Some(_), None) => false,
+            (None, _) => true,
+        })
+        .count()
+}
+
+fn count_failures(state: &crate::repo_state::RepoState, scenario_key: &str) -> usize {
+    state
+        .sut_issues
+        .iter()
+        .filter(|issue| issue.scenario_key == scenario_key)
+        .count()
+}
+
+fn stop_reason_label(reason: stop_reason::StopReason) -> &'static str {
+    match reason {
+        stop_reason::StopReason::Done => "DONE",
+        stop_reason::StopReason::Blocked => "BLOCKED",
+        stop_reason::StopReason::HumanRequired => "HUMAN_REQUIRED",
+        stop_reason::StopReason::EnvironmentError => "ENVIRONMENT_ERROR",
+        stop_reason::StopReason::Budget => "BUDGET",
+        stop_reason::StopReason::RunnerFailed => "RUNNER_FAILED",
+        stop_reason::StopReason::NoProgress => "NO_PROGRESS",
+        stop_reason::StopReason::GateFailed => "GATE_FAILED",
+        stop_reason::StopReason::RateLimited => "RATE_LIMITED",
+    }
 }
 
 /// Emit the run result to .tesaki/last_run.json.
@@ -2038,7 +2576,7 @@ mod tests {
                 is_stub: true, // STUB - should be excluded
             },
             PromotionCandidate {
-                scenario_name: "Core blocker".to_string(),
+                scenario_name: "Another real scenario".to_string(),
                 feature_path: "features/core.feature".to_string(),
                 rule_name: "Rule(01)".to_string(),
                 reuse_score: 3.0,
@@ -2048,29 +2586,18 @@ mod tests {
             },
         ];
 
-        // Simulate BOOTSTRAP mode filtering (as in generate_next_task)
-        let mode = OperatingMode::Bootstrap;
-        let (eligible, blocked): (Vec<_>, Vec<_>) = candidates.iter().partition(|c| {
-            // Stubs are never eligible
-            if c.is_stub {
-                return false;
-            }
-            // CORE blockers excluded in BOOTSTRAP mode
-            if mode == OperatingMode::Bootstrap && c.blocker == BlockerType::Core {
-                return false;
-            }
-            true
-        });
+        // Simulate filtering (as in generate_next_task)
+        let eligible: Vec<_> = candidates.iter()
+            .filter(|c| !c.is_stub)
+            .collect();
 
-        // Only the real non-CORE scenario should be eligible
-        assert_eq!(eligible.len(), 1);
+        // Both real scenarios should be eligible (stubs excluded)
+        assert_eq!(eligible.len(), 2);
         assert_eq!(eligible[0].scenario_name, "Real scenario");
+        assert_eq!(eligible[1].scenario_name, "Another real scenario");
 
-        // Blocked should include both stub and CORE scenarios
-        assert_eq!(blocked.len(), 2);
-
-        // Verify stub was excluded (not just CORE blocker)
-        let stub_blocked = blocked.iter().any(|c| c.scenario_name == "Stub scenario");
-        assert!(stub_blocked, "Stub scenario should be in blocked list");
+        // Verify stub was excluded
+        let has_stub = eligible.iter().any(|c| c.scenario_name == "Stub scenario");
+        assert!(!has_stub, "Stub scenario should be excluded from eligible list");
     }
 }

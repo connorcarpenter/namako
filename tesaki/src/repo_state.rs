@@ -369,6 +369,7 @@ pub struct RepoState {
 
 impl RepoState {
     /// Create a new empty RepoState.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }

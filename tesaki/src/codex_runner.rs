@@ -1,18 +1,17 @@
 //! Codex CLI runner backend for v1.7 Runner Integration.
 
-use crate::runner::{OutcomeClassification, Runner, RunnerConfig, RunnerOutcome};
+use crate::base_runner::run_cli_runner;
+use crate::runner::{Runner, RunnerConfig, RunnerOutcome, RunnerInvocation};
 use anyhow::{bail, Result};
-use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 /// Runner backend for Codex CLI.
 ///
 /// This executes Codex CLI with the mission directory as input,
 /// allowing autonomous coding agents to work on the specs repository.
 pub struct CodexRunner {
-    /// Optional custom command template (use {mission_dir} placeholder).
+    /// Optional custom command template (use {mission_dir} and {working_dir} placeholders).
     command_template: String,
 }
 
@@ -57,221 +56,45 @@ impl CodexRunner {
             .replace("{mission_dir}", &mission_dir.display().to_string())
             .replace("{working_dir}", &working_dir.display().to_string())
     }
+
+    /// Build the full command with optional model argument.
+    fn build_command(&self, mission_dir: &Path, config: &RunnerConfig) -> String {
+        let base = self.expand_command(mission_dir, &config.working_dir);
+        match &config.model {
+            Some(model) => format!("{} --model {}", base, model),
+            None => base,
+        }
+    }
 }
 
 impl Runner for CodexRunner {
     fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome> {
-        let expanded = self.expand_command(mission_dir, &config.working_dir);
-        let parts: Vec<&str> = expanded.split_whitespace().collect();
-
-        if parts.is_empty() {
-            return Ok(RunnerOutcome {
-                exit_code: None,
-                classification: OutcomeClassification::EnvironmentError,
-                elapsed_seconds: 0.0,
-                stdout_path: None,
-                stderr_path: None,
-                error_message: Some("Empty command".to_string()),
-            });
-        }
-
-        let program = parts[0];
-        let args: Vec<&str> = parts[1..].to_vec();
-
-        let start = Instant::now();
-        let timeout = Duration::from_secs(config.max_runtime_seconds as u64);
-
-        // Set up environment variables
-        let mission_dir_abs =
-            std::fs::canonicalize(mission_dir).unwrap_or_else(|_| mission_dir.to_path_buf());
-
-        // Read the MISSION.md file to provide as stdin prompt
-        let mission_path = mission_dir.join("MISSION.md");
-        let prompt = match std::fs::read_to_string(&mission_path) {
-            Ok(content) => content,
-            Err(e) => {
-                return Ok(RunnerOutcome {
-                    exit_code: None,
-                    classification: OutcomeClassification::EnvironmentError,
-                    elapsed_seconds: start.elapsed().as_secs_f64(),
-                    stdout_path: None,
-                    stderr_path: None,
-                    error_message: Some(format!(
-                        "Failed to read MISSION.md from {}: {}",
-                        mission_path.display(),
-                        e
-                    )),
-                });
-            }
-        };
-
-        let mut cmd = Command::new(program);
-        cmd.args(&args)
-            .current_dir(&config.working_dir)
-            .env("TESAKI_MISSION_DIR", &mission_dir_abs)
-            .env("TESAKI_MODE", &config.mode)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(RunnerOutcome {
-                    exit_code: None,
-                    classification: OutcomeClassification::EnvironmentError,
-                    elapsed_seconds: start.elapsed().as_secs_f64(),
-                    stdout_path: None,
-                    stderr_path: None,
-                    error_message: Some(format!("Failed to start runner: {}", e)),
-                });
-            }
-        };
-
-        // Write the prompt to stdin
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            if let Err(e) = stdin.write_all(prompt.as_bytes()) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Ok(RunnerOutcome {
-                    exit_code: None,
-                    classification: OutcomeClassification::EnvironmentError,
-                    elapsed_seconds: start.elapsed().as_secs_f64(),
-                    stdout_path: None,
-                    stderr_path: None,
-                    error_message: Some(format!("Failed to write prompt to stdin: {}", e)),
-                });
-            }
-            // stdin is dropped here, closing the pipe
-        }
-
-        // Wait with timeout
-        let output = match wait_with_timeout(child, timeout) {
-            WaitResult::Completed(output) => output,
-            WaitResult::Timeout => {
-                return Ok(RunnerOutcome {
-                    exit_code: None,
-                    classification: OutcomeClassification::Timeout,
-                    elapsed_seconds: start.elapsed().as_secs_f64(),
-                    stdout_path: None,
-                    stderr_path: None,
-                    error_message: Some(format!(
-                        "Runner exceeded timeout of {} seconds",
-                        config.max_runtime_seconds
-                    )),
-                });
-            }
-            WaitResult::Error(e) => {
-                return Ok(RunnerOutcome {
-                    exit_code: None,
-                    classification: OutcomeClassification::EnvironmentError,
-                    elapsed_seconds: start.elapsed().as_secs_f64(),
-                    stdout_path: None,
-                    stderr_path: None,
-                    error_message: Some(format!("Error waiting for runner: {}", e)),
-                });
-            }
-        };
-
-        let elapsed = start.elapsed().as_secs_f64();
-        let exit_code = output.status.code();
-        let classification = if output.status.success() {
-            OutcomeClassification::Ok
-        } else {
-            OutcomeClassification::Failed
-        };
-
-        // Write stdout/stderr to mission RUNNER_OUTPUT/ if non-empty
-        let output_dir = mission_dir.join("RUNNER_OUTPUT");
-        let _ = std::fs::create_dir_all(&output_dir);
-
-        let stdout_path = if !output.stdout.is_empty() {
-            let path = output_dir.join("runner_stdout.txt");
-            let _ = std::fs::write(&path, &output.stdout);
-            Some(path.display().to_string())
-        } else {
-            None
-        };
-
-        let stderr_path = if !output.stderr.is_empty() {
-            let path = output_dir.join("runner_stderr.txt");
-            let _ = std::fs::write(&path, &output.stderr);
-            Some(path.display().to_string())
-        } else {
-            None
-        };
-
-        Ok(RunnerOutcome {
-            exit_code,
-            classification,
-            elapsed_seconds: elapsed,
-            stdout_path,
-            stderr_path,
-            error_message: None,
-        })
+        let cmd = self.build_command(mission_dir, config);
+        run_cli_runner(&cmd, mission_dir, config, false)
     }
 
     fn name(&self) -> &'static str {
         "codex"
     }
-}
 
-/// Result of waiting for a child process.
-enum WaitResult {
-    Completed(std::process::Output),
-    Timeout,
-    Error(std::io::Error),
-}
-
-/// Wait for a child process with a timeout.
-fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> WaitResult {
-    // Simple polling approach for timeout
-    let start = Instant::now();
-    let poll_interval = Duration::from_millis(100);
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // Process exited
-                let stdout = child
-                    .stdout
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        let _ = s.read_to_end(&mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
-
-                let stderr = child
-                    .stderr
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        let _ = s.read_to_end(&mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
-
-                return WaitResult::Completed(std::process::Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
-            }
-            Ok(None) => {
-                // Still running
-                if start.elapsed() > timeout {
-                    // Kill the process
-                    let _ = child.kill();
-                    let _ = child.wait(); // Reap the zombie
-                    return WaitResult::Timeout;
-                }
-                std::thread::sleep(poll_interval);
-            }
-            Err(e) => return WaitResult::Error(e),
+    fn planned_invocation(&self, mission_dir: &Path, config: &RunnerConfig) -> Option<RunnerInvocation> {
+        let cmd = self.build_command(mission_dir, config);
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if parts.is_empty() {
+            return None;
         }
+        let program = parts[0].to_string();
+        let args = parts[1..].iter().map(|s| s.to_string()).collect();
+        let mission_dir_abs = std::fs::canonicalize(mission_dir)
+            .unwrap_or_else(|_| mission_dir.to_path_buf());
+        Some(RunnerInvocation {
+            program,
+            args,
+            working_dir: config.working_dir.display().to_string(),
+            env: vec![
+                ("TESAKI_MISSION_DIR".to_string(), mission_dir_abs.display().to_string()),
+            ],
+        })
     }
 }
 

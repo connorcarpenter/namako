@@ -46,6 +46,10 @@ pub struct Config {
     /// Adapter command (e.g., "cargo run --manifest-path test/npa/Cargo.toml --")
     pub adapter_cmd: String,
 
+    /// Optional namako CLI command or path
+    #[serde(default)]
+    pub namako_cli: Option<String>,
+
     /// Runner backend to use (mock, cmd, claude)
     #[serde(default)]
     pub runner: Option<String>,
@@ -53,6 +57,14 @@ pub struct Config {
     /// Command template for cmd runner (use {mission_dir} placeholder)
     #[serde(default)]
     pub runner_cmd: Option<String>,
+
+    /// Model to use for the AI runner (e.g., "haiku", "sonnet", "opus", "o3", "o4-mini")
+    #[serde(default)]
+    pub model: Option<String>,
+
+    /// Stream runner output to terminal in real-time (default: false)
+    #[serde(default)]
+    pub stream_output: Option<bool>,
 
     /// Planner backend for interactive REPL (mock, cmd)
     #[serde(default)]
@@ -115,11 +127,20 @@ pub struct ResolvedConfig {
     /// Adapter command (with paths resolved)
     pub adapter_cmd: String,
 
+    /// Optional namako CLI command or path
+    pub namako_cli: Option<String>,
+
     /// Runner backend
     pub runner: Option<String>,
 
     /// Runner command template
     pub runner_cmd: Option<String>,
+
+    /// Model to use for the AI runner
+    pub model: Option<String>,
+
+    /// Stream runner output to terminal in real-time
+    pub stream_output: bool,
 
     /// Planner backend
     pub planner: Option<String>,
@@ -145,11 +166,13 @@ pub struct ResolvedConfig {
 
 impl ResolvedConfig {
     /// Get specs_dir as a PathBuf reference
+    #[allow(dead_code)]
     pub fn specs_dir(&self) -> &PathBuf {
         &self.specs_dir
     }
 
     /// Get the adapter command
+    #[allow(dead_code)]
     pub fn adapter_cmd(&self) -> &str {
         &self.adapter_cmd
     }
@@ -234,8 +257,11 @@ fn resolve_config(config: Config, config_root: &Path, config_path: &Path) -> Res
         config_path: config_path.to_path_buf(),
         specs_dir,
         adapter_cmd,
+        namako_cli: config.namako_cli,
         runner: config.runner,
         runner_cmd: config.runner_cmd,
+        model: config.model,
+        stream_output: config.stream_output.unwrap_or(false),
         planner: config.planner,
         planner_cmd: config.planner_cmd,
         max_retries: config.max_retries,
