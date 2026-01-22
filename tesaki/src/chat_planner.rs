@@ -134,6 +134,7 @@ mod tests {
             user_message: "hi".to_string(),
             session_state_json: serde_json::json!({}),
             recent_command_results: vec![],
+            planner_hint: None,
         };
         let result = planner.plan_turn(&input).unwrap();
         assert_eq!(result.say, plan.say);

@@ -96,6 +96,8 @@ pub struct ChatTurnInput {
     pub user_message: String,
     pub session_state_json: serde_json::Value,
     pub recent_command_results: Vec<CommandResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

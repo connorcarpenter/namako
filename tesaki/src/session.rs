@@ -17,25 +17,38 @@ impl SessionIntent {
         let mut updated = false;
         let msg = message.to_ascii_lowercase();
 
+        let mut stage_updated = false;
+
         if msg.contains("refine") {
             self.stage = Some(Stage::RefineSpec);
             updated = true;
+            stage_updated = true;
         } else if msg.contains("structure") {
             self.stage = Some(Stage::StructureSpec);
             updated = true;
+            stage_updated = true;
+        } else if msg.contains("sut only") || msg.contains("implement sut") || msg.contains("sut") {
+            self.stage = Some(Stage::ImplementSut);
+            updated = true;
+            stage_updated = true;
         } else if msg.contains("tests") || msg.contains("bindings") {
             self.stage = Some(Stage::ImplementTests);
             updated = true;
-        } else if msg.contains("sut") || msg.contains("implementation") {
-            self.stage = Some(Stage::ImplementSut);
-            updated = true;
+            stage_updated = true;
         } else if msg.contains("finalize") || msg.contains("finish") {
             self.stage = Some(Stage::Finalize);
             updated = true;
+            stage_updated = true;
         }
 
-        let mut overrides = self.surface_overrides.clone()
-            .unwrap_or_else(|| self.stage.map(|s| s.default_surface_policy()).unwrap_or_else(SurfacePolicy::for_finalize));
+        let mut overrides = if stage_updated {
+            self.stage
+                .map(|s| s.default_surface_policy())
+                .unwrap_or_else(SurfacePolicy::for_finalize)
+        } else {
+            self.surface_overrides.clone()
+                .unwrap_or_else(|| self.stage.map(|s| s.default_surface_policy()).unwrap_or_else(SurfacePolicy::for_finalize))
+        };
 
         if msg.contains("lock spec") {
             overrides.spec = SurfaceLock::Locked;
@@ -49,6 +62,10 @@ impl SessionIntent {
             overrides.tests_bindings = SurfaceLock::Locked;
             updated = true;
         }
+        if msg.contains("do not touch tests") {
+            overrides.tests_bindings = SurfaceLock::Locked;
+            updated = true;
+        }
         if msg.contains("unlock tests") || msg.contains("unlock bindings") {
             overrides.tests_bindings = SurfaceLock::Unlocked;
             updated = true;
@@ -59,6 +76,12 @@ impl SessionIntent {
         }
         if msg.contains("unlock sut") {
             overrides.sut = SurfaceLock::Unlocked;
+            updated = true;
+        }
+
+        if msg.contains("lock everything else") {
+            overrides.tests_bindings = SurfaceLock::Locked;
+            overrides.sut = SurfaceLock::Locked;
             updated = true;
         }
 
@@ -115,6 +138,38 @@ mod tests {
         let overrides = intent.surface_overrides.unwrap();
         assert_eq!(overrides.spec, SurfaceLock::Unlocked);
         assert_eq!(overrides.sut, SurfaceLock::Locked);
+    }
+
+    #[test]
+    fn intent_locks_everything_else() {
+        let mut intent = SessionIntent::default();
+        intent.apply_user_message("unlock spec and lock everything else");
+        let overrides = intent.surface_overrides.unwrap();
+        assert_eq!(overrides.spec, SurfaceLock::Unlocked);
+        assert_eq!(overrides.tests_bindings, SurfaceLock::Locked);
+        assert_eq!(overrides.sut, SurfaceLock::Locked);
+    }
+
+    #[test]
+    fn intent_prefers_sut_stage() {
+        let mut intent = SessionIntent::default();
+        intent.apply_user_message("implement sut only, do not touch tests");
+        assert_eq!(intent.stage, Some(Stage::ImplementSut));
+        let overrides = intent.surface_overrides.unwrap();
+        assert_eq!(overrides.tests_bindings, SurfaceLock::Locked);
+    }
+
+    #[test]
+    fn stage_change_resets_overrides() {
+        let mut intent = SessionIntent::default();
+        intent.apply_user_message("unlock spec");
+        let overrides = intent.surface_overrides.clone().unwrap();
+        assert_eq!(overrides.spec, SurfaceLock::Unlocked);
+
+        intent.apply_user_message("implement sut only");
+        let overrides = intent.surface_overrides.unwrap();
+        assert_eq!(overrides.spec, SurfaceLock::Locked);
+        assert_eq!(intent.stage, Some(Stage::ImplementSut));
     }
 
     #[test]

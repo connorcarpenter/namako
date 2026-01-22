@@ -15,6 +15,8 @@ use crate::session::{PendingMission, SessionState};
 use crate::stage::{detect_stage, Stage, StageConstraint};
 use crate::surface_policy::{SurfaceLock, SurfacePolicy};
 
+const MAX_TURN_STEPS: usize = 5;
+
 pub fn run_repl(start_dir: PathBuf) -> Result<()> {
     let config = match config::discover_config(&start_dir)? {
         ConfigDiscoveryResult::Found(config) => config,
@@ -100,13 +102,34 @@ pub fn run_repl(start_dir: PathBuf) -> Result<()> {
         session.intent.apply_user_message(line);
 
         let mut recent_results: Vec<CommandResult> = Vec::new();
+        let mut attempts = 0;
+        let mut planner_hint: Option<String> = None;
         loop {
+            if attempts >= MAX_TURN_STEPS {
+                println!("Planner exceeded max iterations for this turn.");
+                break;
+            }
+            attempts += 1;
+
             let planner_input = ChatTurnInput {
                 user_message: line.to_string(),
                 session_state_json: serde_json::to_value(&session)?,
                 recent_command_results: recent_results.clone(),
+                planner_hint: planner_hint.clone(),
             };
-            let plan = planner.plan_turn(&planner_input)?;
+
+            let plan = match planner.plan_turn(&planner_input) {
+                Ok(plan) => plan,
+                Err(err) => {
+                    if planner_hint.is_none() {
+                        planner_hint = Some("Return ONLY valid JSON matching the ChatPlan schema.".to_string());
+                        println!("Planner returned invalid response; retrying with strict JSON requirement.");
+                        continue;
+                    }
+                    println!("Planner failed to return valid JSON: {}", err);
+                    break;
+                }
+            };
             print_plan(&plan);
 
             if let Some(proposal) = handle_mission_proposal(&plan, &mut session) {
@@ -114,6 +137,9 @@ pub fn run_repl(start_dir: PathBuf) -> Result<()> {
             }
 
             if plan.run.is_empty() {
+                if !plan.done {
+                    println!("Planner did not provide commands but marked done=false.");
+                }
                 break;
             }
 

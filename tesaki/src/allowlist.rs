@@ -30,7 +30,7 @@ const NAMAKO_SUBCOMMANDS: &[&str] = &[
     "run",
 ];
 
-const TESAKI_SUBCOMMANDS: &[&str] = &["config", "next", "run"];
+const TESAKI_SUBCOMMANDS: &[&str] = &["config", "next", "run", "status", "explain"];
 
 pub fn validate_command(command: &AllowedCommand) -> Result<AllowedTool> {
     let tool = match command.tool.as_str() {
@@ -53,7 +53,22 @@ pub fn validate_command(command: &AllowedCommand) -> Result<AllowedTool> {
         }
     }
 
+    if command.args.iter().any(|arg| contains_shell_meta(arg)) {
+        bail!("Command args contain forbidden shell metacharacters");
+    }
+
     Ok(tool)
+}
+
+fn contains_shell_meta(value: &str) -> bool {
+    value.contains(';')
+        || value.contains("&&")
+        || value.contains("||")
+        || value.contains('|')
+        || value.contains('`')
+        || value.contains('$')
+        || value.contains(">")
+        || value.contains("<")
 }
 
 #[cfg(test)]
@@ -86,6 +101,16 @@ mod tests {
         let cmd = AllowedCommand {
             tool: "namako".to_string(),
             args: vec!["update-cert".to_string()],
+            reason: None,
+        };
+        assert!(validate_command(&cmd).is_err());
+    }
+
+    #[test]
+    fn rejects_shell_metacharacters() {
+        let cmd = AllowedCommand {
+            tool: "namako".to_string(),
+            args: vec!["gate".to_string(), "--json; rm -rf /".to_string()],
             reason: None,
         };
         assert!(validate_command(&cmd).is_err());

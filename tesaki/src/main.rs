@@ -30,6 +30,7 @@ mod repl;
 mod repo_state;
 mod runner;
 mod claude_code_runner;
+mod codex_runner;
 mod runner_test;
 mod session;
 mod stage;
@@ -70,6 +71,7 @@ struct IdentitySnapshot {
 #[derive(Parser)]
 #[command(name = "tesaki")]
 #[command(about = "AI-friendly task orchestrator for Namako spec-driven development")]
+#[command(after_help = "Run without a subcommand to start the interactive REPL.")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -127,7 +129,7 @@ enum Commands {
         max_cert_updates: Option<u32>,
 
         /// Runner backend to use
-        #[arg(long, value_parser = ["mock", "claude", "cmd"])]
+        #[arg(long, value_parser = ["mock", "claude", "codex", "cmd"])]
         runner: Option<String>,
 
         /// Command template for cmd runner (use {mission_dir} placeholder)
@@ -157,6 +159,36 @@ enum Commands {
         /// Path to CURRENT_STATUS.md for mode detection (optional)
         #[arg(long)]
         current_status: Option<PathBuf>,
+    },
+
+    /// Print a short, deterministic repo status summary
+    Status {
+        /// Path to the specs root directory (uses config discovery if omitted)
+        #[arg(short = 's', long)]
+        spec_root: Option<PathBuf>,
+
+        /// Adapter command (uses config discovery if omitted)
+        #[arg(short = 'a', long)]
+        adapter: Option<String>,
+
+        /// Path to the namako CLI (default: searches in parent workspace)
+        #[arg(long)]
+        namako_cli: Option<String>,
+    },
+
+    /// Explain why the next mission was selected
+    Explain {
+        /// Path to the specs root directory (uses config discovery if omitted)
+        #[arg(short = 's', long)]
+        spec_root: Option<PathBuf>,
+
+        /// Adapter command (uses config discovery if omitted)
+        #[arg(short = 'a', long)]
+        adapter: Option<String>,
+
+        /// Path to the namako CLI (default: searches in parent workspace)
+        #[arg(long)]
+        namako_cli: Option<String>,
     },
 
     /// Configuration management
@@ -369,6 +401,24 @@ fn main() -> Result<()> {
             }
         },
 
+        Some(Commands::Status {
+            spec_root,
+            adapter,
+            namako_cli,
+        }) => {
+            let resolved = resolve_config_or_flags(spec_root, adapter, None, None, None, None, None, None)?;
+            run_status_cmd(&resolved.specs_dir, &resolved.adapter_cmd, namako_cli)
+        }
+
+        Some(Commands::Explain {
+            spec_root,
+            adapter,
+            namako_cli,
+        }) => {
+            let resolved = resolve_config_or_flags(spec_root, adapter, None, None, None, None, None, None)?;
+            run_explain_cmd(&resolved.specs_dir, &resolved.adapter_cmd, namako_cli)
+        }
+
         None => repl::run_repl(std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
     }
 }
@@ -513,6 +563,84 @@ fn run_config_print() -> Result<()> {
             std::process::exit(1);
         }
     }
+}
+
+fn run_status_cmd(spec_root: &PathBuf, adapter: &str, namako_cli: Option<String>) -> Result<()> {
+    use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
+    use crate::repo_state::RepoState;
+    use crate::stage::detect_stage;
+
+    let namako = resolve_namako_cli(namako_cli, spec_root);
+    let gate_json = run_namako_gate_json(&namako, adapter, spec_root)?;
+    let gate_packet = parse_gate_json(&gate_json)?;
+
+    let out_dir = spec_root.join("target/namako_artifacts/tesaki");
+    fs::create_dir_all(&out_dir)?;
+    let status_path = out_dir.join("status.json");
+    let review_path = out_dir.join("review.json");
+
+    run_namako_status(&namako, adapter, spec_root, &status_path, None)?;
+    run_namako_review(&namako, adapter, spec_root, &review_path)?;
+
+    let status_json = fs::read_to_string(&status_path)?;
+    let review_json = fs::read_to_string(&review_path)?;
+
+    let status_packet = parse_status_json(&status_json)?;
+    let review_packet = parse_review_json(&review_json)?;
+
+    let repo_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+    let stage = detect_stage(&repo_state);
+    println!("RepoState: {}", repo_state.summary());
+    println!("Stage: {}", stage.name());
+    println!("Propagation: {}", repo_state.propagation_summary().to_line());
+
+    Ok(())
+}
+
+fn run_explain_cmd(spec_root: &PathBuf, adapter: &str, namako_cli: Option<String>) -> Result<()> {
+    use crate::mission_selector::select_mission_type;
+    use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
+    use crate::repo_state::RepoState;
+    use crate::stage::detect_stage;
+
+    let namako = resolve_namako_cli(namako_cli, spec_root);
+    let gate_json = run_namako_gate_json(&namako, adapter, spec_root)?;
+    let gate_packet = parse_gate_json(&gate_json)?;
+
+    let out_dir = spec_root.join("target/namako_artifacts/tesaki");
+    fs::create_dir_all(&out_dir)?;
+    let status_path = out_dir.join("status.json");
+    let review_path = out_dir.join("review.json");
+
+    run_namako_status(&namako, adapter, spec_root, &status_path, None)?;
+    run_namako_review(&namako, adapter, spec_root, &review_path)?;
+
+    let status_json = fs::read_to_string(&status_path)?;
+    let review_json = fs::read_to_string(&review_path)?;
+
+    let status_packet = parse_status_json(&status_json)?;
+    let review_packet = parse_review_json(&review_json)?;
+
+    let repo_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+    let stage = detect_stage(&repo_state);
+    println!("Stage: {}", stage.name());
+    println!("RepoState: {}", repo_state.summary());
+
+    if let Some(task) = repo_state.top_candidate() {
+        println!("Top issue: {} ({:?})", task.name, task.priority);
+        println!("Why: {}", task.description);
+    }
+
+    if let Some(mission) = select_mission_type(&repo_state) {
+        println!("Proposed mission: {}", mission.name());
+        if let Some(target) = mission.target_label() {
+            println!("Target: {}", target);
+        }
+    } else {
+        println!("Proposed mission: none (no work remaining)");
+    }
+
+    Ok(())
 }
 
 /// Canonicalize any --manifest-path arguments in the adapter command
@@ -1284,6 +1412,7 @@ fn run_run(
     use crate::runner::{Runner, RunnerConfig, OutcomeClassification};
     use crate::runner_test::MockRunner;
     use crate::claude_code_runner::ClaudeCodeRunner;
+    use crate::codex_runner::CodexRunner;
     use crate::repo_state::RepoState;
     use crate::stage::{Stage, StageConstraint, detect_stage};
     use crate::stop_reason::{StopReason, RunResult};
@@ -1351,6 +1480,15 @@ fn run_run(
                 return Ok(());
             }
             Box::new(ClaudeCodeRunner::new(runner_cmd)?)
+        }
+        "codex" => {
+            if let Err(e) = CodexRunner::check_available() {
+                let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
+                emit_run_result(&result, &spec_root)?;
+                eprintln!("STOP: {}", result.reason);
+                return Ok(());
+            }
+            Box::new(CodexRunner::new(runner_cmd)?)
         }
         _ => anyhow::bail!("Unknown runner: {}", runner_name),
     };
