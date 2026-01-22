@@ -100,7 +100,7 @@ impl SessionIntent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingMission {
-    pub proposal: crate::runner::MissionProposal,
+    pub proposal: crate::chat_plan::MissionProposal,
     pub approved: bool,
 }
 

@@ -2,11 +2,19 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
-use crate::runner::{ChatPlan, ChatPlanner, ChatTurnInput};
+use crate::chat_plan::{ChatPlan, ChatTurnInput};
+
+/// Plan-only chat interface. Implement this for chat planner backends.
+pub trait ChatPlanner: Send + Sync {
+    fn plan_turn(&self, input: &ChatTurnInput) -> Result<ChatPlan>;
+    #[allow(dead_code)]
+    fn name(&self) -> &'static str;
+}
 
 /// Mock chat planner for tests and offline usage.
 pub struct MockChatPlanner {
@@ -33,6 +41,7 @@ impl ChatPlanner for MockChatPlanner {
 pub struct CmdChatPlanner {
     command_template: String,
     working_dir: PathBuf,
+    timeout: Option<Duration>,
 }
 
 impl CmdChatPlanner {
@@ -40,6 +49,19 @@ impl CmdChatPlanner {
         Self {
             command_template,
             working_dir,
+            timeout: None,
+        }
+    }
+
+    pub fn new_with_timeout(
+        command_template: String,
+        working_dir: PathBuf,
+        timeout: Option<Duration>,
+    ) -> Self {
+        Self {
+            command_template,
+            working_dir,
+            timeout,
         }
     }
 
@@ -59,6 +81,59 @@ impl CmdChatPlanner {
         file.write_all(json.as_bytes())?;
         let path = file.path().to_path_buf();
         Ok((file, path))
+    }
+}
+
+fn wait_with_output_timeout(mut child: Child, timeout: Duration) -> Result<Output> {
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(100);
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = child
+                    .stdout
+                    .take()
+                    .map(|mut s| -> Result<Vec<u8>> {
+                        let mut buf = Vec::new();
+                        s.read_to_end(&mut buf)
+                            .context("Failed to read planner stdout")?;
+                        Ok(buf)
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut s| -> Result<Vec<u8>> {
+                        let mut buf = Vec::new();
+                        s.read_to_end(&mut buf)
+                            .context("Failed to read planner stderr")?;
+                        Ok(buf)
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    anyhow::bail!(
+                        "Planner command timed out after {} seconds",
+                        timeout.as_secs()
+                    );
+                }
+                std::thread::sleep(poll_interval);
+            }
+            Err(e) => return Err(e).context("Planner command failed"),
+        }
     }
 }
 
@@ -96,7 +171,11 @@ impl ChatPlanner for CmdChatPlanner {
             }
         }
 
-        let output = child.wait_with_output().context("Planner command failed")?;
+        let output = if let Some(timeout) = self.timeout {
+            wait_with_output_timeout(child, timeout)?
+        } else {
+            child.wait_with_output().context("Planner command failed")?
+        };
         drop(temp_file);
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -119,7 +198,7 @@ impl ChatPlanner for CmdChatPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runner::{AllowedCommand, MissionProposal, SurfacePolicy, SurfaceLock};
+    use crate::chat_plan::{AllowedCommand, MissionProposal, SurfacePolicy, SurfaceLock};
 
     #[test]
     fn mock_planner_returns_plan() {

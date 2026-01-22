@@ -6,16 +6,22 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::allowlist::validate_command;
-use crate::chat_planner::{CmdChatPlanner, MockChatPlanner};
+use crate::chat_plan::{
+    AllowedCommand, ChatPlan, ChatTurnInput, CommandResult, MissionProposal,
+    SurfaceLock as PlanSurfaceLock, SurfacePolicy as PlanSurfacePolicy,
+};
+use crate::chat_planner::{ChatPlanner, CmdChatPlanner, MockChatPlanner};
+use crate::claude_code_agent::ClaudeCodeAgent;
 use crate::config::{self, ConfigDiscoveryResult};
+use crate::codex_agent::CodexAgent;
 use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
 use crate::repo_state::RepoState;
-use crate::runner::{ChatPlan, ChatPlanner, ChatTurnInput, CommandResult, MissionProposal};
 use crate::session::{PendingMission, SessionState};
 use crate::stage::{detect_stage, Stage, StageConstraint};
-use crate::surface_policy::{SurfaceLock, SurfacePolicy};
+use crate::surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy};
 
 const MAX_TURN_STEPS: usize = 5;
+const DEFAULT_PLANNER_TIMEOUT_SECONDS: u64 = 60;
 
 pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Result<()> {
     let config = match config::discover_config(&start_dir)? {
@@ -46,9 +52,20 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
         config.planner.as_deref(),
     );
 
-    let planner: Box<dyn ChatPlanner> = match config.planner.as_deref().unwrap_or("mock") {
+    let planner_name = config.planner.as_deref().unwrap_or("mock");
+    if config.planner.is_none() {
+        println!(
+            "Planner not configured. Set `planner = \"mock\" | \"cmd\" | \"codex\" | \"claude\"` in .tesaki/config.toml."
+        );
+    } else if planner_name == "mock" {
+        println!(
+            "Planner is set to \"mock\". To enable interactive planning, set `planner = \"cmd\" | \"codex\" | \"claude\"` in .tesaki/config.toml."
+        );
+    }
+
+    let planner: Box<dyn ChatPlanner> = match planner_name {
         "mock" => Box::new(MockChatPlanner::new(ChatPlan {
-            say: "Planner not configured. Ask a question or request a mission.".to_string(),
+            say: "Planner not configured. Set planner in .tesaki/config.toml.".to_string(),
             run: vec![],
             mission_proposal: None,
             done: true,
@@ -57,6 +74,42 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
             let cmd = config.planner_cmd.clone()
                 .ok_or_else(|| anyhow::anyhow!("planner_cmd required when planner = \"cmd\""))?;
             Box::new(CmdChatPlanner::new(cmd, spec_root.clone()))
+        }
+        "codex" => {
+            if let Err(err) = CodexAgent::check_available() {
+                println!("Codex planner unavailable: {}", err);
+                Box::new(MockChatPlanner::new(ChatPlan {
+                    say: "Planner not configured. Set planner in .tesaki/config.toml.".to_string(),
+                    run: vec![],
+                    mission_proposal: None,
+                    done: true,
+                }))
+            } else {
+                Box::new(CodexAgent::new_with_timeout(
+                    config.runner_cmd.clone(),
+                    config.planner_cmd.clone(),
+                    spec_root.clone(),
+                    Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
+                )?)
+            }
+        }
+        "claude" => {
+            if let Err(err) = ClaudeCodeAgent::check_available() {
+                println!("Claude planner unavailable: {}", err);
+                Box::new(MockChatPlanner::new(ChatPlan {
+                    say: "Planner not configured. Set planner in .tesaki/config.toml.".to_string(),
+                    run: vec![],
+                    mission_proposal: None,
+                    done: true,
+                }))
+            } else {
+                Box::new(ClaudeCodeAgent::new_with_timeout(
+                    config.runner_cmd.clone(),
+                    config.planner_cmd.clone(),
+                    spec_root.clone(),
+                    Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
+                )?)
+            }
         }
         other => anyhow::bail!("Unsupported planner backend: {}", other),
     };
@@ -398,18 +451,18 @@ fn stage_to_arg(stage: Stage) -> String {
     .to_string()
 }
 
-fn convert_surface_policy(input: &crate::runner::SurfacePolicy) -> SurfacePolicy {
-    SurfacePolicy {
+fn convert_surface_policy(input: &PlanSurfacePolicy) -> RepoSurfacePolicy {
+    RepoSurfacePolicy {
         spec: convert_lock(input.spec),
         tests_bindings: convert_lock(input.tests),
         sut: convert_lock(input.sut),
     }
 }
 
-fn convert_lock(lock: crate::runner::SurfaceLock) -> SurfaceLock {
+fn convert_lock(lock: PlanSurfaceLock) -> RepoSurfaceLock {
     match lock {
-        crate::runner::SurfaceLock::Locked => SurfaceLock::Locked,
-        crate::runner::SurfaceLock::Unlocked => SurfaceLock::Unlocked,
+        PlanSurfaceLock::Locked => RepoSurfaceLock::Locked,
+        PlanSurfaceLock::Unlocked => RepoSurfaceLock::Unlocked,
     }
 }
 
@@ -452,7 +505,7 @@ fn handle_mission_proposal(plan: &ChatPlan, session: &mut SessionState) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runner::{AllowedCommand, ChatPlan, MissionProposal, SurfaceLock};
+    use crate::chat_plan::{AllowedCommand, ChatPlan, MissionProposal, SurfaceLock, SurfacePolicy};
 
     #[test]
     fn repl_sets_pending_mission_from_plan() {
@@ -468,7 +521,7 @@ mod tests {
                 mission_type: "CreateMissingBindings".to_string(),
                 stage: "Implement Tests".to_string(),
                 target: "@Scenario(01)".to_string(),
-                surfaces: crate::runner::SurfacePolicy {
+                surfaces: SurfacePolicy {
                     spec: SurfaceLock::Locked,
                     tests: SurfaceLock::Unlocked,
                     sut: SurfaceLock::Locked,
@@ -486,7 +539,7 @@ mod tests {
 }
 
 fn execute_allowed_command(
-    command: &crate::runner::AllowedCommand,
+    command: &AllowedCommand,
     spec_root: &Path,
     adapter: &str,
     namako_cmd: &str,

@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Result};
 
-use crate::runner::AllowedCommand;
+use crate::chat_plan::AllowedCommand;
 
 const NAMAKO_SUBCOMMANDS: &[&str] = &[
     "status",

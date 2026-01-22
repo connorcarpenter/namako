@@ -12,9 +12,9 @@
 //! adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
 //!
 //! # Optional
-//! runner = "mock"           # mock, cmd, or claude
+//! runner = "mock"           # mock, cmd, claude, or codex
 //! runner_cmd = "..."        # only used when runner = "cmd"
-//! planner = "mock"          # mock or cmd
+//! planner = "mock"          # mock, cmd, codex, or claude
 //! planner_cmd = "..."       # only used when planner = "cmd"
 //! max_retries = 2
 //! max_cert_updates = 3
@@ -50,7 +50,7 @@ pub struct Config {
     #[serde(default)]
     pub namako_cli: Option<String>,
 
-    /// Runner backend to use (mock, cmd, claude)
+    /// Runner backend to use (mock, cmd, claude, codex)
     #[serde(default)]
     pub runner: Option<String>,
 
@@ -66,7 +66,7 @@ pub struct Config {
     #[serde(default)]
     pub stream_output: Option<bool>,
 
-    /// Planner backend for interactive REPL (mock, cmd)
+    /// Planner backend for interactive REPL (mock, cmd, codex, claude)
     #[serde(default)]
     pub planner: Option<String>,
 
@@ -321,13 +321,13 @@ specs_dir = "test/specs"
 # Required: Adapter command to run the test adapter
 adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
 
-# Optional: Runner backend (mock, cmd, or claude)
+# Optional: Runner backend (mock, cmd, claude, or codex)
 runner = "mock"
 
 # Optional: Command for cmd runner (use {mission_dir} placeholder)
 # runner_cmd = "my-agent --mission {mission_dir}"
 
-# Optional: Planner backend for REPL (mock or cmd)
+# Optional: Planner backend for REPL (mock, cmd, codex, or claude)
 planner = "mock"
 
 # Optional: Command for cmd planner (use {input_file} placeholder)

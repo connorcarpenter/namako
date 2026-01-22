@@ -32,8 +32,8 @@ mod repl;
 mod repo_state;
 mod runner;
 mod base_runner;
-mod claude_code_runner;
-mod codex_runner;
+mod claude_code_agent;
+mod codex_agent;
 mod runner_test;
 mod session;
 mod stage;
@@ -1121,8 +1121,8 @@ fn run_run(
     use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
     use crate::runner::{Runner, RunnerConfig, OutcomeClassification};
     use crate::runner_test::MockRunner;
-    use crate::claude_code_runner::ClaudeCodeRunner;
-    use crate::codex_runner::CodexRunner;
+use crate::claude_code_agent::ClaudeCodeAgent;
+use crate::codex_agent::CodexAgent;
     use crate::repo_state::RepoState;
     use crate::stage::{Stage, StageConstraint, detect_stage};
     use crate::stop_reason::{StopReason, RunResult};
@@ -1182,24 +1182,32 @@ fn run_run(
     let runner: Box<dyn Runner> = match runner_name {
         "mock" => Box::new(MockRunner::success()),
         "claude" => {
-            if let Err(e) = ClaudeCodeRunner::check_available() {
+            if let Err(e) = ClaudeCodeAgent::check_available() {
                 let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
                 eprintln!("STOP: {}", result.reason);
                 return Ok(());
             }
-            Box::new(ClaudeCodeRunner::new(runner_cmd)?)
+            Box::new(ClaudeCodeAgent::new(
+                runner_cmd,
+                None,
+                spec_root.clone(),
+            )?)
         }
         "codex" => {
-            if let Err(e) = CodexRunner::check_available() {
+            if let Err(e) = CodexAgent::check_available() {
                 let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
                 eprintln!("STOP: {}", result.reason);
                 return Ok(());
             }
-            Box::new(CodexRunner::new(runner_cmd)?)
+            Box::new(CodexAgent::new(
+                runner_cmd,
+                None,
+                spec_root.clone(),
+            )?)
         }
         _ => anyhow::bail!("Unknown runner: {}", runner_name),
     };

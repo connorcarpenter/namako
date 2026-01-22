@@ -8,7 +8,7 @@
 //! Example: `RUST_LOG=tesaki=debug tesaki`
 
 use log::{debug, info, warn};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -241,6 +241,7 @@ fn print_event(event: &LogEvent, mode: ConsoleMode) {
         }
         LogEvent::CommandResult {
             tool,
+            args,
             exit_code,
             stdout,
             stderr,
@@ -250,11 +251,30 @@ fn print_event(event: &LogEvent, mode: ConsoleMode) {
         } => {
             if mode == ConsoleMode::Commands {
                 debug!("{} exited with {}", tool, exit_code);
+                let is_gate_json = is_gate_json_command(tool, args);
+                let mut gate_summarized = false;
                 if let Some(out) = stdout {
-                    print_stream("stdout", out, stdout_path.as_deref());
+                    if is_gate_json {
+                        if let Some(summary) = summarize_gate_output(out) {
+                            println!("{}", summary);
+                            gate_summarized = true;
+                        } else {
+                            print_stream("stdout", out, stdout_path.as_deref());
+                        }
+                    } else {
+                        print_stream("stdout", out, stdout_path.as_deref());
+                    }
                 }
                 if let Some(err) = stderr {
-                    print_stream("stderr", err, stderr_path.as_deref());
+                    if is_gate_json && gate_summarized {
+                        let trimmed = err.trim();
+                        if !trimmed.is_empty() {
+                            let clipped = truncate_string(trimmed, MAX_CONSOLE_BYTES);
+                            debug!("gate stderr (suppressed): {}", clipped);
+                        }
+                    } else {
+                        print_stream("stderr", err, stderr_path.as_deref());
+                    }
                 }
             }
         }
@@ -269,6 +289,50 @@ fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
         .open(path)?;
     writeln!(file, "{}", line)?;
     Ok(())
+}
+
+fn is_gate_json_command(tool: &str, args: &[String]) -> bool {
+    if tool != "namako" {
+        return false;
+    }
+    let has_gate = args.iter().any(|arg| arg == "gate");
+    let has_json = args.iter().any(|arg| arg == "--json");
+    has_gate && has_json
+}
+
+#[derive(Debug, Deserialize)]
+struct GateSummary {
+    lint: GateSummaryEntry,
+    run: GateSummaryEntry,
+    verify: GateSummaryEntry,
+}
+
+#[derive(Debug, Deserialize)]
+struct GateSummaryEntry {
+    status: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+fn summarize_gate_output(stdout: &str) -> Option<String> {
+    let summary: GateSummary = serde_json::from_str(stdout).ok()?;
+    let lint = gate_entry_label(&summary.lint);
+    let run = gate_entry_label(&summary.run);
+    let verify = gate_entry_label(&summary.verify);
+    let mut line = format!("Gate: lint={}, run={}, verify={}.", lint, run, verify);
+    line.push_str(" Details: run `namako status --json` or `tesaki explain`.");
+    Some(line)
+}
+
+fn gate_entry_label(entry: &GateSummaryEntry) -> String {
+    let status = entry.status.as_str();
+    if let Some(reason) = entry.reason.as_ref() {
+        if status == "fail" {
+            return format!("fail ({})", reason);
+        }
+        return format!("{} ({})", status, reason);
+    }
+    status.to_string()
 }
 
 fn truncate_string(s: &str, max_bytes: usize) -> String {
