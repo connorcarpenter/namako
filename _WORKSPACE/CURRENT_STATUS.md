@@ -76,7 +76,7 @@ cargo run -p tesaki -- run \
 | Component | Status | Description |
 |-----------|--------|-------------|
 | REPL entrypoint | ✅ | `tesaki` (no subcommand) starts interactive session |
-| Chat planner | ✅ | Plan-only JSON planner (`mock`/`cmd`) |
+| Chat planner | ✅ | Plan-only JSON planner (`mock`/`codex`/`claude`) |
 | Allowlist | ✅ | Only `namako`/`tesaki` commands permitted |
 | Session state | ✅ | Stage lens + surface locks + pending mission tracking |
 | Mission proposals | ✅ | Proposal display with explicit approval gating |

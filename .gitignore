@@ -3,6 +3,8 @@
 /*.iml
 .DS_Store
 
+/_WORKSPACE/codex_home/
+/_WORKSPACE/target/
 /target/
 /Cargo.lock
 **/*.rs.bk

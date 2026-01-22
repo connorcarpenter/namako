@@ -2,7 +2,7 @@
 
 use crate::base_runner::run_cli_runner;
 use crate::chat_plan::{ChatPlan, ChatTurnInput};
-use crate::chat_planner::{ChatPlanner, CmdChatPlanner};
+use crate::chat_planner::{BaseChatPlanner, ChatPlanner};
 use crate::runner::{Runner, RunnerConfig, RunnerOutcome, RunnerInvocation};
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use std::time::Duration;
 /// Runs missions via `Runner` and provides chat planning via `ChatPlanner`.
 pub struct CodexAgent {
     runner_command_template: String,
-    planner: CmdChatPlanner,
+    planner: BaseChatPlanner,
 }
 
 impl CodexAgent {
@@ -41,6 +41,22 @@ impl CodexAgent {
         planner_working_dir: PathBuf,
         planner_timeout: Option<Duration>,
     ) -> Result<Self> {
+        Self::new_with_timeout_and_stream(
+            runner_command,
+            planner_command,
+            planner_working_dir,
+            planner_timeout,
+            false,
+        )
+    }
+
+    pub fn new_with_timeout_and_stream(
+        runner_command: Option<String>,
+        planner_command: Option<String>,
+        planner_working_dir: PathBuf,
+        planner_timeout: Option<Duration>,
+        stream_output: bool,
+    ) -> Result<Self> {
         let runner_cmd = runner_command.unwrap_or_else(|| {
             // Default Codex CLI command using exec subcommand for non-interactive mode.
             // Uses --dangerously-bypass-approvals-and-sandbox for autonomous execution.
@@ -48,16 +64,18 @@ impl CodexAgent {
             "codex exec --dangerously-bypass-approvals-and-sandbox -C {working_dir} -".to_string()
         });
         let planner_cmd = planner_command.unwrap_or_else(|| {
-            // Default Codex planner command uses stdin input.
-            "codex exec --dangerously-bypass-approvals-and-sandbox -".to_string()
+            // Default Codex planner command streams JSONL events and writes the final
+            // message to a temp file for reliable parsing.
+            "codex exec --dangerously-bypass-approvals-and-sandbox --json --output-last-message {output_file} -".to_string()
         });
 
         Ok(Self {
             runner_command_template: runner_cmd,
-            planner: CmdChatPlanner::new_with_timeout(
+            planner: BaseChatPlanner::new_with_timeout_and_stream(
                 planner_cmd,
                 planner_working_dir,
                 planner_timeout,
+                stream_output,
             ),
         })
     }

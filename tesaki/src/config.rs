@@ -14,8 +14,8 @@
 //! # Optional
 //! runner = "mock"           # mock, cmd, claude, or codex
 //! runner_cmd = "..."        # only used when runner = "cmd"
-//! planner = "mock"          # mock, cmd, codex, or claude
-//! planner_cmd = "..."       # only used when planner = "cmd"
+//! planner = "mock"          # mock, codex, or claude
+//! planner_cmd = "..."       # optional override for codex/claude planner command
 //! max_retries = 2
 //! max_cert_updates = 3
 //! max_runtime_seconds = 600
@@ -66,11 +66,11 @@ pub struct Config {
     #[serde(default)]
     pub stream_output: Option<bool>,
 
-    /// Planner backend for interactive REPL (mock, cmd, codex, claude)
+    /// Planner backend for interactive REPL (mock, codex, claude)
     #[serde(default)]
     pub planner: Option<String>,
 
-    /// Command template for cmd planner (use {input_file} placeholder)
+    /// Optional planner command override (use {input_file} placeholder)
     #[serde(default)]
     pub planner_cmd: Option<String>,
 
@@ -327,10 +327,10 @@ runner = "mock"
 # Optional: Command for cmd runner (use {mission_dir} placeholder)
 # runner_cmd = "my-agent --mission {mission_dir}"
 
-# Optional: Planner backend for REPL (mock, cmd, codex, or claude)
+# Optional: Planner backend for REPL (mock, codex, or claude)
 planner = "mock"
 
-# Optional: Command for cmd planner (use {input_file} placeholder)
+# Optional: Planner command override (use {input_file} placeholder)
 # planner_cmd = "my-planner --input {input_file}"
 
 # Optional: Budget limits
@@ -495,7 +495,7 @@ specs_dir = "specs"
 adapter_cmd = "test"
 runner = "claude"
 runner_cmd = "my-cmd {mission_dir}"
-planner = "cmd"
+planner = "codex"
 planner_cmd = "my-planner {input_file}"
 max_retries = 5
 max_cert_updates = 10
@@ -518,7 +518,7 @@ patterns = ["src/**"]
             ConfigDiscoveryResult::Found(config) => {
                 assert_eq!(config.runner, Some("claude".to_string()));
                 assert_eq!(config.runner_cmd, Some("my-cmd {mission_dir}".to_string()));
-                assert_eq!(config.planner, Some("cmd".to_string()));
+                assert_eq!(config.planner, Some("codex".to_string()));
                 assert_eq!(config.planner_cmd, Some("my-planner {input_file}".to_string()));
                 assert_eq!(config.max_retries, Some(5));
                 assert_eq!(config.max_cert_updates, Some(10));

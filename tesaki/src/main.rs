@@ -373,11 +373,10 @@ fn run_status_cmd(
     let status_path = out_dir.join("status.json");
     let review_path = out_dir.join("review.json");
 
-    run_namako_status(&namako, adapter, spec_root, &status_path, None, logger)?;
-    run_namako_review(&namako, adapter, spec_root, &review_path, logger)?;
-
-    let status_json = fs::read_to_string(&status_path)?;
-    let review_json = fs::read_to_string(&review_path)?;
+    let status_json = run_namako_status(&namako, adapter, spec_root, None, logger)?;
+    fs::write(&status_path, &status_json)?;
+    let review_json = run_namako_review(&namako, adapter, spec_root, logger)?;
+    fs::write(&review_path, &review_json)?;
 
     let status_packet = parse_status_json(&status_json)?;
     let review_packet = parse_review_json(&review_json)?;
@@ -421,11 +420,10 @@ fn run_explain_cmd(
     let status_path = out_dir.join("status.json");
     let review_path = out_dir.join("review.json");
 
-    run_namako_status(&namako, adapter, spec_root, &status_path, None, logger)?;
-    run_namako_review(&namako, adapter, spec_root, &review_path, logger)?;
-
-    let status_json = fs::read_to_string(&status_path)?;
-    let review_json = fs::read_to_string(&review_path)?;
+    let status_json = run_namako_status(&namako, adapter, spec_root, None, logger)?;
+    fs::write(&status_path, &status_json)?;
+    let review_json = run_namako_review(&namako, adapter, spec_root, logger)?;
+    fs::write(&review_path, &review_json)?;
 
     let status_packet = parse_status_json(&status_json)?;
     let review_packet = parse_review_json(&review_json)?;
@@ -552,10 +550,11 @@ fn run_next(
     } else {
         None
     };
-    run_namako_status(&namako, &adapter, &spec_root, &status_path, run_report_opt, logger)?;
+    let status_content =
+        run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
+    fs::write(&status_path, &status_content)?;
 
     // Parse status
-    let status_content = fs::read_to_string(&status_path).context("Failed to read status.json")?;
     let status: StatusJson =
         serde_json::from_str(&status_content).context("Failed to parse status.json")?;
 
@@ -565,10 +564,10 @@ fn run_next(
     // Step 2: Run namako review
     eprintln!("[2/4] Running namako review...");
     let review_path = out_dir.join("review.json");
-    run_namako_review(&namako, &adapter, &spec_root, &review_path, logger)?;
+    let review_content = run_namako_review(&namako, &adapter, &spec_root, logger)?;
+    fs::write(&review_path, &review_content)?;
 
     // Parse review
-    let review_content = fs::read_to_string(&review_path).context("Failed to read review.json")?;
     let review: ReviewJson =
         serde_json::from_str(&review_content).context("Failed to parse review.json")?;
 
@@ -712,10 +711,9 @@ fn run_namako_status(
     namako: &str,
     adapter: &str,
     spec_root: &PathBuf,
-    out_path: &PathBuf,
     run_report_path: Option<&PathBuf>,
     logger: &logging::JsonlLogger,
-) -> Result<()> {
+) -> Result<String> {
     let args: Vec<&str> = namako.split_whitespace().collect();
     let (program, namako_args) = args.split_first().context("Empty namako command")?;
 
@@ -724,8 +722,6 @@ fn run_namako_status(
     cmd_args.push("-a".to_string());
     cmd_args.push(adapter.to_string());
     cmd_args.push("--json".to_string());
-    cmd_args.push("--out".to_string());
-    cmd_args.push(out_path.display().to_string());
 
     // Pass --run-report automatically if the file exists (per TODO.md §2.1)
     if let Some(run_report) = run_report_path {
@@ -749,16 +745,20 @@ fn run_namako_status(
         anyhow::bail!("namako status failed: {}", stderr);
     }
 
-    Ok(())
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if stdout.trim().is_empty() {
+        anyhow::bail!("namako status returned empty output");
+    }
+
+    Ok(stdout)
 }
 
 fn run_namako_review(
     namako: &str,
     adapter: &str,
     spec_root: &PathBuf,
-    out_path: &PathBuf,
     logger: &logging::JsonlLogger,
-) -> Result<()> {
+) -> Result<String> {
     let args: Vec<&str> = namako.split_whitespace().collect();
     let (program, namako_args) = args.split_first().context("Empty namako command")?;
 
@@ -766,8 +766,6 @@ fn run_namako_review(
     cmd_args.push("review".to_string());
     cmd_args.push("-a".to_string());
     cmd_args.push(adapter.to_string());
-    cmd_args.push("--out".to_string());
-    cmd_args.push(out_path.display().to_string());
 
     log_command_run(logger, "namako", &cmd_args, spec_root, None);
     let output = Command::new(program)
@@ -783,7 +781,12 @@ fn run_namako_review(
         anyhow::bail!("namako review failed: {}", stderr);
     }
 
-    Ok(())
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if stdout.trim().is_empty() {
+        anyhow::bail!("namako review returned empty output");
+    }
+
+    Ok(stdout)
 }
 
 fn run_namako_explain(
@@ -1244,11 +1247,11 @@ use crate::codex_agent::CodexAgent;
         None
     };
 
-    run_namako_status(&namako, &adapter, &spec_root, &status_path, run_report_opt, logger)?;
-    run_namako_review(&namako, &adapter, &spec_root, &review_path, logger)?;
-
-    let status_json = fs::read_to_string(&status_path)?;
-    let review_json = fs::read_to_string(&review_path)?;
+    let status_json =
+        run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
+    fs::write(&status_path, &status_json)?;
+    let review_json = run_namako_review(&namako, &adapter, &spec_root, logger)?;
+    fs::write(&review_path, &review_json)?;
 
     let status_packet = parse_status_json(&status_json)?;
     let review_packet = parse_review_json(&review_json)?;
@@ -1477,11 +1480,12 @@ use crate::codex_agent::CodexAgent;
 
         let post_status_path = out_dir.join("status.post.json");
         let post_review_path = out_dir.join("review.post.json");
-        run_namako_status(&namako, &adapter, &spec_root, &post_status_path, run_report_opt, logger)?;
-        run_namako_review(&namako, &adapter, &spec_root, &post_review_path, logger)?;
+        let post_status_json =
+            run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
+        fs::write(&post_status_path, &post_status_json)?;
+        let post_review_json = run_namako_review(&namako, &adapter, &spec_root, logger)?;
+        fs::write(&post_review_path, &post_review_json)?;
 
-        let post_status_json = fs::read_to_string(&post_status_path)?;
-        let post_review_json = fs::read_to_string(&post_review_path)?;
         let post_status_packet = parse_status_json(&post_status_json)?;
         let post_review_packet = parse_review_json(&post_review_json)?;
         let post_gate_packet = parse_gate_json(&post_gate_json)?;

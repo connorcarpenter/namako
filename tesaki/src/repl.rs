@@ -4,13 +4,14 @@ use anyhow::{Context, Result};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
 use crate::allowlist::validate_command;
 use crate::chat_plan::{
     AllowedCommand, ChatPlan, ChatTurnInput, CommandResult, MissionProposal,
     SurfaceLock as PlanSurfaceLock, SurfacePolicy as PlanSurfacePolicy,
 };
-use crate::chat_planner::{ChatPlanner, CmdChatPlanner, MockChatPlanner};
+use crate::chat_planner::{ChatPlanner, MockChatPlanner};
 use crate::claude_code_agent::ClaudeCodeAgent;
 use crate::config::{self, ConfigDiscoveryResult};
 use crate::codex_agent::CodexAgent;
@@ -55,11 +56,11 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
     let planner_name = config.planner.as_deref().unwrap_or("mock");
     if config.planner.is_none() {
         println!(
-            "Planner not configured. Set `planner = \"mock\" | \"cmd\" | \"codex\" | \"claude\"` in .tesaki/config.toml."
+            "Planner not configured. Set `planner = \"mock\" | \"codex\" | \"claude\"` in .tesaki/config.toml."
         );
     } else if planner_name == "mock" {
         println!(
-            "Planner is set to \"mock\". To enable interactive planning, set `planner = \"cmd\" | \"codex\" | \"claude\"` in .tesaki/config.toml."
+            "Planner is set to \"mock\". To enable interactive planning, set `planner = \"codex\" | \"claude\"` in .tesaki/config.toml."
         );
     }
 
@@ -70,46 +71,29 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
             mission_proposal: None,
             done: true,
         })),
-        "cmd" => {
-            let cmd = config.planner_cmd.clone()
-                .ok_or_else(|| anyhow::anyhow!("planner_cmd required when planner = \"cmd\""))?;
-            Box::new(CmdChatPlanner::new(cmd, spec_root.clone()))
-        }
         "codex" => {
             if let Err(err) = CodexAgent::check_available() {
-                println!("Codex planner unavailable: {}", err);
-                Box::new(MockChatPlanner::new(ChatPlan {
-                    say: "Planner not configured. Set planner in .tesaki/config.toml.".to_string(),
-                    run: vec![],
-                    mission_proposal: None,
-                    done: true,
-                }))
-            } else {
-                Box::new(CodexAgent::new_with_timeout(
-                    config.runner_cmd.clone(),
-                    config.planner_cmd.clone(),
-                    spec_root.clone(),
-                    Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
-                )?)
+                anyhow::bail!("Codex planner unavailable: {}", err);
             }
+            Box::new(CodexAgent::new_with_timeout_and_stream(
+                config.runner_cmd.clone(),
+                config.planner_cmd.clone(),
+                spec_root.clone(),
+                Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
+                true,
+            )?)
         }
         "claude" => {
             if let Err(err) = ClaudeCodeAgent::check_available() {
-                println!("Claude planner unavailable: {}", err);
-                Box::new(MockChatPlanner::new(ChatPlan {
-                    say: "Planner not configured. Set planner in .tesaki/config.toml.".to_string(),
-                    run: vec![],
-                    mission_proposal: None,
-                    done: true,
-                }))
-            } else {
-                Box::new(ClaudeCodeAgent::new_with_timeout(
-                    config.runner_cmd.clone(),
-                    config.planner_cmd.clone(),
-                    spec_root.clone(),
-                    Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
-                )?)
+                anyhow::bail!("Claude planner unavailable: {}", err);
             }
+            Box::new(ClaudeCodeAgent::new_with_timeout_and_stream(
+                config.runner_cmd.clone(),
+                config.planner_cmd.clone(),
+                spec_root.clone(),
+                Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
+                true,
+            )?)
         }
         other => anyhow::bail!("Unsupported planner backend: {}", other),
     };
@@ -186,11 +170,18 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
                 .ok()
                 .as_deref()
                 == Some("1");
+            println!("Planner ({}) running...", planner.name());
+            let plan_start = Instant::now();
             let plan_result = if simulate_bad_plan {
                 Err(anyhow::anyhow!("Simulated invalid JSON from planner"))
             } else {
                 planner.plan_turn(&planner_input)
             };
+            println!(
+                "Planner ({}) finished in {:.1}s",
+                planner.name(),
+                plan_start.elapsed().as_secs_f64()
+            );
 
             let plan = match plan_result {
                 Ok(plan) => plan,
@@ -281,16 +272,10 @@ fn refresh_repo_state(
     let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
     let gate_packet = parse_gate_json(&gate_json)?;
 
-    let out_dir = spec_root.join("target/namako_artifacts/tesaki");
-    std::fs::create_dir_all(&out_dir)?;
-    let status_path = out_dir.join("status.json");
-    let review_path = out_dir.join("review.json");
-
-    crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), &status_path, None, logger)?;
-    crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), &review_path, logger)?;
-
-    let status_json = std::fs::read_to_string(&status_path)?;
-    let review_json = std::fs::read_to_string(&review_path)?;
+    let status_json =
+        crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
+    let review_json =
+        crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
 
     let status_packet = parse_status_json(&status_json)?;
     let review_packet = parse_review_json(&review_json)?;

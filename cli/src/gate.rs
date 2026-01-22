@@ -530,7 +530,7 @@ fn generate_review(args: &GateArgs, output_path: &PathBuf) -> Result<()> {
     let review_args = ReviewArgs {
         specs_dir: args.specs_dir.clone(),
         adapter_cmd: args.adapter_cmd.clone(),
-        out: output_path.clone(),
+        out: Some(output_path.clone()),
         top: 25,
         include_deferred: true,
         verbose: false,

@@ -29,9 +29,9 @@ pub struct ReviewArgs {
     #[arg(short = 'a', long)]
     pub adapter_cmd: String,
 
-    /// Output path for review JSON file (required).
+    /// Output path for review JSON file. If omitted, prints to stdout.
     #[arg(long)]
-    pub out: PathBuf,
+    pub out: Option<PathBuf>,
 
     /// Maximum number of promotion candidates to include.
     #[arg(long, default_value = "25")]
@@ -231,17 +231,23 @@ pub fn run(args: ReviewArgs) -> Result<()> {
     let json = serde_json::to_string_pretty(&output)
         .context("Failed to serialize review output")?;
 
-    // Ensure parent directory exists
-    if let Some(parent) = args.out.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+    if let Some(ref out_path) = args.out {
+        // Ensure parent directory exists
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+
+        std::fs::write(out_path, &json)
+            .with_context(|| format!("Failed to write review to {}", out_path.display()))?;
+    } else {
+        println!("{}", json);
     }
 
-    std::fs::write(&args.out, &json)
-        .with_context(|| format!("Failed to write review to {}", args.out.display()))?;
-
     if args.verbose {
-        eprintln!("✓ Review written to: {}", args.out.display());
+        if let Some(ref out_path) = args.out {
+            eprintln!("✓ Review written to: {}", out_path.display());
+        }
         eprintln!("  Features: {}", output.features.len());
         eprintln!("  Executable scenarios: {}", output.coverage_summary.executable_scenarios_total);
         eprintln!("  Deferred items: {}", output.coverage_summary.deferred_items_total);
