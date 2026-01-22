@@ -18,8 +18,9 @@ set -euo pipefail
 # Capture the original working directory for config discovery
 ORIGINAL_CWD="$(pwd)"
 
-# Determine the directory where this script lives
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Determine the directory where this script lives (resolve symlink)
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
 # The repository root is the parent of scripts/
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
