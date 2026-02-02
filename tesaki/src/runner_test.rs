@@ -92,6 +92,7 @@ impl Runner for MockRunner {
             stdout_path: None,
             stderr_path: None,
             error_message: None,
+            token_usage: None,
         })
     }
 

@@ -2,6 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::token_usage::TokenUsage;
+
 /// Configuration for mission execution.
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
@@ -30,6 +32,9 @@ pub struct RunnerOutcome {
     pub stderr_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
+    /// Token usage parsed from runner stderr (if available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

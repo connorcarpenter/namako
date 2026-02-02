@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::stage::Stage;
 use crate::surface_policy::{SurfaceLock, SurfacePolicy};
 
+// Re-export token stats types from token_usage module for backwards compatibility
+pub use crate::token_usage::SessionTokenStats;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionIntent {
     pub stage: Option<Stage>,
@@ -112,6 +115,12 @@ pub struct SessionState {
     pub recent_missions: Vec<String>,
     pub chat_summary: Option<String>,
     pub last_repo_state_summary: Option<String>,
+    /// Token usage statistics for the current session.
+    #[serde(default)]
+    pub token_stats: SessionTokenStats,
+    /// Initial issue count at session start (for summary calculation).
+    #[serde(default)]
+    pub initial_issue_count: usize,
 }
 
 fn extract_scenario_tag(message: &str) -> Option<String> {

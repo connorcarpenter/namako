@@ -405,10 +405,17 @@ Still needed:
 
 ## Part 7: Implementation Sprints
 
-### Sprint 1: Token Feedback (Foundation) — 3 items
-1. [ ] 1.1 Parse and store token usage from runner stderr
-2. [ ] 1.1 Display token usage in console after each mission
-3. [ ] 1.2 Session end summary with token breakdown
+### Sprint 1: Token Feedback (Foundation) — 3 items ✅ COMPLETE
+1. [x] 1.1 Parse and store token usage from runner stderr
+2. [x] 1.1 Display token usage in console after each mission
+3. [x] 1.2 Session end summary with token breakdown
+
+**Implementation Notes (2026-02-02):**
+- Created `tesaki/src/token_usage.rs` (603 lines) — dedicated module with regex-based parsing
+- TokenUsage stored in RunnerOutcome and saved to `RUNNER_OUTPUT/token_usage.json`
+- SessionTokenStats aggregates by mission type with premium request tracking
+- 12 comprehensive tests covering parsing, formatting, and aggregation
+- Displays: `📊 Tokens: 1.0M in, 6.0k out (935.5k cached) | Model: opus | Premium: 3`
 
 ### Sprint 2: Model Tiering — 4 items
 4. [ ] 2.2 Add `recommended_model()` to MissionType
@@ -510,3 +517,15 @@ With token feedback:
 *Plan version: 1.9*
 *Author: Copilot CLI with human guidance*
 *Last updated: 2026-02-02*
+
+---
+
+## Implementation Status
+
+| Sprint | Status | Notes |
+|--------|--------|-------|
+| Sprint 1: Token Feedback | ✅ COMPLETE | All 3 items done, 12 tests added |
+| Sprint 2: Model Tiering | ⏳ NEXT | 4 items pending |
+| Sprint 3: Quality Context | ⏳ | 3 items pending |
+| Sprint 4: System Reliability | ⏳ | 4 items pending |
+| Sprint 5: Momentum & Polish | ⏳ | 4 items pending |

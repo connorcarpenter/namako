@@ -19,6 +19,7 @@ use crate::repo_state::RepoState;
 use crate::session::{PendingMission, SessionState};
 use crate::stage::{detect_stage, Stage, StageConstraint};
 use crate::surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy};
+use crate::token_usage::{MissionTokenStats, TokenUsage};
 
 const DEFAULT_PLANNER_TIMEOUT_SECONDS: u64 = 60;
 
@@ -607,6 +608,20 @@ fn run_autonomous_loop(
     
     let mut stall_count = 0;
     const MAX_STALLS: u32 = 3;
+    let loop_start = Instant::now();
+    
+    // Record initial issue count for session summary
+    {
+        let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let gate_packet = parse_gate_json(&gate_json)?;
+        let status_json = crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
+        let review_json = crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let status_packet = parse_status_json(&status_json)?;
+        let review_packet = parse_review_json(&review_json)?;
+        let initial_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+        session.initial_issue_count = initial_state.spec_issues.len() + initial_state.binding_issues.len()
+            + initial_state.sut_issues.len() + initial_state.structure_issues.len();
+    }
     
     for iteration in 1..=max_iterations {
         // Refresh state from Namako
@@ -692,6 +707,24 @@ fn run_autonomous_loop(
         }
         println!("Elapsed: {:.1}s", elapsed.as_secs_f64());
         
+        // Read token usage from latest mission and display/record it
+        let token_usage = read_latest_token_usage(spec_root);
+        if let Some(ref usage) = token_usage {
+            println!("{}", usage.to_display_line());
+            
+            // Record in session stats
+            let mission_stats = MissionTokenStats {
+                mission_type: mission_type.name().to_string(),
+                tokens_in: usage.tokens_in,
+                tokens_out: usage.tokens_out,
+                tokens_cached: usage.tokens_cached,
+                premium_requests: usage.premium_requests,
+                model: usage.model.clone(),
+                elapsed_seconds: elapsed.as_secs_f64(),
+            };
+            session.token_stats.record_mission(&mission_stats, runner_succeeded);
+        }
+        
         // Refresh state AFTER mission
         refresh_repo_state(spec_root, adapter, namako_cmd, session, logger)?;
         
@@ -760,11 +793,35 @@ fn run_autonomous_loop(
     
     // Final summary
     refresh_repo_state(spec_root, adapter, namako_cmd, session, logger)?;
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("AUTONOMOUS LOOP FINISHED");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    if let Some(summary) = &session.last_repo_state_summary {
-        println!("Final state: {}", summary);
+    
+    // Get final issue count for summary
+    let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+    let gate_packet = parse_gate_json(&gate_json)?;
+    let status_json = crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
+    let review_json = crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+    let status_packet = parse_status_json(&status_json)?;
+    let review_packet = parse_review_json(&review_json)?;
+    let final_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+    let final_issues = final_state.spec_issues.len() + final_state.binding_issues.len() 
+        + final_state.sut_issues.len() + final_state.structure_issues.len();
+    
+    // Calculate session duration (use wall clock time from loop_start)
+    let session_duration = loop_start.elapsed().as_secs_f64();
+    
+    // Print token stats summary if we have any
+    if session.token_stats.missions_completed > 0 || session.token_stats.missions_failed > 0 {
+        println!("{}", session.token_stats.format_summary(
+            session.initial_issue_count,
+            final_issues,
+            session_duration
+        ));
+    } else {
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("AUTONOMOUS LOOP FINISHED");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        if let Some(summary) = &session.last_repo_state_summary {
+            println!("Final state: {}", summary);
+        }
     }
     
     Ok(())
@@ -819,4 +876,31 @@ fn format_mission_success(
         }
         _ => None,
     }
+}
+
+/// Read the most recent token_usage.json from the mission directory.
+/// Looks in .tesaki/missions/ for the latest mission bundle.
+fn read_latest_token_usage(spec_root: &Path) -> Option<TokenUsage> {
+    let missions_dir = spec_root.join(".tesaki/missions");
+    if !missions_dir.exists() {
+        return None;
+    }
+    
+    // Find the most recent mission directory (sorted by name, which includes timestamp)
+    let mut entries: Vec<_> = std::fs::read_dir(&missions_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    
+    entries.sort_by_key(|e| e.path());
+    let latest = entries.last()?;
+    
+    let token_path = latest.path().join("RUNNER_OUTPUT/token_usage.json");
+    if !token_path.exists() {
+        return None;
+    }
+    
+    let content = std::fs::read_to_string(&token_path).ok()?;
+    serde_json::from_str(&content).ok()
 }

@@ -8,7 +8,8 @@
 
 - **Mode:** CONSUMPTION (toolchain complete, now improving it)
 - **Tesaki:** v1.8 working, autonomous loop functional
-- **Next:** Implement v1.9 improvements per `IMPL_PLAN_v_1_9.md`
+- **Sprint 1 COMPLETE:** Token Feedback fully implemented
+- **Next:** Implement Sprint 2 (Model Tiering) per `IMPL_PLAN_v_1_9.md`
 
 ---
 
@@ -40,10 +41,11 @@ cd naia && namako gate -s test/specs -a "cargo run --manifest-path test/npa/Carg
 | File | Purpose |
 |------|---------|
 | `IMPL_PLAN_v_1_9.md` | **THE PLAN** — 5 sprints, 18 work items |
-| `tesaki/src/mission_type.rs` | Add `recommended_model()` |
-| `tesaki/src/base_runner.rs` | Parse token usage from stderr |
+| `tesaki/src/token_usage.rs` | ✅ NEW: Token parsing, aggregation, display (Sprint 1) |
+| `tesaki/src/mission_type.rs` | Add `recommended_model()` (Sprint 2) |
+| `tesaki/src/base_runner.rs` | Uses TokenUsage::parse() for stderr |
 | `tesaki/src/repl.rs` | Display token stats, session summary |
-| `tesaki/src/config.rs` | Model override config |
+| `tesaki/src/config.rs` | Model override config (Sprint 2) |
 
 ---
 

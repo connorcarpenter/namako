@@ -23,4 +23,5 @@ pub mod session;
 pub mod stage;
 pub mod stop_reason;
 pub mod surface_policy;
+pub mod token_usage;
 pub mod workspace;

@@ -3,6 +3,7 @@
 //! This module contains common code shared by both CLI-based runners to avoid duplication.
 
 use crate::runner::{OutcomeClassification, RunnerConfig, RunnerOutcome};
+use crate::token_usage::TokenUsage;
 use anyhow::Result;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
@@ -183,6 +184,7 @@ pub(crate) fn run_cli_runner(
             stdout_path: None,
             stderr_path: None,
             error_message: Some("Empty command".to_string()),
+            token_usage: None,
         });
     }
 
@@ -212,6 +214,7 @@ pub(crate) fn run_cli_runner(
                     mission_path.display(),
                     e
                 )),
+                token_usage: None,
             });
         }
     };
@@ -234,6 +237,7 @@ pub(crate) fn run_cli_runner(
                 stdout_path: None,
                 stderr_path: None,
                 error_message: Some(format!("Failed to start runner: {}", e)),
+                token_usage: None,
             });
         }
     };
@@ -250,6 +254,7 @@ pub(crate) fn run_cli_runner(
                 stdout_path: None,
                 stderr_path: None,
                 error_message: Some(format!("Failed to write prompt to stdin: {}", e)),
+                token_usage: None,
             });
         }
         // stdin is dropped here, closing the pipe
@@ -269,6 +274,7 @@ pub(crate) fn run_cli_runner(
                     "Runner exceeded timeout of {} seconds",
                     config.max_runtime_seconds
                 )),
+                token_usage: None,
             });
         }
         Err(e) => {
@@ -279,6 +285,7 @@ pub(crate) fn run_cli_runner(
                 stdout_path: None,
                 stderr_path: None,
                 error_message: Some(format!("Error waiting for runner: {}", e)),
+                token_usage: None,
             });
         }
     };
@@ -326,6 +333,19 @@ pub(crate) fn run_cli_runner(
         None
     };
 
+    // Parse token usage from stderr using the dedicated module
+    let stderr_str = String::from_utf8_lossy(&output.stderr);
+    let token_usage = TokenUsage::parse(&stderr_str);
+    let token_usage = if token_usage.has_data() { Some(token_usage) } else { None };
+
+    // Write token usage to RUNNER_OUTPUT if present
+    if let Some(ref usage) = token_usage {
+        let usage_path = output_dir.join("token_usage.json");
+        if let Ok(usage_json) = serde_json::to_string_pretty(usage) {
+            let _ = std::fs::write(&usage_path, usage_json);
+        }
+    }
+
     Ok(RunnerOutcome {
         exit_code,
         classification,
@@ -333,6 +353,7 @@ pub(crate) fn run_cli_runner(
         stdout_path,
         stderr_path,
         error_message,
+        token_usage,
     })
 }
 

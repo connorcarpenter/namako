@@ -39,6 +39,7 @@ mod session;
 mod stage;
 mod stop_reason;
 mod surface_policy;
+mod token_usage;
 mod workspace;
 
 use anyhow::{Context, Result};
