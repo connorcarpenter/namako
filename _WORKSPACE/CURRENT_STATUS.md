@@ -1,15 +1,15 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
-**Last Updated:** 2026-01-21
-**MODE:** CONSUMPTION (v1.7 Runner Integration VERIFIED; using Tesaki Product Loop)
+**Last Updated:** 2026-02-02
+**MODE:** CONSUMPTION (v1.8 REPL + Autonomous SDD Loop VERIFIED)
 
 ---
 
 ## Executive Summary
 
-**Namako v1 is FUNCTIONALLY COMPLETE.** All core components specified in GOLD_PLAN.md Parts 1–10 are implemented and operational.
+**Namako v1.8 is FUNCTIONALLY COMPLETE.** The Tesaki interactive REPL with autonomous SDD loop is operational.
 
-**Namako v1.5 EXPLICIT ID TAGS is COMPLETE.** Implementation of stable, refactor-safe scenario identity system finished. Ready for production use.
+**Tesaki + Copilot autonomous loop successfully drove naia bindings from 35 → 0 in 8 missions (~20 min).**
 
 | Milestone | Status |
 |-----------|--------|
@@ -20,68 +20,70 @@
 | Bootstrap Exit Criteria | ✅ ALL SATISFIED |
 | **Namako v1.5 Explicit ID Tags** | ✅ **COMPLETE** |
 | **Namako v1.7 Runner Integration** | ✅ **VERIFIED** |
+| **Namako v1.8 Interactive REPL** | ✅ **VERIFIED** |
 | **CONSUMPTION Mode** | ✅ **ACTIVE** |
 
 ---
 
-## v1.7 Runner Integration — IMPLEMENTED
+## v1.8 Interactive Developer Experience — VERIFIED
 
-**See GOLD_PLAN.md §10.7 for normative specification.**
-
-v1.7 implements the autonomous Product Loop where Tesaki orchestrates a coding agent (runner) to drive spec-driven development.
-
-| Component | Status | Description |
-|-----------|--------|-------------|
-| Mission Bundle | ✅ | `tesaki/src/mission.rs` - Filesystem contract |
-| `tesaki run` | ✅ | Single-command UX entrypoint |
-| Runner Backends | ✅ | Mock, ClaudeCode, Codex in `tesaki/src/{runner.rs, claude_code_runner.rs, codex_runner.rs}` |
-| Stop Conditions | ✅ | DONE, BLOCKED, BUDGET, etc. in `tesaki/src/stop_reason.rs` |
-| Workspace Tracking | ✅ | `tesaki/src/workspace.rs` - Change detection |
-| Gate Outcome Classification | ✅ | `tesaki/src/gate.rs` - GateOutcome + UpdateCertInvoker |
-| Update-Cert Governance | ✅ | Automatic update-cert for verify-only failures, bounded by `--max-cert-updates` |
-| Retry Logic | ✅ | Retry loop for retryable failures, bounded by `--max-retries` |
-| **Config Discovery** | ✅ | `tesaki/src/config.rs` - `.tesaki/config.toml` auto-discovery |
-| **Dev Shim Scripts** | ✅ | `scripts/tesaki` + `scripts/install-tesaki-dev-shim` |
-
-**Current state:** Implementation verified. CONSUMPTION mode active.
-
-**Usage (with config discovery — zero flags):**
-```bash
-# One-time setup: install dev shim
-./scripts/install-tesaki-dev-shim
-
-# Create .tesaki/config.toml in target repo (e.g., naia/)
-# Then run from anywhere in the repo:
-tesaki run
-tesaki config print
-```
-
-**Usage (explicit flags):**
-```bash
-# From namako/ directory:
-cargo run -p tesaki -- run \
-  -s <specs_dir> \
-  -a "<adapter_cmd>" \
-  --runner mock  # or claude, codex, cmd
-```
-
-**Next step:** Drive CORE work items through `tesaki run` Product Loop.
-
----
-
-## v1.8 Interactive Developer Experience — IMPLEMENTED
-
-**Scope:** Interactive REPL session, allowlisted command execution, session intents, mission proposals with explicit approval, and post-gate summaries.
+**Scope:** Interactive REPL session with Copilot/Claude/Codex planner+runner backends, autonomous mission loop.
 
 | Component | Status | Description |
 |-----------|--------|-------------|
 | REPL entrypoint | ✅ | `tesaki` (no subcommand) starts interactive session |
-| Chat planner | ✅ | Plan-only JSON planner (`mock`/`codex`/`claude`) |
-| Allowlist | ✅ | Only `namako`/`tesaki` commands permitted |
-| Session state | ✅ | Stage lens + surface locks + pending mission tracking |
+| Chat planner | ✅ | `mock`/`codex`/`claude`/`copilot` backends |
+| Runner backends | ✅ | `mock`/`cmd`/`claude`/`codex`/`copilot` |
+| `loop N` command | ✅ | Autonomous mission iteration |
 | Mission proposals | ✅ | Proposal display with explicit approval gating |
 | Propagation summary | ✅ | RepoState ripple summary printed in-session |
 | Post-gate summaries | ✅ | Post-mission gate run + RepoState refresh |
+| Config discovery | ✅ | `.tesaki/config.toml` auto-discovery |
+| Copilot CLI support | ✅ | Full planner + runner integration |
+
+### Autonomous Loop Results (2026-02-02)
+
+| Mission | Duration | Before | After | Δ |
+|---------|----------|--------|-------|---|
+| 1 | 166s | 27 | 26 | -1 |
+| 2 | 104s | 26 | 18 | -8 |
+| 3 | 198s | 18 | 17 | -1 |
+| 4 | 122s | 17 | 16 | -1 |
+| 5 | 291s | 16 | 12 | -4 |
+| 6 | 126s | 12 | 6 | -6 |
+| 7 | 170s | 6 | 4 | -2 |
+| 8 | 163s | 4 | 0 | -4 |
+
+**Total:** 35 → 0 bindings in 8 missions (~20 min)
+
+---
+
+## Quick Start for New Agents
+
+### 1. Setup (one-time)
+```bash
+cd naia
+# Config already exists at .tesaki/config.toml
+```
+
+### 2. Run Autonomous Loop
+```bash
+tesaki
+> loop 10   # Run up to 10 missions autonomously
+```
+
+### 3. Manual Mission Execution
+```bash
+tesaki
+> propose a mission
+> run it
+```
+
+### 4. Check Status
+```bash
+namako lint --adapter-cmd "cargo run --manifest-path test/npa/Cargo.toml --" --specs-dir test/specs
+namako gate --adapter-cmd "cargo run --manifest-path test/npa/Cargo.toml --" --specs-dir test/specs
+```
 
 ---
 

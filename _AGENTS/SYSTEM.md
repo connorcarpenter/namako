@@ -1,75 +1,142 @@
-# Namako - AI Coding Instructions
+# Namako + Tesaki — AI Coding Agent Instructions
 
-Namako is a native Rust BDD testing framework supporting async tests (via `tokio`), Gherkin feature files, and compile-time step wiring.
+## Overview
 
-## Big Picture Architecture
+This repository contains two tools for Spec-Driven Development (SDD):
 
-- **Core (`src/`)**: Implements the runner, event loop, parser (Gherkin), and reporting logic.
-- **Codegen (`codegen/`)**: Procedural macros (`#[given]`, `#[when]`, `#[then]`, `#[derive(World)]`, `#[derive(Parameter)]`) for auto-wiring step definitions.
-- **World Trait**: The central state container for test scenarios. Each scenario gets a fresh `World` instance.
-- **Runner**: Orchestrates test execution. Configurable via `World::namako()`. Supports lifecycle hooks (`before`, `after`) and parallel execution.
-- **Dependencies**: Heavily relies on `tokio` for async runtime, `gherkin` crate for parsing, and `inventory` for collecting step definitions from disparate modules.
+1. **Namako** - BDD testing framework + CLI (measures truth)
+2. **Tesaki** - AI task orchestrator (drives development)
 
-## Critical Workflows
+## Quick Start
 
-### Running Tests
-- Use `cargo test` to run all tests, including Namako integration tests.
-- Namako tests are typically defined in `tests/*.rs` files (integration tests) which configure a `World` and run against `.feature` files in `tests/features/`.
+```bash
+# Run tesaki autonomous loop on a target repo
+cd <target-repo>  # e.g., naia
+tesaki
+> loop 10   # Run up to 10 missions
 
-### Creating New Tests
-1.  **Feature File**: Create `tests/features/my_feature.feature` using Gherkin syntax.
-2.  **Step Definitions**: Create/update a `tests/*.rs` file (e.g., `tests/my_test.rs`) or a module within it.
-3.  **Implement Steps**:
-    ```rust
-    // Async step with capture
-    #[given("I have {int} cucumbers")]
-    async fn init_cucumbers(world: &mut MyWorld, count: usize) {
-        world.cucumbers = count;
-    }
-    
-    // Sync step using Cucumber Expression
-    #[when("I eat {int} cucumbers")]
-    fn eat_cucumbers(world: &mut MyWorld, count: usize) {
-        world.cucumbers -= count;
-    }
-    ```
-4.  **Wire up Runner**:
-    ```rust
-    #[tokio::main]
-    async fn main() {
-        MyWorld::namako()
-            .run_and_exit("tests/features/my_feature.feature")
-            .await;
-    }
-    ```
+# Or run single commands
+namako lint --adapter-cmd "<adapter>" --specs-dir <specs>
+namako gate --adapter-cmd "<adapter>" --specs-dir <specs>
+```
 
-## Conventions & Patterns
+## Repository Structure
 
-- **World Derivation**: Always use `#[derive(World)]` for the state struct to reduce boilerplate.
-    ```rust
-    #[derive(Debug, World)]
-    #[world(init = Self::new)] // Optional custom init
-    pub struct MyWorld { ... }
-    ```
-- **Step Attributes**: Use `given/when/then` attributes with string literals for matching.
+```
+namako/
+├── src/           # Namako core library
+├── cli/           # namako-cli binary
+├── codegen/       # Step macros (#[given], #[when], #[then])
+├── tesaki/        # Tesaki AI orchestrator
+│   └── src/
+│       ├── main.rs           # CLI + REPL entrypoint
+│       ├── repl.rs           # Interactive session
+│       ├── chat_planner.rs   # LLM planner interface
+│       ├── copilot_agent.rs  # GitHub Copilot CLI backend
+│       ├── claude_code_agent.rs
+│       ├── codex_agent.rs
+│       ├── mission.rs        # Mission bundle management
+│       ├── repo_state.rs     # Computed state from packets
+│       └── issue_classifier.rs
+└── _WORKSPACE/    # Documentation
+```
 
-- **Parameter Derivation**: Use `#[derive(Parameter)]` for custom types captured in steps.
-    ```rust
-    #[derive(Parameter, FromStr)]
-    #[param(regex = "on|off")]
-    enum Switch { On, Off }
-    ```
-- **Async First**: The framework is designed for `async`. Use `#[tokio::main]` for the test entry point.
-- **Context Injection**: Use `#[step] ctx: &Step` in function arguments to access raw step data.
+## Namako CLI Commands
 
-## Integration & Dependencies
+| Command | Description |
+|---------|-------------|
+| `namako lint` | Parse specs, resolve bindings → `resolved_plan.json` |
+| `namako gate` | Full CI: lint → run → verify |
+| `namako status` | JSON status packet |
+| `namako review` | Work backlog packet |
+| `namako explain` | Scenario traceability |
+| `namako verify` | Compare current vs baseline certification |
+| `namako update-cert` | Update baseline certification |
 
-- **Gherkin**: Steps match `.feature` files parsed by the `gherkin` crate.
-- **CLI**: The standard runner allows integrating `clap` for custom CLI arguments via `.with_cli(opts)`.
-- **Writers**: Use `.with_writer(writer::Libtest::or_basic())` for standard output formats (JSON, etc.).
+## Tesaki Commands
 
-## Key Files
-- `src/lib.rs`: Exports the public API and `World` trait.
-- `codegen/src/lib.rs`: Macros implementation.
-- `tests/cli.rs`: Example of full runner configuration with CLI.
-- `tests/features/`: Directory containing Gherkin specifications.
+| Command | Description |
+|---------|-------------|
+| `tesaki` | Start interactive REPL |
+| `tesaki run` | Execute single mission cycle |
+
+### REPL Commands
+- `loop N` - Run N missions autonomously
+- `propose a mission` - Ask planner for next mission
+- `run it` - Execute proposed mission
+- `exit` - Quit REPL
+
+## Configuration
+
+Target repos need `.tesaki/config.toml`:
+
+```toml
+specs_dir = "test/specs"
+adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
+runner = "copilot"       # or: claude, codex, mock, cmd
+planner = "copilot"      # or: claude, codex, mock
+max_retries = 0          # Recommended: don't retry
+max_cert_updates = 3
+max_runtime_seconds = 600
+```
+
+## Runner Backends
+
+| Backend | Command Pattern |
+|---------|-----------------|
+| `copilot` | `copilot -p @{mission}/MISSION.md --allow-all --add-dir {cwd}` |
+| `claude` | `claude -p {mission}/MISSION.md --allowedTools all` |
+| `codex` | `codex -q --approval-mode full-auto -f {mission}/MISSION.md` |
+| `mock` | Always succeeds (for testing) |
+| `cmd` | Custom command via `runner_cmd` config |
+
+## Step Binding Pattern
+
+```rust
+use cucumber::{given, when, then};
+
+#[given("a client connection")]
+async fn client_connection(world: &mut MyWorld) {
+    world.client.connect();
+}
+
+#[when("data is sent")]
+async fn send_data(world: &mut MyWorld) {
+    world.client.send(data);
+}
+
+#[then("the server receives it")]
+async fn server_receives(world: &mut MyWorld) {
+    assert!(world.server.received());
+}
+```
+
+## Key Insights from Testing
+
+1. **`max_retries = 0`** - Fresh context beats stale retries
+2. **Small missions** - Focus on one task at a time
+3. **Progress-based success** - Partial progress is still success
+4. **Spec is truth** - Namako measures, doesn't opine
+
+## Editing Namako/Tesaki Code
+
+```bash
+# Build
+cargo build -p namako-cli -p tesaki
+
+# Test
+cargo test -p namako-cli   # 29 tests
+cargo test -p tesaki       # 132 tests
+
+# Run from source
+cargo run -p tesaki -- --help
+cargo run -p namako-cli -- --help
+```
+
+## Files to Read First
+
+1. `_WORKSPACE/CURRENT_STATUS.md` - Overall project status
+2. `_WORKSPACE/DEV_EX.md` - Developer experience design
+3. `_WORKSPACE/UX_TEST_LOG.md` - Lessons from testing
+4. `tesaki/src/main.rs` - CLI entrypoint
+5. `tesaki/src/repl.rs` - Interactive session logic
