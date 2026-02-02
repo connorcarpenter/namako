@@ -93,6 +93,10 @@ pub struct Config {
     /// Optional surface definitions (glob patterns)
     #[serde(default)]
     pub surfaces: Option<SurfacesConfig>,
+
+    /// Optional model overrides for intelligent tiering
+    #[serde(default)]
+    pub model_overrides: Option<ModelOverrides>,
 }
 
 /// Surface patterns override
@@ -110,6 +114,28 @@ pub struct SurfacesConfig {
     pub tests: Option<SurfaceConfig>,
     #[serde(default)]
     pub sut: Option<SurfaceConfig>,
+}
+
+/// Model override configuration for intelligent model tiering.
+///
+/// Allows per-project customization of which models to use for each mission type,
+/// or forcing a single model for all missions.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ModelOverrides {
+    /// Force all missions to use this model (ignores per-type recommendations)
+    #[serde(default)]
+    pub force_model: Option<String>,
+
+    /// Per-mission-type model overrides (e.g., "CreateMissingBindings" = "opus")
+    #[serde(flatten)]
+    pub overrides: std::collections::HashMap<String, String>,
+}
+
+impl ModelOverrides {
+    /// Get the model override for a specific mission type name.
+    pub fn get_override(&self, mission_type_name: &str) -> Option<&String> {
+        self.overrides.get(mission_type_name)
+    }
 }
 
 /// Resolved configuration with all paths made absolute
@@ -162,6 +188,9 @@ pub struct ResolvedConfig {
 
     /// Surface definitions overrides
     pub surfaces: Option<SurfacesConfig>,
+
+    /// Model overrides for intelligent tiering
+    pub model_overrides: Option<ModelOverrides>,
 }
 
 impl ResolvedConfig {
@@ -269,6 +298,7 @@ fn resolve_config(config: Config, config_root: &Path, config_path: &Path) -> Res
         max_runtime_seconds: config.max_runtime_seconds,
         max_files_changed: config.max_files_changed,
         surfaces: config.surfaces,
+        model_overrides: config.model_overrides,
     })
 }
 

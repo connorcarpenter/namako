@@ -25,6 +25,7 @@ mod logging;
 mod mission;
 mod mission_selector;
 mod mission_type;
+mod model_tier;
 mod packet_parser;
 mod prompts;
 mod repl;
@@ -1134,11 +1135,13 @@ fn run_run(
     surfaces: Option<config::SurfacesConfig>,
     surface_overrides: Option<crate::surface_policy::SurfacePolicy>,
     allow_dirty: bool,
+    model_overrides: Option<config::ModelOverrides>,
     logger: &logging::JsonlLogger,
 ) -> Result<()> {
     use crate::mission::{MissionBundle, MissionBudgets, MissionInputs};
     use crate::mission::SurfaceDefinitions;
     use crate::mission_selector::select_with_constraints;
+    use crate::model_tier::select_model_for_attempt;
     use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
     use crate::runner::{Runner, RunnerConfig, OutcomeClassification};
     use crate::runner_test::MockRunner;
@@ -1385,6 +1388,7 @@ use crate::codex_agent::CodexAgent;
     // Tracking for governance
     let mut attempts_made: u32 = 0;
     let mut cert_updates_made: u32 = 0;
+    let mut prev_attempt_failed = false;
     let invoker = ProcessInvoker;
 
     // Retry loop per TODO.md §B2
@@ -1426,10 +1430,27 @@ use crate::codex_agent::CodexAgent;
         // Step 5: Invoke runner
         eprintln!("[5/6] Invoking runner ({})...", runner.name());
 
+        // Select model: explicit override > tiered selection
+        let selected_model = if model.is_some() {
+            model.clone()
+        } else {
+            let tier = select_model_for_attempt(
+                &mission_type,
+                attempts_made,
+                prev_attempt_failed,
+                model_overrides.as_ref(),
+            );
+            Some(tier.to_string())
+        };
+
+        if let Some(ref m) = selected_model {
+            eprintln!("  Model: {} (attempt {}, prev_failed={})", m, attempts_made, prev_attempt_failed);
+        }
+
         let runner_config = RunnerConfig {
             max_runtime_seconds,
             working_dir: workspace.working_dir().to_path_buf(),
-            model: model.clone(),
+            model: selected_model,
             stream_output,
         };
 
@@ -1483,6 +1504,7 @@ use crate::codex_agent::CodexAgent;
             }
             // Retryable and attempts remain
             eprintln!("  Runner failed but retryable. {} attempts remaining.", max_retries + 1 - attempts_made);
+            prev_attempt_failed = true;
             let _ = mission.preserve_failed()?;
             continue;
         }

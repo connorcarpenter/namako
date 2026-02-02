@@ -450,6 +450,7 @@ fn execute_proposed_mission(
         None,
         constraint.surface_overrides,
         true,  // allow_dirty - REPL missions don't require clean workspace
+        None,  // model_overrides - use mission type defaults
         logger,
     )?;
 
@@ -695,6 +696,7 @@ fn run_autonomous_loop(
             None,
             Some(surface_policy),
             true,  // allow_dirty
+            None,  // model_overrides - use mission type defaults
             logger,
         );
         

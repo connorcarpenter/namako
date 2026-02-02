@@ -10,6 +10,7 @@ pub mod chat_planner;
 pub mod mission;
 pub mod mission_selector;
 pub mod mission_type;
+pub mod model_tier;
 pub mod packet_parser;
 pub mod prompts;
 pub mod repo_state;

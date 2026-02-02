@@ -165,6 +165,34 @@ impl MissionType {
         }
     }
 
+    /// Returns the recommended model tier for this mission type.
+    ///
+    /// Model tiers (from most capable to least):
+    /// - "opus": High intelligence tasks (spec interpretation, debugging, complex reasoning)
+    /// - "sonnet": Structured work with patterns (bindings, implementation, refactoring)
+    /// - "haiku": Trivial tasks (normalization, cleanup, summaries)
+    pub fn recommended_model(&self) -> &'static str {
+        match self {
+            // High intelligence required - spec interpretation, debugging
+            Self::AddOrClarifyScenario { .. } => "opus",
+            Self::RefineFeatureIntent { .. } => "opus",
+            Self::FixRegressionFromGateFailure { .. } => "opus",
+
+            // Structured work with patterns
+            Self::CreateMissingBindings { .. } => "sonnet",
+            Self::ImplementBehaviorForScenario { .. } => "sonnet",
+            Self::StrengthenThenAssertions { .. } => "sonnet",
+            Self::RefactorBindingsForClarity { .. } => "sonnet",
+            Self::TriageFailures => "sonnet",
+
+            // Trivial tasks
+            Self::NormalizeIdentityTags { .. } => "haiku",
+            Self::SummarizeAndClose => "haiku",
+            Self::CleanupAfterSuccess => "haiku",
+            Self::ExplainState => "haiku",
+        }
+    }
+
     pub fn generate_brief(&self, state: &RepoState) -> MissionBrief {
         match self {
             Self::CreateMissingBindings { scenario_key, missing_steps: _ } => {
@@ -352,6 +380,37 @@ mod tests {
         };
         let policy = m.default_surface_policy();
         assert_eq!(policy.sut, crate::surface_policy::SurfaceLock::Unlocked);
+    }
+
+    #[test]
+    fn recommended_model_opus_for_high_intelligence_tasks() {
+        assert_eq!(MissionType::AddOrClarifyScenario { feature_path: "f".into(), rule_name: None }.recommended_model(), "opus");
+        assert_eq!(MissionType::RefineFeatureIntent { feature_path: "f".into() }.recommended_model(), "opus");
+        assert_eq!(MissionType::FixRegressionFromGateFailure {
+            failure: crate::repo_state::FailureInfo {
+                scenario_key: "s".into(),
+                scenario_name: "n".into(),
+                failure_kind: "test".into(),
+                error_message: None,
+            }
+        }.recommended_model(), "opus");
+    }
+
+    #[test]
+    fn recommended_model_sonnet_for_structured_work() {
+        assert_eq!(MissionType::CreateMissingBindings { scenario_key: "s".into(), missing_steps: vec![] }.recommended_model(), "sonnet");
+        assert_eq!(MissionType::ImplementBehaviorForScenario { scenario_key: "s".into(), scenario_name: "n".into(), failure_info: None }.recommended_model(), "sonnet");
+        assert_eq!(MissionType::StrengthenThenAssertions { scenario_key: "s".into(), weak_steps: vec![] }.recommended_model(), "sonnet");
+        assert_eq!(MissionType::RefactorBindingsForClarity { binding_ids: vec![] }.recommended_model(), "sonnet");
+        assert_eq!(MissionType::TriageFailures.recommended_model(), "sonnet");
+    }
+
+    #[test]
+    fn recommended_model_haiku_for_trivial_tasks() {
+        assert_eq!(MissionType::NormalizeIdentityTags { feature_path: "f".into(), missing_tags: vec![] }.recommended_model(), "haiku");
+        assert_eq!(MissionType::SummarizeAndClose.recommended_model(), "haiku");
+        assert_eq!(MissionType::CleanupAfterSuccess.recommended_model(), "haiku");
+        assert_eq!(MissionType::ExplainState.recommended_model(), "haiku");
     }
 
     #[test]
