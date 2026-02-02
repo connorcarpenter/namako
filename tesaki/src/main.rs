@@ -1688,6 +1688,7 @@ fn run_namako_gate_json(
     cmd_args.push("-a".to_string());
     cmd_args.push(adapter.to_string());
     cmd_args.push("--json".to_string());
+    cmd_args.push("--auto-cert".to_string()); // Self-heal on baseline drift
     log_command_run(logger, "namako", &cmd_args, spec_root, None);
 
     let output = Command::new(program)

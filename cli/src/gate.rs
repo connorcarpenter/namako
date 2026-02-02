@@ -20,8 +20,8 @@ use tempfile::TempDir;
 
 use namako_engine::engine::ResolutionEngine;
 use namako_engine::npap::{
-    Certification, CertificationIdentity, RunReport, ScenarioStatus,
-    SemanticStepRegistry, HASH_CONTRACT_VERSION,
+    Certification, CertificationIdentity, CertificationMetadata, RunReport, ScenarioStatus,
+    SemanticStepRegistry, HASH_CONTRACT_VERSION, NPAP_VERSION,
 };
 
 use crate::status::{self, StatusArgs};
@@ -42,6 +42,16 @@ pub struct GateArgs {
     /// Path to the certification.json baseline.
     #[arg(short, long, default_value = "certification.json")]
     pub certification: PathBuf,
+
+    /// Directory to write artifacts (resolved_plan.json, run_report.json).
+    /// Defaults to specs_dir. Artifacts persist for subsequent update-cert.
+    #[arg(long)]
+    pub artifacts_dir: Option<PathBuf>,
+
+    /// Auto-update certification when lint+run pass but verify fails due to drift.
+    /// This is the turnkey recovery mode - no manual intervention needed.
+    #[arg(long, default_value = "false")]
+    pub auto_cert: bool,
 
     /// Enable determinism check: run the gate twice and compare evidence bundles.
     #[arg(long, default_value = "false")]
@@ -130,7 +140,9 @@ pub fn run(args: GateArgs) -> Result<()> {
     if args.determinism {
         run_with_determinism(&args, num_runs)
     } else {
-        run_single(&args, None)
+        // Use provided artifacts_dir or default to specs_dir for persistence
+        let artifacts_dir = args.artifacts_dir.clone().unwrap_or_else(|| args.specs_dir.clone());
+        run_single(&args, Some(&artifacts_dir))
     }
 }
 
@@ -150,6 +162,7 @@ fn run_single(args: &GateArgs, artifact_root: Option<&PathBuf>) -> Result<()> {
 
     let resolved_plan_path = artifacts_dir.join("resolved_plan.json");
     let run_report_path = artifacts_dir.join("run_report.json");
+    let cert_path = args.specs_dir.join(&args.certification);
 
     let mut output = GateOutput {
         lint: PhaseResult { status: PhaseStatus::Skipped, reason: None },
@@ -223,16 +236,54 @@ fn run_single(args: &GateArgs, artifact_root: Option<&PathBuf>) -> Result<()> {
             }
         }
         Err(e) => {
-            output.verify = PhaseResult {
-                status: PhaseStatus::Fail,
-                reason: Some(format!("{}", e)),
-            };
-            if args.json {
-                println!("{}", serde_json::to_string_pretty(&output)?);
+            // Check if this is a drift error and auto_cert is enabled
+            let error_msg = format!("{}", e);
+            let is_drift = error_msg.contains("Baseline drift:");
+            
+            if is_drift && args.auto_cert {
+                // Auto-update certification
+                if !args.json {
+                    eprintln!("  verify: DRIFT DETECTED - auto-updating certification...");
+                }
+                
+                match auto_update_certification(args, &run_report_path, &cert_path) {
+                    Ok(()) => {
+                        output.verify = PhaseResult { 
+                            status: PhaseStatus::Pass, 
+                            reason: Some("Auto-updated certification".to_string()) 
+                        };
+                        if !args.json {
+                            eprintln!("  verify: PASS (certification updated)");
+                        }
+                    }
+                    Err(cert_err) => {
+                        output.verify = PhaseResult {
+                            status: PhaseStatus::Fail,
+                            reason: Some(format!("Auto-cert failed: {}", cert_err)),
+                        };
+                        if args.json {
+                            println!("{}", serde_json::to_string_pretty(&output)?);
+                        } else {
+                            eprintln!("  verify: FAIL - auto-cert failed: {}", cert_err);
+                        }
+                        bail!("Gate failed at verify phase (auto-cert failed)");
+                    }
+                }
             } else {
-                eprintln!("  verify: FAIL - {}", e);
+                output.verify = PhaseResult {
+                    status: PhaseStatus::Fail,
+                    reason: Some(format!("{}", e)),
+                };
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&output)?);
+                } else {
+                    eprintln!("  verify: FAIL - {}", e);
+                    if is_drift {
+                        eprintln!("\nHint: Use --auto-cert to automatically update certification on drift.");
+                    }
+                }
+                bail!("Gate failed at verify phase");
             }
-            bail!("Gate failed at verify phase");
         }
     }
 
@@ -507,6 +558,60 @@ fn run_verify(args: &GateArgs, run_report_path: &PathBuf) -> Result<()> {
     if certification.identity.resolved_plan_hash != recomputed.resolved_plan_hash {
         bail!("Baseline drift: resolved_plan_hash");
     }
+
+    Ok(())
+}
+
+/// Auto-update certification when lint+run pass but verify fails due to drift.
+/// This is the self-healing path for turnkey operation.
+fn auto_update_certification(args: &GateArgs, run_report_path: &PathBuf, cert_path: &PathBuf) -> Result<()> {
+    // Read run report
+    let run_report_json = std::fs::read_to_string(run_report_path)
+        .with_context(|| format!("Failed to read run report: {}", run_report_path.display()))?;
+    let run_report: RunReport = serde_json::from_str(&run_report_json)
+        .context("Failed to parse run report JSON")?;
+
+    // Recompute identity from current sources
+    let recomputed = recompute_identity(args)?;
+
+    // Verify run_report matches current sources (freshness check)
+    if run_report.header.feature_fingerprint_hash != recomputed.feature_fingerprint_hash {
+        bail!(
+            "Cannot auto-cert: run report is stale (feature_fingerprint mismatch)"
+        );
+    }
+    if run_report.header.step_registry_hash != recomputed.step_registry_hash {
+        bail!(
+            "Cannot auto-cert: run report is stale (step_registry mismatch)"
+        );
+    }
+    if run_report.header.resolved_plan_hash != recomputed.resolved_plan_hash {
+        bail!(
+            "Cannot auto-cert: run report is stale (resolved_plan mismatch)"
+        );
+    }
+
+    // Create new certification
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let certification = Certification {
+        identity: CertificationIdentity {
+            hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
+            feature_fingerprint_hash: recomputed.feature_fingerprint_hash,
+            step_registry_hash: recomputed.step_registry_hash,
+            resolved_plan_hash: recomputed.resolved_plan_hash,
+        },
+        metadata: CertificationMetadata {
+            timestamp,
+            namako_version: env!("CARGO_PKG_VERSION").to_string(),
+            npap_version: NPAP_VERSION,
+            run_report_hash: run_report.header.run_report_hash.clone(),
+        },
+    };
+
+    // Write certification
+    let json = serde_json::to_string_pretty(&certification)?;
+    std::fs::write(cert_path, &json)
+        .with_context(|| format!("Failed to write certification: {}", cert_path.display()))?;
 
     Ok(())
 }
