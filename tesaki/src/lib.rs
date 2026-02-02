@@ -2,6 +2,7 @@
 //!
 //! This library module exports the core abstractions for the Tesaki orchestrator.
 
+pub mod binding_extractor;
 pub mod config;
 pub mod gate;
 pub mod issue_classifier;
@@ -20,6 +21,7 @@ pub mod claude_code_agent;
 pub mod codex_agent;
 pub mod copilot_agent;
 pub mod runner_test;
+pub mod scenario_extractor;
 pub mod session;
 pub mod stage;
 pub mod stop_reason;

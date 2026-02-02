@@ -1,7 +1,11 @@
 //! Mission type definitions and helpers.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
+use crate::binding_extractor::extract_binding_exemplars;
+use crate::scenario_extractor::extract_example_scenario;
 use crate::repo_state::{FailureInfo, RepoState};
 use crate::surface_policy::SurfacePolicy;
 
@@ -79,6 +83,26 @@ pub struct MissionBrief {
     pub objective: String,
     pub context: String,
     pub validation_criteria: Vec<String>,
+}
+
+/// Format binding exemplars as a markdown section for mission context.
+fn format_binding_exemplars(exemplars: &[crate::prompts::BindingExemplar]) -> String {
+    if exemplars.is_empty() {
+        return String::new();
+    }
+    
+    let mut output = String::from("## Similar Bindings (from this repository)\n\n");
+    output.push_str("Use these patterns from existing bindings:\n\n");
+    
+    for (i, ex) in exemplars.iter().enumerate() {
+        output.push_str(&format!("### Example {}: `{}`\n", i + 1, ex.step_text));
+        output.push_str(&format!("**File:** `{}`\n", ex.file_path));
+        output.push_str("```rust\n");
+        output.push_str(&ex.binding_code);
+        output.push_str("\n```\n\n");
+    }
+    
+    output
 }
 
 impl MissionType {
@@ -241,31 +265,62 @@ impl MissionType {
                     ],
                 }
             }
-            Self::ImplementBehaviorForScenario { scenario_key, scenario_name, .. } => MissionBrief {
-                mission_type: self.clone(),
-                title: format!("Implement behavior for {}", scenario_key),
-                objective: format!("Implement SUT behavior so scenario '{}' passes.", scenario_name),
-                context: format!("Scenario '{}' is failing in the last run.", scenario_name),
-                validation_criteria: vec![
-                    format!("Scenario '{}' passes", scenario_name),
-                    "namako gate --json shows run passes".to_string(),
-                ],
+            Self::ImplementBehaviorForScenario { scenario_key, scenario_name, failure_info } => {
+                // Build context with failure details if available
+                let mut context = format!("Scenario '{}' is failing in the last run.", scenario_name);
+                
+                if let Some(ref failure) = failure_info {
+                    context.push_str(&format!("\n\n**Failure Kind:** {}", failure.failure_kind));
+                    if let Some(ref err_msg) = failure.error_message {
+                        // Include error message, truncated if very long
+                        let truncated_msg = if err_msg.len() > 2000 {
+                            format!("{}...\n(truncated)", &err_msg[..2000])
+                        } else {
+                            err_msg.clone()
+                        };
+                        context.push_str(&format!("\n\n**Error Message:**\n```\n{}\n```", truncated_msg));
+                    }
+                }
+                
+                MissionBrief {
+                    mission_type: self.clone(),
+                    title: format!("Implement behavior for {}", scenario_key),
+                    objective: format!("Implement SUT behavior so scenario '{}' passes.", scenario_name),
+                    context,
+                    validation_criteria: vec![
+                        format!("Scenario '{}' passes", scenario_name),
+                        "namako gate --json shows run passes".to_string(),
+                    ],
+                }
             },
-            Self::FixRegressionFromGateFailure { failure } => MissionBrief {
-                mission_type: self.clone(),
-                title: format!("Fix regression for {}", failure.scenario_key),
-                objective: format!(
-                    "Fix regression causing '{}' to fail.",
-                    failure.scenario_name
-                ),
-                context: format!(
-                    "Failure kind: {}. Scenario key: {}.",
+            Self::FixRegressionFromGateFailure { failure } => {
+                let mut context = format!(
+                    "**Failure kind:** {}\n**Scenario key:** {}",
                     failure.failure_kind, failure.scenario_key
-                ),
-                validation_criteria: vec![
-                    format!("Scenario '{}' passes", failure.scenario_name),
-                    "namako gate --json passes".to_string(),
-                ],
+                );
+                
+                if let Some(ref err_msg) = failure.error_message {
+                    let truncated_msg = if err_msg.len() > 2000 {
+                        format!("{}...\n(truncated)", &err_msg[..2000])
+                    } else {
+                        err_msg.clone()
+                    };
+                    context.push_str(&format!("\n\n**Error Message:**\n```\n{}\n```", truncated_msg));
+                }
+                
+                MissionBrief {
+                    mission_type: self.clone(),
+                    title: format!("Fix regression for {}", failure.scenario_key),
+                    objective: format!(
+                        "Fix regression causing '{}' to fail.",
+                        failure.scenario_name
+                    ),
+                    context,
+                    validation_criteria: vec![
+                        format!("Scenario '{}' passes", failure.scenario_name),
+                        "namako gate --json passes".to_string(),
+                    ],
+                }
             },
             Self::RefineFeatureIntent { feature_path } => MissionBrief {
                 mission_type: self.clone(),
@@ -350,6 +405,55 @@ impl MissionType {
         }
     }
 
+    /// Generate a brief with dynamic binding exemplars from the codebase.
+    ///
+    /// This enhanced version extracts similar bindings from the steps directory
+    /// and example scenarios from feature files to provide high-quality, 
+    /// repository-specific examples instead of generic patterns.
+    ///
+    /// The `steps_dir` parameter should point to the test steps directory
+    /// (e.g., `test/tests/src/steps`), and `specs_dir` should point to the
+    /// specs features directory (e.g., `test/specs/features`).
+    pub fn generate_brief_with_exemplars(
+        &self, 
+        state: &RepoState, 
+        steps_dir: Option<&Path>,
+        specs_dir: Option<&Path>,
+    ) -> MissionBrief {
+        let mut brief = self.generate_brief(state);
+        
+        // Enhance CreateMissingBindings missions with binding exemplars
+        if let Self::CreateMissingBindings { missing_steps, .. } = self {
+            if let Some(dir) = steps_dir {
+                if dir.is_dir() {
+                    if let Ok(exemplars) = extract_binding_exemplars(dir, missing_steps, 3) {
+                        if !exemplars.is_empty() {
+                            // Append exemplars to context
+                            let exemplar_section = format_binding_exemplars(&exemplars);
+                            brief.context = format!("{}\n\n{}", brief.context, exemplar_section);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Enhance AddOrClarifyScenario missions with example scenarios
+        if let Self::AddOrClarifyScenario { feature_path, .. } = self {
+            if let Some(dir) = specs_dir {
+                // Construct path to the feature file
+                let feature_file = dir.join(feature_path);
+                if let Ok(Some(example)) = extract_example_scenario(&feature_file) {
+                    brief.context = format!(
+                        "{}\n\n## Example Scenario (from this feature)\n\n```gherkin\n{}\n```",
+                        brief.context,
+                        example
+                    );
+                }
+            }
+        }
+        
+        brief
+    }
 }
 
 #[cfg(test)]

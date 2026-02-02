@@ -95,16 +95,6 @@ fn then_server_observed_connect(ctx: &TestWorldRef) -> AssertOutcome<()> {
 {% endif %}
 ---
 
-## Context Types
-
-- **`&mut TestWorldMut`** — For `Given` and `When` steps (mutable access)
-- **`&TestWorldRef`** — For `Then` steps (immutable, assertion-focused)
-- **`AssertOutcome<T>`** — Return type for polling assertions (`Passed`, `Pending`, or `Failed`)
-
-See `test/tests/src/world.rs` for the World type definition.
-
----
-
 ## Validation Criteria
 
 1. ✅ All missing steps have bindings created
@@ -113,8 +103,8 @@ See `test/tests/src/world.rs` for the World type definition.
 
 ---
 
-## Important Notes
+## Notes
 
 - **Don't implement SUT behavior** — just create the binding functions
-- **Use existing harness helpers** — check `test/harness/src/` for available methods
 - **Match the step text exactly** — the macro string must match the feature file step
+- See `test/tests/src/world.rs` for World types

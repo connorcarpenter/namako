@@ -16,6 +16,7 @@
 //! Tesaki searches for `.tesaki/config.toml` in the current directory and parent
 //! directories. See the Tesaki README for details.
 
+mod binding_extractor;
 mod config;
 mod gate;
 mod issue_classifier;
@@ -36,6 +37,7 @@ mod claude_code_agent;
 mod codex_agent;
 mod copilot_agent;
 mod runner_test;
+mod scenario_extractor;
 mod session;
 mod stage;
 mod stop_reason;
@@ -1252,7 +1254,7 @@ use crate::codex_agent::CodexAgent;
         _ => anyhow::bail!("Unknown runner: {}", runner_name),
     };
 
-    eprintln!("=== Tesaki v1.8 ===");
+    eprintln!("=== Tesaki v1.9 ===");
     eprintln!("Spec root: {}", spec_root.display());
     eprintln!("Runner: {}", runner.name());
     eprintln!();
@@ -1348,7 +1350,13 @@ use crate::codex_agent::CodexAgent;
         }
     }
 
-    let brief = mission_type.generate_brief(&repo_state);
+    // Compute directories for dynamic context extraction
+    let steps_dir = spec_root.join("test/tests/src/steps");
+    let steps_dir_opt = if steps_dir.is_dir() { Some(steps_dir.as_path()) } else { None };
+    let specs_dir = spec_root.join("test/specs/features");
+    let specs_dir_opt = if specs_dir.is_dir() { Some(specs_dir.as_path()) } else { None };
+    
+    let brief = mission_type.generate_brief_with_exemplars(&repo_state, steps_dir_opt, specs_dir_opt);
 
     eprintln!("  Type: {}", mission_type.name());
     if let Some(target) = mission_type.target_label() {

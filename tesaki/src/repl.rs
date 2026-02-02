@@ -54,7 +54,7 @@ pub fn run_loop_headless(start_dir: PathBuf, max_iterations: u32, logger: &crate
         None,
     );
 
-    println!("Tesaki v1.8 Autonomous Mode");
+    println!("Tesaki v1.9 Autonomous Mode");
     println!("Spec root: {}", spec_root.display());
     println!("Runner: {}", runner_name);
     println!();
@@ -169,7 +169,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
     let mut session = SessionState::default();
     refresh_repo_state(&spec_root, &adapter, &namako_cmd, &mut session, logger)?;
 
-    println!("Tesaki v1.8 REPL");
+    println!("Tesaki v1.9 REPL");
     println!("Spec root: {}", spec_root.display());
     if let Some(summary) = &session.last_repo_state_summary {
         println!("RepoState: {}", summary);
