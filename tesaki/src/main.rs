@@ -19,7 +19,6 @@
 mod config;
 mod gate;
 mod issue_classifier;
-mod allowlist;
 mod chat_plan;
 mod chat_planner;
 mod logging;
@@ -1118,6 +1117,7 @@ fn run_run(
     stage: Option<String>,
     surfaces: Option<config::SurfacesConfig>,
     surface_overrides: Option<crate::surface_policy::SurfacePolicy>,
+    allow_dirty: bool,
     logger: &logging::JsonlLogger,
 ) -> Result<()> {
     use crate::mission::{MissionBundle, MissionBudgets, MissionInputs};
@@ -1154,9 +1154,9 @@ use crate::codex_agent::CodexAgent;
     // Set up workspace
     let workspace = Workspace::from_specs_dir(&spec_root, &adapter, budgets.clone())?;
 
-    // Check workspace is clean
+    // Check workspace is clean (unless allow_dirty is set)
     let workspace_state = workspace.check_clean()?;
-    if !workspace_state.is_clean {
+    if !workspace_state.is_clean && !allow_dirty {
         let result = RunResult::error(
             StopReason::HumanRequired,
             format!(

@@ -22,29 +22,6 @@ impl CopilotAgent {
     ///
     /// If `runner_command` is None, uses a default `copilot -p` command.
     /// If `planner_command` is None, uses a default `copilot -p` command.
-    pub fn new(
-        runner_command: Option<String>,
-        planner_command: Option<String>,
-        planner_working_dir: PathBuf,
-    ) -> Result<Self> {
-        Self::new_with_timeout(runner_command, planner_command, planner_working_dir, None)
-    }
-
-    pub fn new_with_timeout(
-        runner_command: Option<String>,
-        planner_command: Option<String>,
-        planner_working_dir: PathBuf,
-        planner_timeout: Option<Duration>,
-    ) -> Result<Self> {
-        Self::new_with_timeout_and_stream(
-            runner_command,
-            planner_command,
-            planner_working_dir,
-            planner_timeout,
-            false,
-        )
-    }
-
     pub fn new_with_timeout_and_stream(
         runner_command: Option<String>,
         planner_command: Option<String>,
@@ -53,10 +30,11 @@ impl CopilotAgent {
         stream_output: bool,
     ) -> Result<Self> {
         let runner_cmd = runner_command.unwrap_or_else(|| {
-            // Default Copilot CLI command using -p for non-interactive mode.
-            // Uses --allow-all for autonomous execution.
-            // The prompt is passed via -p flag.
-            "copilot -p {prompt_file} --allow-all --cwd {working_dir}".to_string()
+            // Default Copilot CLI command for running missions.
+            // Uses -p to read prompt from file.
+            // --allow-all for autonomous execution.
+            // --add-dir to allow access to the working directory.
+            "copilot -p @{mission_dir}/MISSION.md --allow-all --add-dir {working_dir}".to_string()
         });
         let planner_cmd = planner_command.unwrap_or_else(|| {
             // Default Copilot planner command.
@@ -164,7 +142,9 @@ mod tests {
 
     #[test]
     fn test_copilot_agent_expand_default() {
-        let agent = CopilotAgent::new(None, None, PathBuf::from("/workspace")).unwrap();
+        let agent = CopilotAgent::new_with_timeout_and_stream(
+            None, None, PathBuf::from("/workspace"), None, false
+        ).unwrap();
         let expanded =
             agent.expand_runner_command(Path::new("/test/mission"), Path::new("/workspace"));
         assert!(expanded.contains("copilot"));
@@ -173,7 +153,9 @@ mod tests {
 
     #[test]
     fn test_copilot_agent_name() {
-        let agent = CopilotAgent::new(None, None, PathBuf::from("/workspace")).unwrap();
+        let agent = CopilotAgent::new_with_timeout_and_stream(
+            None, None, PathBuf::from("/workspace"), None, false
+        ).unwrap();
         assert_eq!(crate::runner::Runner::name(&agent), "copilot");
     }
 }

@@ -7,7 +7,7 @@
 //! Configure console verbosity via `RUST_LOG` environment variable.
 //! Example: `RUST_LOG=tesaki=debug tesaki`
 
-use log::{debug, info, warn};
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -147,11 +147,6 @@ pub enum LogEvent {
         plan_json: Option<String>,
         error: Option<String>,
     },
-    AllowlistReject {
-        tool: String,
-        args: Vec<String>,
-        reason: String,
-    },
     CommandRun {
         tool: String,
         args: Vec<String>,
@@ -228,14 +223,6 @@ pub enum ConsoleMode {
 
 fn print_event(event: &LogEvent, mode: ConsoleMode) {
     match event {
-        LogEvent::AllowlistReject { tool, args, reason } => {
-            warn!(
-                "Command rejected: {} {} ({}). Try an allowlisted command like `namako status --json`",
-                tool,
-                args.join(" "),
-                reason
-            );
-        }
         LogEvent::CommandRun { tool, args, .. } => {
             info!("> {} {}", tool, args.join(" "));
         }

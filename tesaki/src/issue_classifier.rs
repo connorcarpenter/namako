@@ -206,6 +206,25 @@ mod tests {
         assert_eq!(issues[0].kind, SpecIssueKind::MissingCoverage);
     }
 
+    fn status_stub() -> StatusPacket {
+        StatusPacket {
+            version: 1,
+            spec_root: "/repo/specs".to_string(),
+            recommended_next_action: "".to_string(),
+            lint_status: StatusValue::Pass,
+            run_status: StatusValue::NotRun,
+            verify_status: StatusValue::NotRun,
+            drift: None,
+            last_run_failures: vec![],
+            identity: crate::packet_parser::IdentitySection {
+                current: review_stub().identity_current.clone(),
+                baseline: None,
+            },
+            metadata: None,
+            gates: None,
+        }
+    }
+
     #[test]
     fn classify_binding_issues_from_missing_steps() {
         let mut review = review_stub();
@@ -214,7 +233,8 @@ mod tests {
             missing_step_texts: vec!["Given a user".to_string()],
         }];
 
-        let issues = classify_binding_issues(&review);
+        let status = status_stub();
+        let issues = classify_binding_issues(&review, &status);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].kind, BindingIssueKind::MissingBinding);
     }

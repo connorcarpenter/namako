@@ -5,7 +5,6 @@
 pub mod config;
 pub mod gate;
 pub mod issue_classifier;
-pub mod allowlist;
 pub mod chat_plan;
 pub mod chat_planner;
 pub mod mission;

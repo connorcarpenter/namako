@@ -1,14 +1,12 @@
 //! Interactive REPL session for Tesaki v1.8.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
 
-use crate::allowlist::validate_command;
 use crate::chat_plan::{
-    AllowedCommand, ChatPlan, ChatTurnInput, CommandResult, MissionProposal,
+    ChatPlan, ChatTurnInput, MissionProposal,
     SurfaceLock as PlanSurfaceLock, SurfacePolicy as PlanSurfacePolicy,
 };
 use crate::chat_planner::{ChatPlanner, MockChatPlanner};
@@ -374,6 +372,7 @@ fn execute_proposed_mission(
         Some(stage_to_arg(stage)),
         None,
         constraint.surface_overrides,
+        true,  // allow_dirty - REPL missions don't require clean workspace
         logger,
     )?;
 
@@ -431,12 +430,6 @@ fn convert_lock(lock: PlanSurfaceLock) -> RepoSurfaceLock {
     }
 }
 
-fn print_plan(plan: &ChatPlan) {
-    if !plan.say.trim().is_empty() {
-        println!("{}", plan.say.trim());
-    }
-}
-
 fn show_mission_proposal(proposal: &MissionProposal) {
     println!();
     println!("MISSION PROPOSAL");
@@ -470,18 +463,14 @@ fn handle_mission_proposal(plan: &ChatPlan, session: &mut SessionState) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat_plan::{AllowedCommand, ChatPlan, MissionProposal, SurfaceLock, SurfacePolicy};
+    use crate::chat_plan::{ChatPlan, MissionProposal, SurfaceLock, SurfacePolicy};
 
     #[test]
     fn repl_sets_pending_mission_from_plan() {
         let mut session = SessionState::default();
         let plan = ChatPlan {
             say: "test".to_string(),
-            run: vec![AllowedCommand {
-                tool: "namako".to_string(),
-                args: vec!["status".to_string(), "--json".to_string()],
-                reason: None,
-            }],
+            run: vec![],
             mission_proposal: Some(MissionProposal {
                 mission_type: "CreateMissingBindings".to_string(),
                 stage: "Implement Tests".to_string(),
@@ -501,70 +490,4 @@ mod tests {
         assert_eq!(proposal.mission_type, "CreateMissingBindings");
         assert!(session.pending_mission.is_some());
     }
-}
-
-fn execute_allowed_command(
-    command: &AllowedCommand,
-    spec_root: &Path,
-    adapter: &str,
-    namako_cmd: &str,
-    logger: &crate::logging::JsonlLogger,
-) -> Result<CommandResult> {
-    if let Err(err) = validate_command(command) {
-        logger.log_event(crate::logging::LogEvent::AllowlistReject {
-            tool: command.tool.clone(),
-            args: command.args.clone(),
-            reason: err.to_string(),
-        });
-        return Err(err);
-    }
-
-    let (program, base_args) = split_command(namako_cmd)?;
-    let mut args = base_args;
-    args.extend(command.args.clone());
-    args = augment_namako_args(args, adapter);
-
-    crate::log_command_run(logger, &command.tool, &command.args, spec_root, None);
-    let output = Command::new(&program)
-        .args(&args)
-        .current_dir(spec_root)
-        .output()
-        .context("Failed to execute allowlisted command")?;
-    crate::log_command_result(logger, &command.tool, &command.args, &output);
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
-
-    Ok(CommandResult {
-        tool: command.tool.clone(),
-        args: command.args.clone(),
-        exit_code,
-        stdout,
-        stderr,
-    })
-}
-
-fn split_command(command: &str) -> Result<(String, Vec<String>)> {
-    let parts: Vec<&str> = command.split_whitespace().collect();
-    if parts.is_empty() {
-        anyhow::bail!("Empty command");
-    }
-    Ok((parts[0].to_string(), parts[1..].iter().map(|s| s.to_string()).collect()))
-}
-
-fn augment_namako_args(mut args: Vec<String>, adapter: &str) -> Vec<String> {
-    let has_spec = args.iter().any(|arg| arg == "-s" || arg == "--specs");
-    let has_adapter = args.iter().any(|arg| arg == "-a" || arg == "--adapter");
-
-    if !has_spec {
-        args.push("-s".to_string());
-        args.push(".".to_string());
-    }
-    if !has_adapter {
-        args.push("-a".to_string());
-        args.push(adapter.to_string());
-    }
-
-    args
 }
