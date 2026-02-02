@@ -1,15 +1,15 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
 **Last Updated:** 2026-02-02
-**MODE:** CONSUMPTION (v1.8 REPL + Autonomous SDD Loop VERIFIED)
+**MODE:** CONSUMPTION (v1.8 REPL + Headless Autonomous Loop)
 
 ---
 
 ## Executive Summary
 
-**Namako v1.8 is FUNCTIONALLY COMPLETE.** The Tesaki interactive REPL with autonomous SDD loop is operational.
+**Namako v1.8 is FUNCTIONALLY COMPLETE.** Tesaki supports both interactive REPL and headless autonomous mode.
 
-**Tesaki + Copilot autonomous loop successfully drove naia bindings from 35 → 0 in 8 missions (~20 min).**
+**Turnkey command:** `tesaki --loop 10` — runs autonomous SDD loop without REPL.
 
 | Milestone | Status |
 |-----------|--------|
@@ -21,25 +21,37 @@
 | **Namako v1.5 Explicit ID Tags** | ✅ **COMPLETE** |
 | **Namako v1.7 Runner Integration** | ✅ **VERIFIED** |
 | **Namako v1.8 Interactive REPL** | ✅ **VERIFIED** |
+| **Headless Mode (`--loop N`)** | ✅ **NEW** |
 | **CONSUMPTION Mode** | ✅ **ACTIVE** |
 
 ---
 
 ## v1.8 Interactive Developer Experience — VERIFIED
 
-**Scope:** Interactive REPL session with Copilot/Claude/Codex planner+runner backends, autonomous mission loop.
+**Scope:** Interactive REPL + headless autonomous mode with Copilot/Claude/Codex backends.
 
 | Component | Status | Description |
 |-----------|--------|-------------|
-| REPL entrypoint | ✅ | `tesaki` (no subcommand) starts interactive session |
+| REPL entrypoint | ✅ | `tesaki` starts interactive session |
+| **Headless mode** | ✅ | `tesaki --loop N` runs without REPL |
 | Chat planner | ✅ | `mock`/`codex`/`claude`/`copilot` backends |
 | Runner backends | ✅ | `mock`/`cmd`/`claude`/`codex`/`copilot` |
 | `loop N` command | ✅ | Autonomous mission iteration |
-| Mission proposals | ✅ | Proposal display with explicit approval gating |
-| Propagation summary | ✅ | RepoState ripple summary printed in-session |
-| Post-gate summaries | ✅ | Post-mission gate run + RepoState refresh |
+| Progress tracking | ✅ | Before/after issue counts with deltas |
+| Algorithmic selection | ✅ | No LLM for task selection |
+| Batched bindings | ✅ | All missing steps shown in one mission |
 | Config discovery | ✅ | `.tesaki/config.toml` auto-discovery |
-| Copilot CLI support | ✅ | Full planner + runner integration |
+
+### How the Loop Works
+
+```
+for mission in 1..N:
+    state = recompute_from_namako()     # Fresh state each cycle
+    mission = select_algorithmically()   # No LLM, deterministic
+    execute(mission)                     # Runner does the work
+    if issues_decreased: continue        # Progress!
+    elif stalled_3x: stop                # Give up
+```
 
 ### Autonomous Loop Results (2026-02-02)
 
@@ -60,28 +72,32 @@
 
 ## Quick Start for New Agents
 
-### 1. Setup (one-time)
+### 1. The One Command
+
 ```bash
 cd naia
-# Config already exists at .tesaki/config.toml
+tesaki --loop 10   # Run 10 autonomous missions
 ```
 
-### 2. Run Autonomous Loop
+This will:
+- Select tasks algorithmically (no LLM for task selection)
+- Execute each via the runner (Copilot)
+- Track progress (before/after issue counts)
+- Continue while making progress
+- Stop when done or stalled (3 consecutive no-progress missions)
+
+### 2. Interactive Mode (optional)
+
 ```bash
-tesaki
-> loop 10   # Run up to 10 missions autonomously
+tesaki           # Start REPL
+> loop 10        # Run 10 missions
+> status         # Show current state
+> exit           # Quit
 ```
 
-### 3. Manual Mission Execution
-```bash
-tesaki
-> propose a mission
-> run it
-```
+### 3. Check Status Manually
 
-### 4. Check Status
 ```bash
-namako lint --adapter-cmd "cargo run --manifest-path test/npa/Cargo.toml --" --specs-dir test/specs
 namako gate --adapter-cmd "cargo run --manifest-path test/npa/Cargo.toml --" --specs-dir test/specs
 ```
 

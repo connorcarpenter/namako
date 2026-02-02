@@ -167,32 +167,49 @@ impl MissionType {
 
     pub fn generate_brief(&self, state: &RepoState) -> MissionBrief {
         match self {
-            Self::CreateMissingBindings { scenario_key, missing_steps } => {
-                let step_list = if missing_steps.is_empty() {
-                    "No missing steps listed.".to_string()
+            Self::CreateMissingBindings { scenario_key, missing_steps: _ } => {
+                // Collect ALL missing steps for comprehensive context (batching)
+                let all_missing: Vec<String> = state.binding_issues
+                    .iter()
+                    .filter(|b| matches!(b.kind, crate::repo_state::BindingIssueKind::MissingBinding))
+                    .filter_map(|b| b.step_text.clone())
+                    .collect();
+                
+                // Deduplicate (same step text may appear multiple times)
+                let mut unique_steps: Vec<String> = all_missing.clone();
+                unique_steps.sort();
+                unique_steps.dedup();
+                
+                let step_list = if unique_steps.is_empty() {
+                    "No missing steps listed - check namako lint output.".to_string()
                 } else {
-                    missing_steps
+                    unique_steps
                         .iter()
-                        .map(|s| format!("- `{}`", s))
+                        .take(30)  // Show up to 30 unique steps
+                        .enumerate()
+                        .map(|(i, s)| format!("{}. `{}`", i + 1, s))
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
+                
+                let total = state.binding_issues.len();
 
                 MissionBrief {
                     mission_type: self.clone(),
-                    title: format!("Create bindings for {}", scenario_key),
+                    title: format!("Create missing bindings ({} total)", total),
                     objective: format!(
-                        "Create step bindings for {} missing steps in scenario '{}'.",
-                        missing_steps.len(),
-                        scenario_key
+                        "Create step bindings for as many missing steps as possible. {} bindings needed.",
+                        total
                     ),
                     context: format!(
-                        "This scenario is currently missing bindings:\n{}",
+                        "Missing step bindings ({} unique patterns, showing up to 30):\n{}\n\n\
+                        Create bindings in test/tests/steps/. Use #[given], #[when], #[then] macros.",
+                        unique_steps.len(),
                         step_list
                     ),
                     validation_criteria: vec![
-                        format!("Scenario '{}' is executable (not @Deferred)", scenario_key),
-                        "namako gate --json shows lint passes".to_string(),
+                        "New bindings created for missing steps".to_string(),
+                        "namako lint shows fewer unresolved steps".to_string(),
                     ],
                 }
             }

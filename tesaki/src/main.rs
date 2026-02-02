@@ -75,8 +75,12 @@ struct IdentitySnapshot {
 #[command(name = "tesaki")]
 #[command(about = "AI-friendly task orchestrator for Namako spec-driven development")]
 #[command(disable_version_flag = true)]
-#[command(after_help = "Run `tesaki` to start the interactive REPL.")]
-struct Cli {}
+#[command(after_help = "Run `tesaki` to start the interactive REPL, or `tesaki --loop N` for autonomous mode.")]
+struct Cli {
+    /// Run autonomous loop for N iterations (or until done/stalled)
+    #[arg(long, short = 'l')]
+    r#loop: Option<u32>,
+}
 
 /// Status JSON structure from `namako status --json`
 #[derive(Debug, Deserialize)]
@@ -173,17 +177,28 @@ fn main() -> Result<()> {
     // Initialize logging - configure via RUST_LOG env var
     logging::init();
 
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
     let log_path = std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from);
     // Use Off mode for cleaner REPL output - state is shown in summary
     let logger = logging::JsonlLogger::new_with_console(
         log_path,
         logging::ConsoleMode::Off,
     );
-    repl::run_repl(
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        &logger,
-    )
+    
+    if let Some(iterations) = cli.r#loop {
+        // Autonomous mode: run loop directly without REPL
+        repl::run_loop_headless(
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            iterations,
+            &logger,
+        )
+    } else {
+        // Interactive mode: start REPL
+        repl::run_repl(
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            &logger,
+        )
+    }
 }
 
 /// Resolved configuration from CLI flags and/or config file

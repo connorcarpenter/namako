@@ -22,6 +22,63 @@ use crate::surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as Rep
 
 const DEFAULT_PLANNER_TIMEOUT_SECONDS: u64 = 60;
 
+/// Run the autonomous loop directly without REPL (headless mode).
+/// Usage: `tesaki --loop 10` or `tesaki -l 10`
+pub fn run_loop_headless(start_dir: PathBuf, max_iterations: u32, logger: &crate::logging::JsonlLogger) -> Result<()> {
+    let config = match config::discover_config(&start_dir)? {
+        ConfigDiscoveryResult::Found(config) => config,
+        ConfigDiscoveryResult::NotFound { .. } => {
+            config::print_config_error();
+            anyhow::bail!("No .tesaki/config.toml found");
+        }
+    };
+
+    let spec_root = config.specs_dir.clone();
+    let adapter = config.adapter_cmd.clone();
+    let runner_name = config.runner.clone().unwrap_or_else(|| "mock".to_string());
+    let runner_cmd = config.runner_cmd.clone();
+    let max_retries = config.max_retries.unwrap_or(0);
+    let max_cert_updates = config.max_cert_updates.unwrap_or(0);
+    let max_runtime_seconds = config.max_runtime_seconds.unwrap_or(600) as u32;
+    let max_files_changed = config.max_files_changed.unwrap_or(10) as u32;
+    let namako_resolution = crate::resolve_namako_cli(None, config.namako_cli.clone(), &spec_root);
+    let namako_cmd = namako_resolution.command.clone();
+
+    crate::log_session_start(
+        logger,
+        &spec_root,
+        &adapter,
+        &namako_resolution,
+        Some(&runner_name),
+        None,
+    );
+
+    println!("Tesaki v1.8 Autonomous Mode");
+    println!("Spec root: {}", spec_root.display());
+    println!("Runner: {}", runner_name);
+    println!();
+
+    // Initialize session state
+    let mut session = SessionState::default();
+    refresh_repo_state(&spec_root, &adapter, &namako_cmd, &mut session, logger)?;
+
+    // Run the autonomous loop
+    run_autonomous_loop(
+        max_iterations,
+        &spec_root,
+        &adapter,
+        &namako_cmd,
+        &runner_name,
+        runner_cmd,
+        max_retries,
+        max_cert_updates,
+        max_runtime_seconds,
+        max_files_changed,
+        &mut session,
+        logger,
+    )
+}
+
 pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Result<()> {
     let config = match config::discover_config(&start_dir)? {
         ConfigDiscoveryResult::Found(config) => config,
@@ -138,6 +195,25 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
         }
         if matches!(line, "exit" | "quit") {
             break;
+        }
+
+        // Handle `loop N` command - DIRECT algorithmic mission selection (no planner LLM)
+        if let Some(count) = parse_loop_command(line) {
+            run_autonomous_loop(
+                count,
+                &spec_root,
+                &adapter,
+                &namako_cmd,
+                &runner_name,
+                runner_cmd.clone(),
+                max_retries,
+                max_cert_updates,
+                max_runtime_seconds,
+                max_files_changed,
+                &mut session,
+                logger,
+            )?;
+            continue;
         }
 
         if handle_mission_approval(
@@ -490,4 +566,200 @@ mod tests {
         assert_eq!(proposal.mission_type, "CreateMissingBindings");
         assert!(session.pending_mission.is_some());
     }
+}
+
+/// Parse `loop N` command and return the count, or None if not a loop command.
+fn parse_loop_command(line: &str) -> Option<u32> {
+    let trimmed = line.trim().to_ascii_lowercase();
+    if trimmed.starts_with("loop") {
+        let rest = trimmed.strip_prefix("loop")?.trim();
+        if rest.is_empty() {
+            // Just "loop" with no number means loop until done (use a high number)
+            return Some(100);
+        }
+        rest.parse::<u32>().ok()
+    } else {
+        None
+    }
+}
+
+/// Run the autonomous loop: algorithmic mission selection → runner → gate → repeat.
+/// No planner LLM is used - task selection is fully deterministic.
+fn run_autonomous_loop(
+    max_iterations: u32,
+    spec_root: &Path,
+    adapter: &str,
+    namako_cmd: &str,
+    runner_name: &str,
+    runner_cmd: Option<String>,
+    max_retries: u32,
+    max_cert_updates: u32,
+    max_runtime_seconds: u32,
+    max_files_changed: u32,
+    session: &mut SessionState,
+    logger: &crate::logging::JsonlLogger,
+) -> Result<()> {
+    use crate::mission_selector::select_with_constraints;
+    
+    println!("Starting autonomous loop ({} missions max)...", max_iterations);
+    println!("Task selection is ALGORITHMIC (no planner LLM).");
+    println!("Loop continues while PROGRESS is being made.\n");
+    
+    let mut stall_count = 0;
+    const MAX_STALLS: u32 = 3;
+    
+    for iteration in 1..=max_iterations {
+        // Refresh state from Namako
+        refresh_repo_state(spec_root, adapter, namako_cmd, session, logger)?;
+        
+        // Get current RepoState
+        let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let gate_packet = parse_gate_json(&gate_json)?;
+        let status_json = crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
+        let review_json = crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let status_packet = parse_status_json(&status_json)?;
+        let review_packet = parse_review_json(&review_json)?;
+        let state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+        
+        // Snapshot issue counts BEFORE mission
+        let before_spec = state.spec_issues.len();
+        let before_binding = state.binding_issues.len();
+        let before_sut = state.sut_issues.len();
+        let before_structure = state.structure_issues.len();
+        let before_total = before_spec + before_binding + before_sut + before_structure;
+        
+        // Check if truly done (all gates pass AND no issues)
+        if state.all_gates_pass() && !state.has_work() {
+            println!("🎉 All gates pass, no issues remaining. DONE!");
+            break;
+        }
+        
+        // Algorithmic mission selection (NO LLM)
+        let constraint = StageConstraint {
+            stage: session.intent.stage,
+            surface_overrides: None,
+        };
+        
+        let selection = match select_with_constraints(&state, &constraint) {
+            Some(s) => s,
+            None => {
+                println!("No actionable work found. Done!");
+                break;
+            }
+        };
+        
+        let (mission_type, stage, surface_policy) = selection;
+        
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("MISSION {}/{}", iteration, max_iterations);
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("Type:    {}", mission_type.name());
+        println!("Target:  {}", mission_type.target_label().unwrap_or_else(|| "(auto-selected)".to_string()));
+        println!("Stage:   {}", stage.name());
+        println!("Surfaces: Spec {:?} • Tests {:?} • SUT {:?}",
+            surface_policy.spec, surface_policy.tests_bindings, surface_policy.sut);
+        println!("Before:  Spec:{} Bind:{} SUT:{} Struct:{} (total: {})",
+            before_spec, before_binding, before_sut, before_structure, before_total);
+        println!();
+        
+        // Execute mission directly (bypass planner)
+        let start = Instant::now();
+        let result = crate::run_run(
+            &spec_root.to_path_buf(),
+            adapter,
+            crate::NamakoCliResolution::explicit(namako_cmd.to_string()),
+            max_cert_updates,
+            runner_name,
+            runner_cmd.clone(),
+            max_runtime_seconds,
+            max_files_changed,
+            max_retries,
+            None,  // model - use default
+            false, // stream_output
+            Some(stage_to_arg(stage)),
+            None,
+            Some(surface_policy),
+            true,  // allow_dirty
+            logger,
+        );
+        
+        let elapsed = start.elapsed();
+        
+        // Check result - but don't stop on "gate failed" if progress was made
+        let runner_succeeded = result.is_ok();
+        if let Err(e) = &result {
+            println!("Runner reported: {}", e);
+        }
+        println!("Elapsed: {:.1}s", elapsed.as_secs_f64());
+        
+        // Refresh state AFTER mission
+        refresh_repo_state(spec_root, adapter, namako_cmd, session, logger)?;
+        
+        // Get new counts
+        let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let gate_packet = parse_gate_json(&gate_json)?;
+        let status_json = crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
+        let review_json = crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let status_packet = parse_status_json(&status_json)?;
+        let review_packet = parse_review_json(&review_json)?;
+        let after_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+        
+        let after_spec = after_state.spec_issues.len();
+        let after_binding = after_state.binding_issues.len();
+        let after_sut = after_state.sut_issues.len();
+        let after_structure = after_state.structure_issues.len();
+        let after_total = after_spec + after_binding + after_sut + after_structure;
+        
+        // Calculate deltas
+        let spec_delta = after_spec as i32 - before_spec as i32;
+        let binding_delta = after_binding as i32 - before_binding as i32;
+        let total_delta = after_total as i32 - before_total as i32;
+        
+        println!();
+        println!("After:   Spec:{} Bind:{} SUT:{} Struct:{} (total: {})",
+            after_spec, after_binding, after_sut, after_structure, after_total);
+        println!("Delta:   Spec:{:+} Bind:{:+} Total:{:+}",
+            spec_delta, binding_delta, total_delta);
+        
+        // Determine if we made progress
+        // Progress = any category decreased, even if others increased
+        // (e.g., adding scenarios decreases spec issues but increases binding issues)
+        let made_progress = spec_delta < 0 || binding_delta < 0 || 
+            (after_sut as i32) < (before_sut as i32) ||
+            (after_structure as i32) < (before_structure as i32);
+        
+        let gates_now_pass = after_state.all_gates_pass();
+        
+        if gates_now_pass && !after_state.has_work() {
+            println!("🎉 All gates pass, no issues remaining. DONE!");
+            break;
+        } else if made_progress {
+            println!("✅ Progress made - continuing");
+            stall_count = 0;
+        } else if runner_succeeded && total_delta == 0 {
+            stall_count += 1;
+            println!("⚠️  No net progress (stall {}/{})", stall_count, MAX_STALLS);
+            if stall_count >= MAX_STALLS {
+                println!("🛑 Too many stalls - stopping to avoid infinite loop");
+                break;
+            }
+        } else if total_delta > 0 {
+            println!("⚠️  Regression detected (issues increased) - continuing anyway");
+            // Don't stop - the next mission type might fix it
+            stall_count += 1;
+        }
+        
+        println!();
+    }
+    
+    // Final summary
+    refresh_repo_state(spec_root, adapter, namako_cmd, session, logger)?;
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("AUTONOMOUS LOOP FINISHED");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    if let Some(summary) = &session.last_repo_state_summary {
+        println!("Final state: {}", summary);
+    }
+    
+    Ok(())
 }
