@@ -25,6 +25,25 @@ pub struct PhaseResult {
     pub status: PhaseStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Detailed errors (e.g., unresolved steps for lint failures)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errors: Option<Vec<GateError>>,
+}
+
+/// A detailed error from a gate phase.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GateError {
+    /// Error message
+    pub message: String,
+    /// Associated file (if applicable)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Line number (if applicable)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// Step text (for missing binding errors)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_text: Option<String>,
 }
 
 /// Phase status enum matching namako gate output.
@@ -96,6 +115,76 @@ impl GateOutcome {
     /// Returns true if this is a pass outcome.
     pub fn is_pass(&self) -> bool {
         matches!(self, GateOutcome::Pass)
+    }
+}
+
+/// Detailed gate failure information for mission context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GateFailureDetails {
+    /// The outcome classification
+    pub outcome: GateOutcome,
+    /// Phase that failed
+    pub failed_phase: String,
+    /// Human-readable summary
+    pub summary: String,
+    /// List of specific errors (e.g., unresolved steps)
+    pub errors: Vec<GateError>,
+}
+
+impl GateFailureDetails {
+    /// Extract failure details from a GateJson.
+    pub fn from_gate(gate: &GateJson) -> Option<Self> {
+        let outcome = GateOutcome::classify(gate);
+        
+        if outcome == GateOutcome::Pass {
+            return None;
+        }
+        
+        // Determine which phase failed
+        let (failed_phase, phase_result) = if gate.lint.status == PhaseStatus::Fail {
+            ("lint", &gate.lint)
+        } else if gate.run.status == PhaseStatus::Fail {
+            ("run", &gate.run)
+        } else if gate.verify.status == PhaseStatus::Fail {
+            ("verify", &gate.verify)
+        } else {
+            return None;
+        };
+        
+        let summary = phase_result.reason.clone()
+            .unwrap_or_else(|| format!("{} phase failed", failed_phase));
+        
+        let errors = phase_result.errors.clone().unwrap_or_default();
+        
+        Some(GateFailureDetails {
+            outcome,
+            failed_phase: failed_phase.to_string(),
+            summary,
+            errors,
+        })
+    }
+    
+    /// Format as markdown for mission context.
+    pub fn to_markdown(&self) -> String {
+        let mut md = format!("### Gate Failure: {} ({})\n\n", self.failed_phase, self.summary);
+        
+        if !self.errors.is_empty() {
+            md.push_str("**Specific errors:**\n");
+            for (i, err) in self.errors.iter().take(10).enumerate() {
+                if let Some(step) = &err.step_text {
+                    md.push_str(&format!("{}. Missing binding: `{}`\n", i + 1, step));
+                } else if let (Some(file), Some(line)) = (&err.file, err.line) {
+                    md.push_str(&format!("{}. {}:{} - {}\n", i + 1, file, line, err.message));
+                } else {
+                    md.push_str(&format!("{}. {}\n", i + 1, err.message));
+                }
+            }
+            if self.errors.len() > 10 {
+                md.push_str(&format!("\n... and {} more errors\n", self.errors.len() - 10));
+            }
+        }
+        
+        md
     }
 }
 
@@ -357,9 +446,9 @@ mod tests {
 
     fn make_gate_json(lint: PhaseStatus, run: PhaseStatus, verify: PhaseStatus) -> GateJson {
         GateJson {
-            lint: PhaseResult { status: lint, reason: None },
-            run: PhaseResult { status: run, reason: None },
-            verify: PhaseResult { status: verify, reason: None },
+            lint: PhaseResult { status: lint, reason: None, errors: None },
+            run: PhaseResult { status: run, reason: None, errors: None },
+            verify: PhaseResult { status: verify, reason: None, errors: None },
             determinism: None,
         }
     }

@@ -3,22 +3,118 @@
 Required context:
 - scenario_key: String
 - missing_steps: Vec<String>
+- all_missing_steps: Vec<String> (optional, for batching)
+- binding_exemplars: Vec<{step_text, binding_code, file_path}> (optional)
+- world_type_hint: String (optional)
 #}
 {% set step_count = missing_steps | length %}
-**Title:** Create bindings for {{ scenario_key }}
+{% set all_count = all_missing_steps | default([]) | length %}
+# Create Missing Step Bindings
 
-**Objective:** Create step bindings for {{ step_count }} missing step{% if step_count != 1 %}s{% endif %} in scenario '{{ scenario_key }}'.
+**Mission Type:** CreateMissingBindings
+**Target Scenario:** {{ scenario_key }}
+**Total Bindings Needed:** {{ all_count if all_count > 0 else step_count }}
 
-**Context:**
-This scenario is currently missing bindings:
+---
+
+## What You Need To Do
+
+Create step bindings for the missing steps listed below. Each step needs a Rust function with the appropriate macro (`#[given]`, `#[when]`, or `#[then]`).
+
+---
+
+## Missing Steps ({{ step_count }} unique patterns)
+
 {% if missing_steps %}
 {% for step in missing_steps %}
-- `{{ step }}`
+{{ loop.index }}. `{{ step }}`
 {% endfor %}
 {% else %}
-No missing steps listed.
+No missing steps listed - check `namako lint` output directly.
 {% endif %}
 
-**Validation Criteria:**
-1. Scenario '{{ scenario_key }}' is executable (not @Deferred)
-2. namako gate --json shows lint passes
+---
+
+## Where To Add Bindings
+
+Add new bindings to files in `test/tests/src/steps/`. 
+
+**Recommended approach:**
+1. Find an existing file that matches the feature domain (e.g., `connection.rs` for connection steps)
+2. Or create a new file (e.g., `messaging.rs`) and add `mod messaging;` to `steps/mod.rs`
+
+---
+
+{% if binding_exemplars and binding_exemplars | length > 0 %}
+## Binding Examples (from this repository)
+
+Use these patterns from existing bindings:
+
+{% for ex in binding_exemplars %}
+### Example {{ loop.index }}: `{{ ex.step_text }}`
+**File:** `{{ ex.file_path }}`
+```rust
+{{ ex.binding_code }}
+```
+{% endfor %}
+
+{% else %}
+## Binding Pattern Reference
+
+### Given step (setup, mutable context)
+```rust
+#[given("a server is running")]
+fn given_server_running(ctx: &mut TestWorldMut) {
+    let scenario = ctx.init();
+    // Setup logic here
+    scenario.server_start(config, protocol);
+}
+```
+
+### When step (action, mutable context)  
+```rust
+#[when("a client connects")]
+fn when_client_connects(ctx: &mut TestWorldMut) {
+    let scenario = ctx.scenario_mut();
+    // Action logic here
+}
+```
+
+### Then step (assertion, immutable context)
+```rust
+#[then("the server has observed ConnectEvent")]
+fn then_server_observed_connect(ctx: &TestWorldRef) -> AssertOutcome<()> {
+    if ctx.server_observed(TrackedServerEvent::Connect) {
+        AssertOutcome::Passed(())
+    } else {
+        AssertOutcome::Pending  // Keep polling
+    }
+}
+```
+
+{% endif %}
+---
+
+## Context Types
+
+- **`&mut TestWorldMut`** — For `Given` and `When` steps (mutable access)
+- **`&TestWorldRef`** — For `Then` steps (immutable, assertion-focused)
+- **`AssertOutcome<T>`** — Return type for polling assertions (`Passed`, `Pending`, or `Failed`)
+
+See `test/tests/src/world.rs` for the World type definition.
+
+---
+
+## Validation Criteria
+
+1. ✅ All missing steps have bindings created
+2. ✅ `namako lint` passes (no unresolved steps)
+3. ✅ Code compiles (`cargo build` succeeds)
+
+---
+
+## Important Notes
+
+- **Don't implement SUT behavior** — just create the binding functions
+- **Use existing harness helpers** — check `test/harness/src/` for available methods
+- **Match the step text exactly** — the macro string must match the feature file step

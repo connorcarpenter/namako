@@ -730,6 +730,12 @@ fn run_autonomous_loop(
         
         let gates_now_pass = after_state.all_gates_pass();
         
+        // Show mission-specific success message
+        let mission_success_msg = format_mission_success(&mission_type, before_binding, after_binding, before_sut, after_sut, before_spec, after_spec);
+        if let Some(msg) = mission_success_msg {
+            println!("{}", msg);
+        }
+        
         if gates_now_pass && !after_state.has_work() {
             println!("🎉 All gates pass, no issues remaining. DONE!");
             break;
@@ -762,4 +768,55 @@ fn run_autonomous_loop(
     }
     
     Ok(())
+}
+
+/// Format a mission-specific success message based on what the mission type was trying to achieve.
+fn format_mission_success(
+    mission_type: &crate::mission_type::MissionType,
+    before_binding: usize,
+    after_binding: usize,
+    before_sut: usize,
+    after_sut: usize,
+    before_spec: usize,
+    after_spec: usize,
+) -> Option<String> {
+    use crate::mission_type::MissionType;
+    
+    match mission_type {
+        MissionType::CreateMissingBindings { .. } => {
+            let bindings_created = before_binding.saturating_sub(after_binding);
+            if bindings_created > 0 {
+                let cascade_msg = if after_sut > before_sut {
+                    format!(" → {} SUT issue(s) surfaced (expected cascade)", after_sut - before_sut)
+                } else {
+                    String::new()
+                };
+                Some(format!("📝 Created {} binding(s){}", bindings_created, cascade_msg))
+            } else {
+                None
+            }
+        }
+        MissionType::ImplementBehaviorForScenario { .. } | MissionType::FixRegressionFromGateFailure { .. } => {
+            let sut_fixed = before_sut.saturating_sub(after_sut);
+            if sut_fixed > 0 {
+                Some(format!("🔧 Fixed {} SUT issue(s)", sut_fixed))
+            } else {
+                None
+            }
+        }
+        MissionType::AddOrClarifyScenario { .. } => {
+            let specs_improved = before_spec.saturating_sub(after_spec);
+            if specs_improved > 0 {
+                let cascade_msg = if after_binding > before_binding {
+                    format!(" → {} binding(s) now needed (expected cascade)", after_binding - before_binding)
+                } else {
+                    String::new()
+                };
+                Some(format!("📋 Improved {} spec issue(s){}", specs_improved, cascade_msg))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }

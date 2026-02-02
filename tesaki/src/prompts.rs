@@ -342,6 +342,8 @@ pub struct BriefContext {
     // CreateMissingBindings
     pub scenario_key: Option<String>,
     pub missing_steps: Option<Vec<String>>,
+    pub all_missing_steps: Option<Vec<String>>,  // All unique missing steps for batching
+    pub binding_exemplars: Option<Vec<BindingExemplar>>,  // Examples from repo
 
     // ImplementBehaviorForScenario
     pub scenario_name: Option<String>,
@@ -353,6 +355,8 @@ pub struct BriefContext {
     pub feature_path: Option<String>,
     pub rule_name: Option<String>,
     pub missing_tags: Option<Vec<String>>,
+    pub current_scenario_count: Option<usize>,  // For AddOrClarifyScenario
+    pub rules_without_scenarios: Option<Vec<String>>,  // For AddOrClarifyScenario
 
     // RefactorBindingsForClarity
     pub binding_ids: Option<Vec<String>>,
@@ -362,6 +366,14 @@ pub struct BriefContext {
 
     // TriageFailures
     pub failure_count: Option<usize>,
+}
+
+/// A binding exemplar to include in mission context
+#[derive(Debug, Serialize, Clone)]
+pub struct BindingExemplar {
+    pub step_text: String,
+    pub binding_code: String,
+    pub file_path: String,
 }
 
 #[allow(dead_code)]
@@ -379,10 +391,25 @@ impl BriefContext {
             MissionType::CreateMissingBindings {
                 scenario_key,
                 missing_steps,
-            } => Self {
-                scenario_key: Some(scenario_key.clone()),
-                missing_steps: Some(missing_steps.clone()),
-                ..Default::default()
+            } => {
+                // Collect ALL unique missing step texts for comprehensive batching
+                let all_missing: Vec<String> = state.binding_issues
+                    .iter()
+                    .filter(|b| matches!(b.kind, crate::repo_state::BindingIssueKind::MissingBinding))
+                    .filter_map(|b| b.step_text.clone())
+                    .collect();
+                
+                let mut unique_steps = all_missing.clone();
+                unique_steps.sort();
+                unique_steps.dedup();
+                
+                Self {
+                    scenario_key: Some(scenario_key.clone()),
+                    missing_steps: Some(missing_steps.clone()),
+                    all_missing_steps: Some(unique_steps),
+                    binding_exemplars: None, // TODO: Could extract from existing bindings
+                    ..Default::default()
+                }
             },
             MissionType::ImplementBehaviorForScenario {
                 scenario_key,
@@ -408,10 +435,32 @@ impl BriefContext {
             MissionType::AddOrClarifyScenario {
                 feature_path,
                 rule_name,
-            } => Self {
-                feature_path: Some(feature_path.clone()),
-                rule_name: rule_name.clone(),
-                ..Default::default()
+            } => {
+                // Count scenarios for this feature from spec_issues
+                let scenario_count = state.spec_issues
+                    .iter()
+                    .filter(|i| i.feature_path == *feature_path)
+                    .count();
+                
+                // Find rules that might need scenarios
+                let rules_needing_scenarios: Vec<String> = state.spec_issues
+                    .iter()
+                    .filter(|i| i.feature_path == *feature_path)
+                    .filter(|i| matches!(i.kind, crate::repo_state::SpecIssueKind::MissingCoverage))
+                    .filter_map(|i| i.rule_name.clone())
+                    .collect();
+                
+                Self {
+                    feature_path: Some(feature_path.clone()),
+                    rule_name: rule_name.clone(),
+                    current_scenario_count: Some(scenario_count),
+                    rules_without_scenarios: if rules_needing_scenarios.is_empty() { 
+                        None 
+                    } else { 
+                        Some(rules_needing_scenarios) 
+                    },
+                    ..Default::default()
+                }
             },
             MissionType::NormalizeIdentityTags {
                 feature_path,
@@ -451,11 +500,15 @@ impl Default for BriefContext {
         Self {
             scenario_key: None,
             missing_steps: None,
+            all_missing_steps: None,
+            binding_exemplars: None,
             scenario_name: None,
             failure: None,
             feature_path: None,
             rule_name: None,
             missing_tags: None,
+            current_scenario_count: None,
+            rules_without_scenarios: None,
             binding_ids: None,
             repo_summary: None,
             failure_count: None,
@@ -505,11 +558,15 @@ pub fn render_brief(mission_type: &MissionType, state: &RepoState) -> Result<Str
         .render(context! {
             scenario_key => ctx.scenario_key,
             missing_steps => ctx.missing_steps,
+            all_missing_steps => ctx.all_missing_steps,
+            binding_exemplars => ctx.binding_exemplars,
             scenario_name => ctx.scenario_name,
             failure => ctx.failure,
             feature_path => ctx.feature_path,
             rule_name => ctx.rule_name,
             missing_tags => ctx.missing_tags,
+            current_scenario_count => ctx.current_scenario_count,
+            rules_without_scenarios => ctx.rules_without_scenarios,
             binding_ids => ctx.binding_ids,
             repo_summary => ctx.repo_summary,
             failure_count => ctx.failure_count,
@@ -818,8 +875,8 @@ mod tests {
         assert!(result.contains("# Mission 001-test-abc12345"));
         assert!(result.contains("**Type:** CreateMissingBindings"));
         assert!(result.contains("**Target:** feature:Rule(01):Scenario(01)"));
-        assert!(result.contains("## Objective"));
-        assert!(result.contains("| Surface | Policy | Paths |"));
+        assert!(result.contains("## 🎯 Objective"));
+        assert!(result.contains("| Surface | Policy | Allowed Paths |"));
         assert!(result.contains("| Spec | LOCKED |"));
         assert!(result.contains("Generated by Tesaki v1.8"));
     }
@@ -873,8 +930,8 @@ mod tests {
 
         let result = render_brief(&mission_type, &state).unwrap();
 
-        assert!(result.contains("Create bindings for feature:Rule(01):Scenario(01)"));
-        assert!(result.contains("2 missing steps"));
+        assert!(result.contains("**Target Scenario:** feature:Rule(01):Scenario(01)"));
+        assert!(result.contains("2 unique patterns"));
         assert!(result.contains("`Given a test`"));
         assert!(result.contains("`When something happens`"));
     }

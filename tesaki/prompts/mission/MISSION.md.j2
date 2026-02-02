@@ -12,37 +12,80 @@ Required context:
 - surface_definitions: {spec: {patterns}, tests_bindings: {patterns}, sut: {patterns}}
 - budgets: {max_files_changed, max_scenarios_promoted, max_runtime_seconds}
 - version: String
+- previous_mission: Option<{type, outcome, notes}> (optional)
+- expected_cascade: Option<String> (optional)
 #}
 # Mission {{ mission_id }}
 
 **Type:** {{ mission_type }}
 **Stage:** {{ stage }}
-{% if target %}**Target:** {{ target }}
-{% endif %}
+{% if target %}**Target:** {{ target }}{% endif %}
 
-## Surfaces
+---
 
-| Surface | Policy | Paths |
-|---------|--------|-------|
+## 🎯 Objective
+
+{{ objective }}
+
+---
+
+## Edit Surface Policy
+
+**You may ONLY edit files matching these patterns:**
+
+| Surface | Policy | Allowed Paths |
+|---------|--------|---------------|
 | Spec | {{ surface_policy.spec | upper }} | `{{ surface_definitions.spec.patterns | join("`, `") }}` |
 | Tests/Bindings | {{ surface_policy.tests_bindings | upper }} | `{{ surface_definitions.tests_bindings.patterns | join("`, `") }}` |
 | SUT | {{ surface_policy.sut | upper }} | `{{ surface_definitions.sut.patterns | join("`, `") }}` |
 
-## Objective
+{% if surface_policy.spec == "locked" and surface_policy.tests_bindings == "unlocked" %}
+⚠️ **Spec is LOCKED** — Do not modify `.feature` files. Only edit test/binding code.
+{% elif surface_policy.tests_bindings == "locked" and surface_policy.spec == "unlocked" %}
+⚠️ **Tests are LOCKED** — Do not modify bindings. Only edit `.feature` files.
+{% elif surface_policy.sut == "locked" %}
+⚠️ **SUT is LOCKED** — Do not modify implementation code.
+{% endif %}
 
-{{ objective }}
+---
 
 ## Context
 
 {{ context }}
 
-## Validation
+{% if previous_mission %}
+---
+
+## Previous Mission Context
+
+**Previous:** {{ previous_mission.type }}
+**Outcome:** {{ previous_mission.outcome }}
+{% if previous_mission.notes %}
+**Notes:** {{ previous_mission.notes }}
+{% endif %}
+{% endif %}
+
+{% if expected_cascade %}
+---
+
+## Expected Cascade
+
+{{ expected_cascade }}
+
+This is normal in spec-driven development. The next mission will address the downstream work.
+{% endif %}
+
+---
+
+## ✅ Validation Criteria
 
 {% for criterion in validation_criteria %}
 {{ loop.index }}. {{ criterion }}
 {% else %}
-1. namako gate --json must pass
+1. `namako gate --json` must pass
 {% endfor %}
+
+---
 
 ## Budgets
 
@@ -51,6 +94,17 @@ Required context:
 | Max files changed | {{ budgets.max_files_changed }} |
 | Max scenarios promoted | {{ budgets.max_scenarios_promoted }} |
 | Max runtime (seconds) | {{ budgets.max_runtime_seconds }} |
+
+---
+
+## How To Verify Your Work
+
+After making changes, run:
+```bash
+namako gate --adapter-cmd "cargo run --manifest-path test/npa/Cargo.toml --" --specs-dir test/specs
+```
+
+If lint fails with unresolved steps, that's expected for spec missions — bindings will be created in the next mission.
 
 ---
 
