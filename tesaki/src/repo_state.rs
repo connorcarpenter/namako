@@ -399,7 +399,7 @@ impl RepoState {
 
         let spec_issues = classify_spec_issues(review);
         let structure_issues = classify_structure_issues(status, review);
-        let binding_issues = classify_binding_issues(review);
+        let binding_issues = classify_binding_issues(review, status);
         let sut_issues = classify_sut_issues(status);
         let global_blockers = classify_blockers(review);
 

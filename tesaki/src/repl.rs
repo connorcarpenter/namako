@@ -22,25 +22,7 @@ use crate::session::{PendingMission, SessionState};
 use crate::stage::{detect_stage, Stage, StageConstraint};
 use crate::surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy};
 
-const MAX_TURN_STEPS: usize = 5;
 const DEFAULT_PLANNER_TIMEOUT_SECONDS: u64 = 60;
-
-const SYSTEM_PROMPT: &str = r#"You are Tesaki, an expert developer assistant.
-You operate in a read-eval-print loop.
-Your internal state is provided in `session_state_json`.
-You can run tools by returning a `run` array. Allowed tools: `namako`, `tesaki`.
-You can propose a mission by returning a `mission_proposal` object.
-You MUST respond with a single valid JSON object matching the `ChatPlan` schema.
-Schema:
-{
-  "say": "Message to the user",
-  "run": [ { "tool": "namako", "args": ["status", "--json"] } ],
-  "mission_proposal": null,
-  "done": true/false
-}
-If you need to gather information, return `done: false` and use `run`.
-If you are waiting for user input or have finished the turn, return `done: true`.
-"#;
 
 pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Result<()> {
     let config = match config::discover_config(&start_dir)? {
@@ -179,110 +161,77 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
 
         session.intent.apply_user_message(line);
 
-        let mut recent_results: Vec<CommandResult> = Vec::new();
-        let mut attempts = 0;
-        let mut planner_hint: Option<String> = None;
-        loop {
-            if attempts >= MAX_TURN_STEPS {
-                println!("Planner exceeded max iterations for this turn.");
-                break;
-            }
-            attempts += 1;
+        let planner_hint: Option<String> = None;
+        
+        // Build compact planner input
+        let planner_input = ChatTurnInput {
+            user_message: line.to_string(),
+            session_state_json: serde_json::to_value(&session)?,
+            recent_command_results: vec![], // No longer used
+            planner_hint: planner_hint.clone(),
+            system_prompt: None,
+        };
 
-            let planner_input = ChatTurnInput {
-                user_message: format!("{}\n\nUser Query: {}", SYSTEM_PROMPT, line),
-                session_state_json: serde_json::to_value(&session)?,
-                recent_command_results: recent_results.clone(),
-                planner_hint: planner_hint.clone(),
-                system_prompt: None,
-            };
+        println!("Planner ({}) running...", planner.name());
+        let plan_start = Instant::now();
+        let plan_result = planner.plan_turn(&planner_input);
+        println!(
+            "Planner ({}) finished in {:.1}s",
+            planner.name(),
+            plan_start.elapsed().as_secs_f64()
+        );
 
-            let simulate_bad_plan = std::env::var("TESAKI_SIMULATE_BAD_PLAN")
-                .ok()
-                .as_deref()
-                == Some("1");
-            println!("Planner ({}) running...", planner.name());
-            let plan_start = Instant::now();
-            let plan_result = if simulate_bad_plan {
-                Err(anyhow::anyhow!("Simulated invalid JSON from planner"))
-            } else {
-                planner.plan_turn(&planner_input)
-            };
-            println!(
-                "Planner ({}) finished in {:.1}s",
-                planner.name(),
-                plan_start.elapsed().as_secs_f64()
-            );
-
-            let plan = match plan_result {
-                Ok(plan) => plan,
-                Err(err) => {
-                    logger.log_event(crate::logging::LogEvent::PlannerPlan {
-                        parse_status: "invalid".to_string(),
-                        plan_json: None,
-                        error: Some(err.to_string()),
-                    });
-                    if planner_hint.is_none() {
-                        planner_hint = Some("Return ONLY valid JSON matching the ChatPlan schema.".to_string());
-                        println!("Planner returned invalid response; retrying with strict JSON requirement.");
+        let plan = match plan_result {
+            Ok(plan) => plan,
+            Err(err) => {
+                logger.log_event(crate::logging::LogEvent::PlannerPlan {
+                    parse_status: "invalid".to_string(),
+                    plan_json: None,
+                    error: Some(err.to_string()),
+                });
+                // Retry once with strict hint
+                let retry_input = ChatTurnInput {
+                    user_message: line.to_string(),
+                    session_state_json: serde_json::to_value(&session)?,
+                    recent_command_results: vec![],
+                    planner_hint: Some("Return ONLY valid JSON. No explanation.".to_string()),
+                    system_prompt: None,
+                };
+                println!("Retrying with strict JSON requirement...");
+                match planner.plan_turn(&retry_input) {
+                    Ok(plan) => plan,
+                    Err(err2) => {
+                        println!("Error: {}", err2);
                         continue;
                     }
-                    let details = format!("Planner failed to return valid JSON after retry: {}", err);
-                    logger.log_event(crate::logging::LogEvent::SessionEnd {
-                        stop_reason: "FAILED".to_string(),
-                        details: Some(details.clone()),
-                    });
-                    println!("FAILED: {}", details);
-                    return Err(anyhow::anyhow!(details));
-                }
-            };
-            if let Ok(plan_json) = serde_json::to_string(&plan) {
-                logger.log_event(crate::logging::LogEvent::PlannerPlan {
-                    parse_status: "ok".to_string(),
-                    plan_json: Some(plan_json),
-                    error: None,
-                });
-            }
-            print_plan(&plan);
-
-            if let Some(proposal) = handle_mission_proposal(&plan, &mut session) {
-                logger.log_event(crate::logging::LogEvent::MissionProposed {
-                    mission_type: proposal.mission_type.clone(),
-                    stage: proposal.stage.clone(),
-                    target: proposal.target.clone(),
-                    surfaces: crate::logging::SurfaceLog {
-                        spec: format!("{:?}", proposal.surfaces.spec),
-                        tests: format!("{:?}", proposal.surfaces.tests),
-                        sut: format!("{:?}", proposal.surfaces.sut),
-                    },
-                });
-                show_mission_proposal(&proposal);
-            }
-
-            if plan.run.is_empty() {
-                if !plan.done {
-                    println!("Planner did not provide commands but marked done=false.");
-                }
-                break;
-            }
-
-            recent_results.clear();
-            for command in plan.run {
-                match execute_allowed_command(
-                    &command,
-                    &spec_root,
-                    &adapter,
-                    &namako_cmd,
-                    logger,
-                ) {
-                    Ok(result) => recent_results.push(result),
-                    Err(_) => {}
                 }
             }
+        };
+        
+        if let Ok(plan_json) = serde_json::to_string(&plan) {
+            logger.log_event(crate::logging::LogEvent::PlannerPlan {
+                parse_status: "ok".to_string(),
+                plan_json: Some(plan_json),
+                error: None,
+            });
+        }
+        
+        // Display the planner's response
+        println!("{}", plan.say);
 
-            if plan.done {
-                break;
-            }
+        // Handle mission proposal if present
+        if let Some(proposal) = handle_mission_proposal(&plan, &mut session) {
+            logger.log_event(crate::logging::LogEvent::MissionProposed {
+                mission_type: proposal.mission_type.clone(),
+                stage: proposal.stage.clone(),
+                target: proposal.target.clone(),
+                surfaces: crate::logging::SurfaceLog {
+                    spec: format!("{:?}", proposal.surfaces.spec),
+                    tests: format!("{:?}", proposal.surfaces.tests),
+                    sut: format!("{:?}", proposal.surfaces.sut),
+                },
+            });
+            show_mission_proposal(&proposal);
         }
     }
 

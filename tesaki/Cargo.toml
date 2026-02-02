@@ -40,5 +40,6 @@ tempfile = "3.15"
 
 # Templating for prompt generation
 minijinja = { version = "2.6", features = ["loader"] }
+regex = "1.12.2"
 
 [dev-dependencies]

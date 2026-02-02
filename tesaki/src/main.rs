@@ -176,9 +176,10 @@ fn main() -> Result<()> {
 
     let _cli = Cli::parse();
     let log_path = std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from);
+    // Use Off mode for cleaner REPL output - state is shown in summary
     let logger = logging::JsonlLogger::new_with_console(
         log_path,
-        logging::ConsoleMode::Commands,
+        logging::ConsoleMode::Off,
     );
     repl::run_repl(
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -1211,6 +1212,22 @@ use crate::codex_agent::CodexAgent;
                 runner_cmd,
                 None,
                 spec_root.clone(),
+            )?)
+        }
+        "copilot" => {
+            if let Err(e) = copilot_agent::CopilotAgent::check_available() {
+                let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
+                emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
+                eprintln!("STOP: {}", result.reason);
+                return Ok(());
+            }
+            Box::new(copilot_agent::CopilotAgent::new_with_timeout_and_stream(
+                runner_cmd,
+                None,
+                spec_root.clone(),
+                Some(std::time::Duration::from_secs(max_runtime_seconds as u64)),
+                stream_output,
             )?)
         }
         _ => anyhow::bail!("Unknown runner: {}", runner_name),

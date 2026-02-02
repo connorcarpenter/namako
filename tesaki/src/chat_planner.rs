@@ -85,7 +85,8 @@ impl BaseChatPlanner {
     }
 }
 
-/// Format the ChatTurnInput as a natural language prompt for LLM planners.
+/// Format the ChatTurnInput as a compact prompt for LLM planners.
+/// Only sends essential state, not full JSON dumps.
 fn format_planner_prompt(input: &ChatTurnInput) -> String {
     let system_prompt = input.system_prompt.as_deref().unwrap_or(DEFAULT_SYSTEM_PROMPT);
     
@@ -93,92 +94,67 @@ fn format_planner_prompt(input: &ChatTurnInput) -> String {
     prompt.push_str(system_prompt);
     prompt.push_str("\n\n");
     
-    // Add session state context
-    prompt.push_str("## Current Session State\n```json\n");
-    if let Ok(state_str) = serde_json::to_string_pretty(&input.session_state_json) {
-        prompt.push_str(&state_str);
-    }
-    prompt.push_str("\n```\n\n");
-    
-    // Add recent command results if any
-    if !input.recent_command_results.is_empty() {
-        prompt.push_str("## Recent Command Results\n");
-        for result in &input.recent_command_results {
-            prompt.push_str(&format!("### {} {:?} (exit {})\n", result.tool, result.args, result.exit_code));
-            if !result.stdout.is_empty() {
-                prompt.push_str("stdout:\n```\n");
-                prompt.push_str(&result.stdout);
-                prompt.push_str("\n```\n");
-            }
-            if !result.stderr.is_empty() {
-                prompt.push_str("stderr:\n```\n");
-                prompt.push_str(&result.stderr);
-                prompt.push_str("\n```\n");
-            }
-        }
+    // Extract compact state from session_state_json
+    prompt.push_str("## Repository State\n");
+    if let Some(summary) = input.session_state_json.get("last_repo_state_summary").and_then(|v| v.as_str()) {
+        prompt.push_str(summary);
         prompt.push('\n');
     }
+    if let Some(intent) = input.session_state_json.get("intent") {
+        if let Some(stage) = intent.get("stage").and_then(|v| v.as_str()) {
+            prompt.push_str(&format!("Stage: {}\n", stage));
+        }
+    }
+    prompt.push('\n');
     
-    // Add planner hint if present
+    // Add planner hint if present (important context)
     if let Some(hint) = &input.planner_hint {
-        prompt.push_str("## Important\n");
+        prompt.push_str("Note: ");
         prompt.push_str(hint);
         prompt.push_str("\n\n");
     }
     
-    // Add the user message
-    prompt.push_str("## User Message\n");
+    // User message
+    prompt.push_str("## User\n");
     prompt.push_str(&input.user_message);
     prompt.push_str("\n\n");
     
-    // Remind to respond with JSON
-    prompt.push_str("## Your Response\nRespond with a single valid JSON object matching the ChatPlan schema. No markdown, no explanation, just the JSON object.\n");
+    // Response instruction
+    prompt.push_str("Respond with JSON only.\n");
     
     prompt
 }
 
-const DEFAULT_SYSTEM_PROMPT: &str = r#"You are Tesaki, an expert developer assistant for spec-driven development.
+const DEFAULT_SYSTEM_PROMPT: &str = r#"You are Tesaki, a spec-driven development assistant.
 
-You operate in a read-eval-print loop. Your job is to help the developer work through their specs using the Namako toolchain.
+Given the repository state below, help the developer by:
+1. Answering questions about the current state
+2. Proposing a mission when they want to make progress
 
-You can:
-1. Run `namako` commands to inspect repo state (status, review, explain, gate)
-2. Propose missions for a coding agent to execute
-
-You MUST respond with a single valid JSON object matching this schema:
+Respond with JSON only:
 ```json
-{
-  "say": "Message to display to the user",
-  "run": [
-    { "tool": "namako", "args": ["status", "--json"], "reason": "optional explanation" }
-  ],
-  "mission_proposal": null,
-  "done": true
-}
+{"say": "Brief response", "mission_proposal": null, "done": true}
 ```
 
-When proposing a mission, use this schema for mission_proposal:
+For mission_proposal (when the user wants to make progress):
 ```json
 {
   "mission_type": "CreateMissingBindings",
-  "stage": "Implement Tests & Bindings",
-  "target": "@Scenario(03)",
-  "surfaces": { "spec": "LOCKED", "tests": "UNLOCKED", "sut": "LOCKED" },
-  "objective": "Add step bindings for the target scenario",
-  "validation": ["namako lint passes", "No regressions"]
+  "stage": "Implement Tests & Bindings", 
+  "target": "02_transport.feature",
+  "surfaces": {"spec": "LOCKED", "tests": "UNLOCKED", "sut": "LOCKED"},
+  "objective": "Add step bindings for missing steps",
+  "validation": ["namako lint passes"]
 }
 ```
 
-Mission types: RefineFeatureIntent, AddOrClarifyScenario, NormalizeIdentityTags, CreateMissingBindings, StrengthenThenAssertions, ImplementBehaviorForScenario, FixRegressionFromGateFailure
+Mission types:
+- CreateMissingBindings: Add step bindings for unbound steps
+- ImplementBehaviorForScenario: Implement SUT code to pass a failing scenario
+- FixRegressionFromGateFailure: Fix a newly failing test
+- NormalizeIdentityTags: Add/fix @Feature/@Rule/@Scenario tags
 
-Rules:
-- `say`: Your message to the user. Be concise and helpful.
-- `run`: Array of commands to execute. Only `namako` and `tesaki` are allowed.
-- `mission_proposal`: Set to null unless you're proposing a mission for the coding agent.
-- `done`: Set to `true` if you're done with this turn (waiting for user input or finished). Set to `false` if you need to run commands first.
-
-If the user asks a question, answer it in `say` and set `done: true`.
-If you need information, add commands to `run` and set `done: false`.
+Be concise. Focus on actionable next steps.
 "#;
 
 fn wait_with_output_timeout(mut child: Child, timeout: Duration) -> Result<Output> {

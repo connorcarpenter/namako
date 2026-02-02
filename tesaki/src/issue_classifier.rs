@@ -56,15 +56,27 @@ pub fn classify_structure_issues(status: &StatusPacket, _review: &ReviewPacket) 
     issues
 }
 
-/// Classify binding issues from review packet.
-pub fn classify_binding_issues(review: &ReviewPacket) -> Vec<BindingIssue> {
+/// Classify binding issues from review and status packets.
+pub fn classify_binding_issues(review: &ReviewPacket, status: &StatusPacket) -> Vec<BindingIssue> {
     let mut issues = Vec::new();
 
+    // Parse MissingStep errors from gates.lint.summary
+    if let Some(gates) = &status.gates {
+        if let Some(summary) = &gates.lint.summary {
+            issues.extend(parse_missing_steps_from_summary(summary));
+        }
+    }
+
+    // Also include missing_bindings_for_top_candidates from review
     for missing in &review.missing_bindings_for_top_candidates {
         if missing.missing_step_texts.is_empty() {
             continue;
         }
         for step in &missing.missing_step_texts {
+            // Avoid duplicates
+            if issues.iter().any(|i| i.step_text.as_deref() == Some(step.as_str())) {
+                continue;
+            }
             issues.push(BindingIssue {
                 kind: BindingIssueKind::MissingBinding,
                 scenario_key: Some(missing.candidate_name.clone()),
@@ -77,6 +89,40 @@ pub fn classify_binding_issues(review: &ReviewPacket) -> Vec<BindingIssue> {
         }
     }
 
+    issues
+}
+
+/// Parse MissingStep entries from lint summary (debug format).
+fn parse_missing_steps_from_summary(summary: &str) -> Vec<BindingIssue> {
+    use regex::Regex;
+    
+    let mut issues = Vec::new();
+    
+    // Pattern: MissingStep { step_text: "...", step_kind: "...", feature_path: "...", line: N }
+    let re = Regex::new(
+        r#"MissingStep \{ step_text: "([^"]+)", step_kind: "([^"]+)", feature_path: "([^"]+)", line: (\d+) \}"#
+    ).unwrap();
+    
+    for cap in re.captures_iter(summary) {
+        let step_text = cap.get(1).map(|m| m.as_str().to_string());
+        let step_kind = cap.get(2).map(|m| m.as_str());
+        let feature_path = cap.get(3).map(|m| m.as_str().to_string());
+        let line = cap.get(4).and_then(|m| m.as_str().parse::<u32>().ok());
+        
+        issues.push(BindingIssue {
+            kind: BindingIssueKind::MissingBinding,
+            scenario_key: None,
+            step_text: step_text.clone(),
+            description: format!(
+                "Missing {} binding for \"{}\" at {}:{}",
+                step_kind.unwrap_or("?"),
+                step_text.as_deref().unwrap_or("?"),
+                feature_path.as_deref().unwrap_or("?"),
+                line.unwrap_or(0)
+            ),
+        });
+    }
+    
     issues
 }
 
