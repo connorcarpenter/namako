@@ -34,6 +34,7 @@ mod runner;
 mod base_runner;
 mod claude_code_agent;
 mod codex_agent;
+mod copilot_agent;
 mod runner_test;
 mod session;
 mod stage;

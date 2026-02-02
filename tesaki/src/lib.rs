@@ -18,6 +18,7 @@ pub mod runner;
 pub(crate) mod base_runner;
 pub mod claude_code_agent;
 pub mod codex_agent;
+pub mod copilot_agent;
 pub mod runner_test;
 pub mod session;
 pub mod stage;

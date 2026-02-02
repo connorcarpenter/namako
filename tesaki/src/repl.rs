@@ -13,8 +13,9 @@ use crate::chat_plan::{
 };
 use crate::chat_planner::{ChatPlanner, MockChatPlanner};
 use crate::claude_code_agent::ClaudeCodeAgent;
-use crate::config::{self, ConfigDiscoveryResult};
 use crate::codex_agent::CodexAgent;
+use crate::copilot_agent::CopilotAgent;
+use crate::config::{self, ConfigDiscoveryResult};
 use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
 use crate::repo_state::RepoState;
 use crate::session::{PendingMission, SessionState};
@@ -23,6 +24,23 @@ use crate::surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as Rep
 
 const MAX_TURN_STEPS: usize = 5;
 const DEFAULT_PLANNER_TIMEOUT_SECONDS: u64 = 60;
+
+const SYSTEM_PROMPT: &str = r#"You are Tesaki, an expert developer assistant.
+You operate in a read-eval-print loop.
+Your internal state is provided in `session_state_json`.
+You can run tools by returning a `run` array. Allowed tools: `namako`, `tesaki`.
+You can propose a mission by returning a `mission_proposal` object.
+You MUST respond with a single valid JSON object matching the `ChatPlan` schema.
+Schema:
+{
+  "say": "Message to the user",
+  "run": [ { "tool": "namako", "args": ["status", "--json"] } ],
+  "mission_proposal": null,
+  "done": true/false
+}
+If you need to gather information, return `done: false` and use `run`.
+If you are waiting for user input or have finished the turn, return `done: true`.
+"#;
 
 pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Result<()> {
     let config = match config::discover_config(&start_dir)? {
@@ -56,11 +74,11 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
     let planner_name = config.planner.as_deref().unwrap_or("mock");
     if config.planner.is_none() {
         println!(
-            "Planner not configured. Set `planner = \"mock\" | \"codex\" | \"claude\"` in .tesaki/config.toml."
+            "Planner not configured. Set `planner = \"mock\" | \"codex\" | \"claude\" | \"copilot\"` in .tesaki/config.toml."
         );
     } else if planner_name == "mock" {
         println!(
-            "Planner is set to \"mock\". To enable interactive planning, set `planner = \"codex\" | \"claude\"` in .tesaki/config.toml."
+            "Planner is set to \"mock\". To enable interactive planning, set `planner = \"codex\" | \"claude\" | \"copilot\"` in .tesaki/config.toml."
         );
     }
 
@@ -88,6 +106,18 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
                 anyhow::bail!("Claude planner unavailable: {}", err);
             }
             Box::new(ClaudeCodeAgent::new_with_timeout_and_stream(
+                config.runner_cmd.clone(),
+                config.planner_cmd.clone(),
+                spec_root.clone(),
+                Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
+                true,
+            )?)
+        }
+        "copilot" => {
+            if let Err(err) = CopilotAgent::check_available() {
+                anyhow::bail!("Copilot planner unavailable: {}", err);
+            }
+            Box::new(CopilotAgent::new_with_timeout_and_stream(
                 config.runner_cmd.clone(),
                 config.planner_cmd.clone(),
                 spec_root.clone(),
@@ -160,10 +190,11 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
             attempts += 1;
 
             let planner_input = ChatTurnInput {
-                user_message: line.to_string(),
+                user_message: format!("{}\n\nUser Query: {}", SYSTEM_PROMPT, line),
                 session_state_json: serde_json::to_value(&session)?,
                 recent_command_results: recent_results.clone(),
                 planner_hint: planner_hint.clone(),
+                system_prompt: None,
             };
 
             let simulate_bad_plan = std::env::var("TESAKI_SIMULATE_BAD_PLAN")

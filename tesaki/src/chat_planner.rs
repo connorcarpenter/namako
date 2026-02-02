@@ -77,12 +77,109 @@ impl BaseChatPlanner {
     fn write_input_temp(&self, input: &ChatTurnInput) -> Result<(tempfile::NamedTempFile, PathBuf)> {
         let mut file = tempfile::NamedTempFile::new()
             .context("Failed to create temp file for chat planner")?;
-        let json = serde_json::to_string_pretty(input)?;
-        file.write_all(json.as_bytes())?;
+        // Format as a natural language prompt, not raw JSON
+        let prompt = format_planner_prompt(input);
+        file.write_all(prompt.as_bytes())?;
         let path = file.path().to_path_buf();
         Ok((file, path))
     }
 }
+
+/// Format the ChatTurnInput as a natural language prompt for LLM planners.
+fn format_planner_prompt(input: &ChatTurnInput) -> String {
+    let system_prompt = input.system_prompt.as_deref().unwrap_or(DEFAULT_SYSTEM_PROMPT);
+    
+    let mut prompt = String::new();
+    prompt.push_str(system_prompt);
+    prompt.push_str("\n\n");
+    
+    // Add session state context
+    prompt.push_str("## Current Session State\n```json\n");
+    if let Ok(state_str) = serde_json::to_string_pretty(&input.session_state_json) {
+        prompt.push_str(&state_str);
+    }
+    prompt.push_str("\n```\n\n");
+    
+    // Add recent command results if any
+    if !input.recent_command_results.is_empty() {
+        prompt.push_str("## Recent Command Results\n");
+        for result in &input.recent_command_results {
+            prompt.push_str(&format!("### {} {:?} (exit {})\n", result.tool, result.args, result.exit_code));
+            if !result.stdout.is_empty() {
+                prompt.push_str("stdout:\n```\n");
+                prompt.push_str(&result.stdout);
+                prompt.push_str("\n```\n");
+            }
+            if !result.stderr.is_empty() {
+                prompt.push_str("stderr:\n```\n");
+                prompt.push_str(&result.stderr);
+                prompt.push_str("\n```\n");
+            }
+        }
+        prompt.push('\n');
+    }
+    
+    // Add planner hint if present
+    if let Some(hint) = &input.planner_hint {
+        prompt.push_str("## Important\n");
+        prompt.push_str(hint);
+        prompt.push_str("\n\n");
+    }
+    
+    // Add the user message
+    prompt.push_str("## User Message\n");
+    prompt.push_str(&input.user_message);
+    prompt.push_str("\n\n");
+    
+    // Remind to respond with JSON
+    prompt.push_str("## Your Response\nRespond with a single valid JSON object matching the ChatPlan schema. No markdown, no explanation, just the JSON object.\n");
+    
+    prompt
+}
+
+const DEFAULT_SYSTEM_PROMPT: &str = r#"You are Tesaki, an expert developer assistant for spec-driven development.
+
+You operate in a read-eval-print loop. Your job is to help the developer work through their specs using the Namako toolchain.
+
+You can:
+1. Run `namako` commands to inspect repo state (status, review, explain, gate)
+2. Propose missions for a coding agent to execute
+
+You MUST respond with a single valid JSON object matching this schema:
+```json
+{
+  "say": "Message to display to the user",
+  "run": [
+    { "tool": "namako", "args": ["status", "--json"], "reason": "optional explanation" }
+  ],
+  "mission_proposal": null,
+  "done": true
+}
+```
+
+When proposing a mission, use this schema for mission_proposal:
+```json
+{
+  "mission_type": "CreateMissingBindings",
+  "stage": "Implement Tests & Bindings",
+  "target": "@Scenario(03)",
+  "surfaces": { "spec": "LOCKED", "tests": "UNLOCKED", "sut": "LOCKED" },
+  "objective": "Add step bindings for the target scenario",
+  "validation": ["namako lint passes", "No regressions"]
+}
+```
+
+Mission types: RefineFeatureIntent, AddOrClarifyScenario, NormalizeIdentityTags, CreateMissingBindings, StrengthenThenAssertions, ImplementBehaviorForScenario, FixRegressionFromGateFailure
+
+Rules:
+- `say`: Your message to the user. Be concise and helpful.
+- `run`: Array of commands to execute. Only `namako` and `tesaki` are allowed.
+- `mission_proposal`: Set to null unless you're proposing a mission for the coding agent.
+- `done`: Set to `true` if you're done with this turn (waiting for user input or finished). Set to `false` if you need to run commands first.
+
+If the user asks a question, answer it in `say` and set `done: true`.
+If you need information, add commands to `run` and set `done: false`.
+"#;
 
 fn wait_with_output_timeout(mut child: Child, timeout: Duration) -> Result<Output> {
     let start = Instant::now();
@@ -273,8 +370,9 @@ impl ChatPlanner for BaseChatPlanner {
 
         if !wants_input_file {
             if let Some(mut stdin) = child.stdin.take() {
-                let json = serde_json::to_string_pretty(input)?;
-                stdin.write_all(json.as_bytes())?;
+                // Format as natural language prompt, not raw JSON
+                let prompt = format_planner_prompt(input);
+                stdin.write_all(prompt.as_bytes())?;
             }
         }
 
@@ -307,7 +405,10 @@ impl ChatPlanner for BaseChatPlanner {
             anyhow::bail!("Planner returned empty output");
         }
 
-        let value: Value = serde_json::from_str(&output_text)
+        // Strip markdown code fences if present (LLMs often wrap JSON in ```json...```)
+        let json_text = strip_markdown_code_fences(&output_text);
+
+        let value: Value = serde_json::from_str(&json_text)
             .with_context(|| format!("Planner output is not valid JSON: {}", output_text))?;
         let plan: ChatPlan = serde_json::from_value(value)
             .with_context(|| "Planner output JSON does not match ChatPlan schema")?;
@@ -317,6 +418,31 @@ impl ChatPlanner for BaseChatPlanner {
     fn name(&self) -> &'static str {
         "cli"
     }
+}
+
+/// Strip markdown code fences from LLM output.
+/// Handles both ```json ... ``` and ``` ... ``` formats.
+/// Also handles text before the code fence (LLMs sometimes add explanatory text).
+fn strip_markdown_code_fences(text: &str) -> String {
+    let trimmed = text.trim();
+    
+    // Find the start of a code fence (may be preceded by other text)
+    let start_patterns = ["```json", "```JSON", "```"];
+    
+    for pattern in &start_patterns {
+        if let Some(start_pos) = trimmed.find(pattern) {
+            let after_pattern = &trimmed[start_pos + pattern.len()..];
+            // Find the closing fence
+            if let Some(end_pos) = after_pattern.rfind("```") {
+                return after_pattern[..end_pos].trim().to_string();
+            }
+            // No closing fence, return everything after the opening
+            return after_pattern.trim().to_string();
+        }
+    }
+    
+    // No code fence found, return as-is
+    trimmed.to_string()
 }
 
 #[cfg(test)]

@@ -60,6 +60,8 @@ pub struct ChatTurnInput {
     pub recent_command_results: Vec<CommandResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planner_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
