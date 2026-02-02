@@ -1,72 +1,60 @@
-# CLAUDE.md — Quick Start for AI Agents
+# CLAUDE.md — Agent Quick Start
 
-This file is a **15-second onramp**. All detailed information lives in the authoritative docs.
+**This file is self-contained. You do NOT need to read other docs to start working.**
 
 ---
 
-## The One Command You Need
+## Run the Autonomous Loop
 
 ```bash
 cd naia
-tesaki --loop 10   # Run 10 autonomous missions
+tesaki --loop 10
 ```
 
-That's it. The system will:
-1. Select the next task algorithmically (no LLM for decisions)
-2. Execute it via the configured runner (Copilot/Claude)
-3. Check if progress was made
-4. Continue until done or stalled
+The system will:
+1. Select tasks algorithmically (no LLM for decisions)
+2. Execute via runner (Copilot/Claude/Codex)
+3. Track progress (before/after issue counts)
+4. Continue until done or stalled (3× no-progress)
 
 ---
 
-## Before Any Work
+## Hard Constraints
 
-1. **Read `CURRENT_STATUS.md`** — Check MODE, Active FSM, Current Objective
-2. **Read `GOLD_PLAN.md`** — Understand layer boundaries (§2.3–§2.7)
-3. **Obey `SYSTEM.md`** — Hard constraints (no git ops, repo hygiene)
-
----
-
-## Quick Commands
-
-| Task | Command |
-|------|---------|
-| Run autonomous loop | `tesaki --loop 10` |
-| Interactive REPL | `tesaki` (then `loop 10`) |
-| Check gates | `namako gate --adapter-cmd "..." --specs-dir test/specs` |
-| See status | `namako status --adapter-cmd "..." --json` |
+1. **NO git operations** — Connor handles all commits
+2. **Edit both repos freely** — `naia/` and `namako/` are both in scope
+3. **Use repo-prefixed paths** — always `naia/path` or `namako/path`, never ambiguous
 
 ---
 
-## Session Discipline
+## When You're Done
 
-- **Run gates exactly as `CURRENT_STATUS.md` specifies**
-- **End every session** by updating `OUTPUT.md` + `CURRENT_STATUS.md`
-- **No git operations** — Connor handles all commits
+Update `OUTPUT.md` with what you accomplished.
 
 ---
 
-## Layer Confusion Warning
+## If You Need More Context
 
-Do not confuse the two FSMs:
+| Need | File |
+|------|------|
+| Current mode, gates, paths | `CURRENT_STATUS.md` |
+| Forbidden actions | `SYSTEM.md` |
+| Full system spec (reference) | `GOLD_PLAN.md` |
+| DX notes / previous findings | `DX_TEST_LOG.md` |
 
-| FSM | When It Applies |
-|-----|-----------------|
-| **Bootstrap Loop** | MODE=BOOTSTRAP — building Namako/Tesaki toolchain |
-| **Tesaki Product FSM** | MODE=CONSUMPTION — using the toolchain to build Naia |
-
-Check `CURRENT_STATUS.md` to see which applies now.
+**But for 90% of sessions, you don't need these. Just run the command above.**
 
 ---
 
-## Quick Reference
+## What the System Does
 
-| Question | Where to Look |
-|----------|---------------|
-| What mode am I in? | `CURRENT_STATUS.md` → Header → MODE |
-| What gates should I run? | `CURRENT_STATUS.md` → Gates Snapshot |
-| What's the current objective? | `CURRENT_STATUS.md` → Current Objective |
-| What are the hash/schema contracts? | `GOLD_PLAN.md` → Part 7 |
+Namako/Tesaki is a **spec-driven development loop**:
+- `.feature` files are the source of truth
+- `namako` computes what work remains (missing bindings, failing tests)
+- `tesaki` dispatches one mission at a time to a coding agent
+- Gates verify progress after each mission
+
+You are the coding agent. Tesaki will tell you exactly what to do.
 
 ---
 
