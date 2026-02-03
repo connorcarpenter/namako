@@ -1,458 +1,448 @@
-# Path Forward: Rigorous Spec-to-Scenario Coverage
+# Path Forward: Rigorous Autonomous SDD for Naia
 
 **Date:** 2026-02-03  
-**Context:** Investigating how to achieve "just right" scenario coverage in autonomous SDD
+**Version:** 2.0  
+**Goal:** Systematic, fully autonomous progress on Naia specs without human intervention
 
 ---
 
-## The Problem We're Solving
+## Executive Summary
 
-When running `tesaki --loop`, the `AddOrClarifyScenario` mission is:
-- Adding scenarios ✅ (good)
-- But ALSO adding new Rules ❌ (scope creep)
-- Resulting in spec_issues going UP instead of DOWN
-- The flywheel spins but makes things WORSE, not better
+After critical analysis, the core problems are:
 
-**Core Question:** What is the "just right" quantity of scenarios, and how do we systematically ensure we hit it?
+| Problem | Root Cause | Solution |
+|---------|-----------|----------|
+| spec_issues increase | Scenarios not "executable" until bindings exist | **Chain missions**: Scenarios → Bindings → Re-evaluate |
+| Scope creep | Agent adds Rules, not just Scenarios | **Rule-count invariant** (deterministic gate) |
+| Unknown "done" state | No criteria for adequate coverage | **2-scenario minimum** + **3-judge consensus** (for edge cases) |
+
+**Philosophy:** Use deterministic checks for deterministic problems. Use LLM judgment only where semantic understanding is required.
 
 ---
 
-## Research Findings
+## Part 1: The Executability Problem (Critical)
 
-### The BDD Hierarchy (Gáspár Nagy, "Divide & Conquer à la BDD")
+### The Issue
+
+When `AddOrClarifyScenario` adds a new scenario, Namako doesn't count it as "executable" until ALL its steps have bindings. This creates a measurement problem:
 
 ```
-Feature (User Story / Goal)
-    └── Rule (Acceptance Criterion / Business Rule)
-            └── Scenario (Executable Example, 2-3 per rule)
+Cycle N: AddOrClarifyScenario
+  Result: 2 new scenarios with 6 new steps
+  Namako says: executable_scenarios = 0 (steps have no bindings!)
+  spec_issues: UNCHANGED or INCREASED
+  
+Cycle N+1: CreateMissingBindings
+  Result: 6 bindings created
+  Namako says: executable_scenarios = 2
+  spec_issues: DECREASED
 ```
 
-**Key Insight:** Rules come from HUMANS (the spec). Scenarios are TESTS that prove the rules work.
+**Current progress detection fails** because it measures after scenario creation, before bindings exist.
 
-### How Many Scenarios Per Rule?
+### Solution: Mission Chaining (Deterministic)
 
-From research on BDD best practices:
-
-| Rule Complexity | Recommended Scenarios |
-|-----------------|----------------------|
-| Simple (one outcome) | 1-2 |
-| Moderate (valid/invalid paths) | 2-3 |
-| Complex (state, roles, calculations) | 3-6 |
-
-**The "2-3 per rule" heuristic is widely cited as the sweet spot.**
-
-Each rule should have scenarios covering:
-1. **Positive path** (happy path, expected behavior)
-2. **Negative path** (error handling, rejection)
-3. **Edge cases** (boundaries, unusual inputs)
-
-### LLM-Based BDD Generation Research
-
-From "Comprehensive Evaluation of LLMs for BDD Acceptance Test Formulation" (2024):
-
-1. **Few-shot prompting works best** - show examples of good scenarios
-2. **Schema-aware prompts** - inject context about the domain/system
-3. **Human-in-the-loop still necessary** - LLMs hallucinate and over-generate
-4. **One-shot generation is valid** - LLM sees whole feature, generates complete coverage
-
----
-
-## Current State Analysis
-
-### What Namako Tracks
+**Insight:** AddOrClarifyScenario is INCOMPLETE until CreateMissingBindings runs.
 
 ```rust
-// From tesaki/src/issue_classifier.rs
-pub fn classify_spec_issues(review: &ReviewPacket) -> Vec<SpecIssue> {
-    // Creates a SpecIssue for each Rule with ZERO executable scenarios
-    for rule in &feature.rules {
-        if rule.executable_scenarios.is_empty() {
-            issues.push(SpecIssue { kind: MissingCoverage, ... });
+/// AddOrClarifyScenario should NOT evaluate spec_issues directly.
+/// Instead, it's successful if:
+/// 1. New scenarios were added (parse the feature file)
+/// 2. New binding issues were created (expected consequence)
+/// 
+/// Then IMMEDIATELY chain to CreateMissingBindings.
+
+fn evaluate_add_scenario_progress(before: &State, after: &State) -> Progress {
+    let scenarios_added = count_scenarios(&after) - count_scenarios(&before);
+    let new_bindings_needed = after.binding_issues.len() - before.binding_issues.len();
+    
+    if scenarios_added > 0 {
+        // Success: We added scenarios. New binding issues are EXPECTED.
+        Progress::SuccessWithFollowUp {
+            message: format!("Added {} scenarios, {} bindings now needed", 
+                scenarios_added, new_bindings_needed),
+            chain_to: MissionType::CreateMissingBindings { ... },
+        }
+    } else {
+        Progress::NoChange
+    }
+}
+```
+
+**Key principle:** A compound operation (add scenarios + bind them) should be treated as a single unit of work.
+
+---
+
+## Part 2: The Scope Creep Problem
+
+### The Issue
+
+Agent is asked to add Scenarios but also adds Rules. This is scope expansion.
+
+### Solution: Rule-Count Invariant (Deterministic)
+
+This is a **hard gate**, not an LLM judgment. Rule count is a deterministic property.
+
+```rust
+/// Before AddOrClarifyScenario mission:
+let rules_before = count_rules_in_feature(feature_path);
+
+/// After mission completes:
+let rules_after = count_rules_in_feature(feature_path);
+
+if rules_after > rules_before {
+    return MissionOutcome::Rejected {
+        reason: format!(
+            "INVARIANT VIOLATED: Rule count increased from {} to {}. \
+             Agent must NOT add new Rules.",
+            rules_before, rules_after
+        ),
+        action: RejectAction::RevertAndRetry,
+    };
+}
+```
+
+**No LLM needed.** This is a simple before/after comparison.
+
+### Implementation
+
+1. **Parse feature file before mission** → extract rule count
+2. **Parse feature file after mission** → compare rule count  
+3. **Reject if increased** → revert changes, retry with stricter prompt
+
+### Stricter Mission Brief
+
+```markdown
+## Constraints (MUST NOT VIOLATE)
+
+⛔ Do NOT add new `Rule:` blocks — only add Scenarios under EXISTING Rules
+⛔ Do NOT modify the Feature description
+⛔ Do NOT modify existing Rule text
+
+Validation will REJECT your changes if rule count increases.
+```
+
+---
+
+## Part 3: Coverage Completeness (Where LLM Judgment Helps)
+
+### The Remaining Question
+
+Once we fix executability and scope creep, we still need to know: **when is a feature "adequately covered"?**
+
+This IS a semantic question that benefits from LLM judgment.
+
+### The Simple Heuristic (Try First)
+
+Before reaching for LLM judgment, apply a simple heuristic:
+
+```rust
+fn is_rule_adequately_covered(rule: &Rule) -> bool {
+    rule.executable_scenarios.len() >= 2
+}
+
+fn is_feature_complete(feature: &Feature) -> bool {
+    feature.rules.iter().all(|r| is_rule_adequately_covered(r))
+}
+```
+
+**Rationale:** BDD research consistently recommends 2-3 scenarios per rule (positive path, negative path, edge case). 2 is the minimum for any meaningful rule.
+
+### When LLM Judgment Is Needed
+
+The heuristic fails for:
+1. **Complex rules** that genuinely need 4+ scenarios
+2. **Simple rules** where 1 scenario is sufficient
+3. **Assessing scenario quality** (are these the RIGHT scenarios?)
+
+For these cases, use **LLM-as-judge**.
+
+---
+
+## Part 4: LLM-as-Judge Consensus (For Coverage Quality)
+
+### Design Principles (From Research)
+
+| Principle | Source | Application |
+|-----------|--------|-------------|
+| Multiple judges reduce bias | arXiv 2404.18796 | Use 3 judges, not 1 |
+| Pointwise > Pairwise | OpenReview | Score against rubric, don't compare |
+| Locked rubrics prevent drift | Rulers (arXiv) | Fixed, versioned criteria |
+| Self-consistency works | Google Research | Same model, 3 samples, majority vote |
+
+### The Simplest Effective Approach: Self-Consistency
+
+**Use the same model 3 times with temperature > 0, take majority vote.**
+
+This is simpler than managing 3 different model APIs, and research shows it's nearly as effective.
+
+```rust
+fn assess_coverage(feature: &Feature) -> CoverageVerdict {
+    let prompt = format_assessment_prompt(feature);
+    
+    // Three independent samples from same model
+    let verdicts = [
+        invoke_llm(&prompt, temperature: 0.3),
+        invoke_llm(&prompt, temperature: 0.5),
+        invoke_llm(&prompt, temperature: 0.7),
+    ];
+    
+    // Majority vote
+    let adequate_count = verdicts.iter().filter(|v| v.is_adequate()).count();
+    
+    if adequate_count >= 2 {
+        CoverageVerdict::Adequate
+    } else {
+        CoverageVerdict::Inadequate {
+            gaps: merge_gaps(&verdicts),
         }
     }
 }
 ```
 
-**Current metric:** `spec_issues.len()` = count of Rules with 0 scenarios
+### The Locked Rubric
 
-**Problem:** This is binary (0 scenarios = bad, 1+ = good). It doesn't track:
-- Rules with only 1 scenario (might need more)
-- Rules with 10 scenarios (probably over-tested)
-- Whether the agent added NEW rules (scope creep)
+Each judge answers these questions (Yes = 1, Partial = 0.5, No = 0):
 
-### What's Going Wrong
+```markdown
+## Coverage Assessment Rubric
 
-1. Agent receives mission: "Add scenarios to `06_entity_scopes.feature`"
-2. Agent reads feature, sees Rules that need coverage
-3. Agent adds scenarios... but ALSO adds new Rules it thinks are missing
-4. Result: Rule count goes UP, scenario count goes UP, but spec_issues also goes UP
+Score each criterion (0, 0.5, or 1):
 
-**The agent is doing discovery work when it should be doing formulation work.**
+1. **Rule Coverage**: Does every Rule have at least 2 executable scenarios?
+2. **Path Diversity**: Does each Rule have both positive and negative test paths?
+3. **Edge Cases**: Are boundary conditions and edge cases tested?
+4. **Traceability**: Can each Rule be traced to the Feature description?
+5. **No Scope Creep**: Are all Rules justified by the Feature description?
 
----
-
-## Proposed Solution: Rule-Count Invariant
-
-### The Core Principle
-
-> **During AddOrClarifyScenario, the Rule count MUST NOT increase.**
-> 
-> Rules are HUMAN-defined acceptance criteria. The agent's job is to add 
-> SCENARIOS (tests) for those rules, not to invent new rules.
-
-### Systematic Approach
-
-#### Phase 1: Track Rule Count (Not Just Spec Issues)
-
-Add to `RepoState`:
-```rust
-pub struct FeatureCoverage {
-    pub feature_path: String,
-    pub rule_count: usize,           // Human-defined rules
-    pub scenario_count: usize,        // Total scenarios
-    pub rules_with_zero_scenarios: usize,
-    pub rules_with_one_scenario: usize,
-    pub rules_with_adequate_coverage: usize, // 2+ scenarios
-}
+ADEQUATE = Total score >= 4.0 / 5.0 (80%)
 ```
 
-#### Phase 2: Stricter Progress Detection
+### When to Invoke
 
-For `AddOrClarifyScenario`:
-```rust
-let progress = scenarios_added > 0 && rules_with_zero_decreased;
-let invariant_violated = rule_count_after > rule_count_before;
-
-if invariant_violated {
-    // Agent added new rules - this is FAILURE, not progress
-    mark_mission_failed("Agent expanded scope by adding rules");
-}
-```
-
-#### Phase 3: Better Mission Briefs
-
-Current brief:
-> "Add or clarify scenarios to improve coverage."
-
-Proposed brief:
-> **Objective:** Add 2-3 executable scenarios for each rule that currently has 0 scenarios.
->
-> **Constraints:**
-> - Do NOT add new Rules - only add Scenarios under existing Rules
-> - Do NOT modify the Feature description or Rule text
-> - Each scenario should cover a distinct case (positive, negative, edge)
->
-> **Target Rules (need scenarios):**
-> 1. Rule: "Owning client always sees own entity" (0 scenarios)
-> 2. Rule: "Non-owning client respects scope" (0 scenarios)
->
-> **Validation:** Rule count unchanged, scenarios added to listed rules.
-
-#### Phase 4: One-Shot vs Incremental
-
-**Research suggests one-shot is valid** - the LLM can see the whole feature and generate complete coverage.
-
-Options:
-1. **One-shot per feature:** Generate all scenarios for all rules in one mission
-2. **One-shot per rule:** Generate 2-3 scenarios for one specific rule
-
-Recommendation: **One-shot per feature** with explicit rule list and scenario targets.
-
----
-
-## The Semantic Coverage Problem
-
-### The Core Challenge
-
-A Feature file contains:
-```gherkin
-Feature: Entity Scopes
-  
-  Entities can be scoped to specific clients. When an entity is scoped,
-  only clients within that scope can see it. The owning client always
-  sees its own entities regardless of scope settings.
-  
-  Rule: Owning client always sees own entity
-    Scenario: ...
-```
-
-**Question:** How do we know the Rule + Scenarios adequately cover the intent in the Feature description?
-
-This is a **semantic coverage** problem:
-- The Feature description is natural language (human intent)
-- Rules are structured acceptance criteria
-- Scenarios are executable tests
-
-**We need to verify:** Description → Rules → Scenarios (complete traceability)
-
-### Research: LLM-Based Traceability Assessment
-
-From NASA/MBSE research on AI-enhanced requirements traceability:
-
-> "LLMs can bridge the semantic gap between high-level, context-dependent 
-> requirement statements and their formal representation as specifications 
-> or executable tests."
-
-The Req2LTL framework achieves **88% semantic accuracy** mapping natural language to formal specs.
-
-### Proposed Solution: Semantic Coverage Gate
-
-Add a new gate phase: **Spec Coverage Assessment**
-
-```
-Before: namako gate = lint + run + verify
-After:  namako gate = lint + run + verify + coverage-assess (optional)
-```
-
-The coverage assessment would:
-1. Extract behavioral statements from Feature description
-2. Map each statement to Rules
-3. Map each Rule to Scenarios
-4. Flag any statements without coverage
-
-#### Option A: Heuristic Assessment (Simple)
-
-```
-For each Feature:
-  - Parse description for action verbs + conditions
-  - Count distinct behavioral statements
-  - Compare to rule count
-  - Flag if statements >> rules (missing rules)
-  - Flag if rules >> statements (scope creep)
-```
-
-#### Option B: LLM Assessment (Semantic)
-
-Use an LLM in REVIEW mode (not generation):
-
-```
-Prompt: Given this Feature description and its Rules/Scenarios, 
-        assess coverage completeness.
-
-Feature Description: [natural language]
-
-Rules & Scenarios:
-- Rule 1: [text] → Scenarios: [list]
-- Rule 2: [text] → Scenarios: [list]
-
-Questions:
-1. Are there behaviors in the description not covered by any Rule?
-2. Are there Rules that don't trace to the description (scope creep)?
-3. Does each Rule have sufficient Scenarios (positive, negative, edge)?
-
-Output: { coverage_score: 0-100, gaps: [...], excess: [...] }
-```
-
-#### Option C: Traceability Matrix (Rigorous)
-
-Explicit linking:
-```gherkin
-Feature: Entity Scopes
-  # @statement-1: Entities can be scoped to specific clients
-  # @statement-2: Only clients within scope can see scoped entities  
-  # @statement-3: Owning client always sees own entities
-  
-  Rule: Owning client always sees own entity
-    # @traces: statement-3
-    Scenario: Owner sees entity regardless of scope
-      # @covers: positive-path
-```
-
-Then validate: all statements traced, all rules have 2+ coverage types.
-
-### Recommendation
-
-**Start with Option B (LLM Assessment)** as a separate mission type:
+**Only invoke LLM assessment when the heuristic is ambiguous:**
 
 ```rust
-MissionType::AssessSpecCoverage {
-    feature_path: String,
-}
-```
-
-This mission:
-1. Reads the feature file
-2. Uses LLM to assess coverage
-3. Outputs a coverage report (not code changes)
-4. If gaps found → subsequent AddOrClarifyScenario missions target them
-
-**Key insight:** This separates ASSESSMENT from GENERATION. The LLM reviews first, then acts.
-
----
-
-## Implementation Plan
-
-### Step 1: Enhance ReviewPacket Parsing
-
-Ensure we can count:
-- Rules per feature
-- Scenarios per rule
-- Total scenario coverage
-
-### Step 2: Add Rule-Count Tracking to RepoState
-
-```rust
-pub struct RepoState {
-    // Existing...
-    pub spec_issues: Vec<SpecIssue>,
+fn should_invoke_llm_assessment(feature: &Feature) -> bool {
+    let rules_with_1_scenario = feature.rules.iter()
+        .filter(|r| r.executable_scenarios.len() == 1)
+        .count();
     
-    // New: detailed coverage tracking
-    pub feature_coverage: Vec<FeatureCoverage>,
-    pub total_rules: usize,
-    pub total_scenarios: usize,
+    let rules_with_many_scenarios = feature.rules.iter()
+        .filter(|r| r.executable_scenarios.len() > 4)
+        .count();
+    
+    // Only assess if we have edge cases
+    rules_with_1_scenario > 0 || rules_with_many_scenarios > 0
 }
 ```
 
-### Step 3: Implement Rule-Count Invariant Check
-
-In `repl.rs`, for `AddOrClarifyScenario`:
-```rust
-let rules_before = count_rules_in_feature(&before_state, &feature_path);
-let rules_after = count_rules_in_feature(&after_state, &feature_path);
-
-if rules_after > rules_before {
-    println!("❌ INVARIANT VIOLATED: Agent added {} new rule(s)", 
-        rules_after - rules_before);
-    // Treat as mission failure
-}
-```
-
-### Step 4: Improve Mission Brief Generation
-
-Update `MissionType::AddOrClarifyScenario::generate_brief()`:
-- List specific rules that need scenarios
-- State explicit constraint: "Do NOT add new Rules"
-- Set target: "2-3 scenarios per rule"
-
-### Step 5: Consider "Spec Complete" Gate
-
-Add a new gate phase or check:
-```
-Spec Complete = All rules have >= 2 scenarios
-```
-
-This gives a clear "done" signal for the spec refinement phase.
+**Cost optimization:** Most features will pass the simple heuristic. LLM assessment is the exception, not the rule.
 
 ---
 
-## Open Questions
+## Part 5: The Complete Autonomous Flow
 
-### Q1: Should the human pre-define all Rules?
-
-**Option A:** Human writes Feature + Rules, agent only adds Scenarios
-- Pro: Clear separation of concerns
-- Pro: Agent can't expand scope
-- Con: Human must think of all acceptance criteria upfront
-
-**Option B:** Agent can propose Rules, but human must approve
-- Pro: Agent can help discover edge cases
-- Con: Requires human review step (not fully autonomous)
-
-**Recommendation:** Start with Option A. If the human spec is incomplete, the human should add Rules manually.
-
-### Q2: What if a Rule genuinely needs 0 scenarios?
-
-Some rules might be:
-- Organizational (grouping other rules)
-- Deferred (@deferred tag)
-- Not testable at this level
-
-**Solution:** Allow `@no-scenarios` or `@deferred` tags on Rules to exclude them from coverage checks.
-
-### Q3: How to handle Scenario Outlines?
-
-A Scenario Outline with 5 examples = 5 test cases from 1 scenario definition.
-
-**Solution:** Count examples, not just scenario blocks. One Outline with 3 examples = adequate coverage for a simple rule.
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    TESAKI AUTONOMOUS LOOP                           │
+│                                                                     │
+│  1. COMPUTE STATE                                                   │
+│     ├─ Run namako review → parse packets                            │
+│     ├─ Count: spec_issues, binding_issues, sut_issues               │
+│     └─ Count: rules per feature, scenarios per rule                 │
+│                                                                     │
+│  2. SELECT MISSION (Priority Order)                                 │
+│     ├─ SUT issues → FixRegression                                   │
+│     ├─ Binding issues → CreateMissingBindings                       │
+│     ├─ Spec issues (rules with 0 scenarios) → AddOrClarifyScenario  │
+│     └─ All green → AssessSpecCoverage (if heuristic ambiguous)      │
+│                                                                     │
+│  3. EXECUTE MISSION                                                 │
+│     ├─ Generate brief with explicit constraints                     │
+│     ├─ Invoke runner (Copilot)                                      │
+│     └─ Capture changes                                              │
+│                                                                     │
+│  4. VALIDATE (Deterministic Gates)                                  │
+│     ├─ Rule-count invariant: rules_after <= rules_before            │
+│     ├─ Compile check: cargo build succeeds                          │
+│     └─ Lint check: namako lint passes                               │
+│                                                                     │
+│  5. EVALUATE PROGRESS                                               │
+│     ├─ For AddOrClarifyScenario: scenarios_added > 0 → chain to     │
+│     │   CreateMissingBindings                                       │
+│     ├─ For CreateMissingBindings: binding_issues decreased          │
+│     └─ For FixRegression: sut_issues decreased                      │
+│                                                                     │
+│  6. CONTINUE OR STOP                                                │
+│     ├─ Progress made → continue                                     │
+│     ├─ 3 consecutive stalls → stop                                  │
+│     └─ All issues at 0 + coverage heuristic passes → DONE           │
+│                                                                     │
+│  7. (Optional) COVERAGE QUALITY CHECK                               │
+│     └─ If heuristic ambiguous: 3-judge self-consistency assessment  │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## Success Metrics
+## Part 6: Implementation Checklist
 
-After implementing these changes, a successful `tesaki --loop` should show:
+### Phase 1: Fix Executability Problem (Highest Priority)
+- [ ] **Modify `has_progress()` for AddOrClarifyScenario** 
+  - Success = scenarios added (count the feature file)
+  - Don't check spec_issues (they won't decrease until bindings exist)
+- [ ] **Implement mission chaining**
+  - AddOrClarifyScenario → auto-queue CreateMissingBindings
+  - Evaluate spec_issues only after chain completes
+- [ ] **Add scenario counting to RepoState**
+  - `scenarios_per_rule: HashMap<String, usize>`
+
+### Phase 2: Implement Rule-Count Invariant
+- [ ] **Add rule counting to pre-mission snapshot**
+  - Parse feature file → count `Rule:` lines
+- [ ] **Add rule-count validation in post-mission**
+  - Compare before/after
+  - Reject if increased
+- [ ] **Update AddOrClarifyScenario brief**
+  - Explicit constraint: "Do NOT add new Rules"
+  - Explicit validation warning
+
+### Phase 3: Coverage Heuristic
+- [ ] **Implement simple coverage check**
+  - `rules_with_adequate_coverage()` = rules with 2+ scenarios
+  - `is_feature_complete()` = all rules adequate
+- [ ] **Add to DONE criteria**
+  - Current: spec_issues == 0 && binding_issues == 0 && sut_issues == 0
+  - New: && all features complete by heuristic
+
+### Phase 4: LLM Coverage Assessment (Optional Enhancement)
+- [ ] **Implement self-consistency assessment**
+  - 3 samples, majority vote
+  - Only invoke when heuristic is ambiguous
+- [ ] **Create locked rubric prompt**
+  - 5 criteria, 0/0.5/1 scoring
+  - Threshold: 80% = adequate
+- [ ] **Track assessment costs**
+  - Log token usage per assessment
+  - Should be ~$0.10-$0.30 per feature
+
+---
+
+## Part 7: Why This Works (No Human in Loop)
+
+### Deterministic Where Possible
+
+| Check | Type | Human Needed? |
+|-------|------|---------------|
+| Rule count unchanged | Deterministic (string parsing) | ❌ No |
+| Scenarios added | Deterministic (file diff) | ❌ No |
+| Bindings created | Deterministic (registry check) | ❌ No |
+| Code compiles | Deterministic (cargo build) | ❌ No |
+| Tests pass | Deterministic (cargo test) | ❌ No |
+| 2+ scenarios per rule | Deterministic (counting) | ❌ No |
+
+### LLM Judgment Only for Semantics
+
+| Check | Type | When Used |
+|-------|------|-----------|
+| Scenario quality | Semantic (LLM) | When heuristic ambiguous |
+| Coverage completeness | Semantic (LLM) | Edge cases only |
+
+### Error Recovery (Autonomous)
+
+| Failure | Autonomous Response |
+|---------|---------------------|
+| Rule-count increased | Revert, retry with stricter prompt |
+| No scenarios added | Log, try different approach |
+| Compile fails | Parse errors, include in next mission context |
+| 3 consecutive stalls | Stop loop, output diagnostic |
+
+---
+
+## Part 8: Success Metrics
+
+After implementation, `tesaki --loop 20` should show:
 
 ```
-MISSION 1: AddOrClarifyScenario
-Target: features/06_entity_scopes.feature
-Before: Rules=5, Scenarios=2, Coverage=40%
-After:  Rules=5, Scenarios=12, Coverage=100%  ← Rule count UNCHANGED
-Delta:  Scenarios +10, Rules +0
-✅ Progress: All rules now have coverage
+MISSION 1: AddOrClarifyScenario (features/06_entity_scopes.feature)
+  Before: Rules=6, Scenarios=8, Coverage=67%
+  Action: Added 4 scenarios to 2 rules
+  After:  Rules=6, Scenarios=12, Coverage=100%
+  ✅ Chaining to CreateMissingBindings...
 
-MISSION 2: CreateMissingBindings
+MISSION 2: CreateMissingBindings (12 steps)
+  Before: Binding issues=12
+  Action: Created 12 bindings
+  After:  Binding issues=0
+  ✅ Progress: All bindings created
+
+MISSION 3: FixRegression (test failure)
+  Before: SUT issues=1
+  Action: Fixed assertion in entity_scopes.rs
+  After:  SUT issues=0
+  ✅ Progress: Test now passes
+
 ...
-```
 
-**Key indicators:**
-- Rule count stable or decreasing (consolidation OK)
-- Scenario count increasing toward 2-3 per rule
-- Spec issues trending to zero
-- No "invariant violated" messages
+SESSION COMPLETE
+  Duration: 23m 42s
+  Missions: 8 completed, 0 failed, 0 rejected
+  Spec issues: 12 → 0
+  Binding issues: 35 → 0  
+  SUT issues: 3 → 0
+  Coverage: 67% → 100%
+  Token cost: ~$45
+```
 
 ---
 
-## Appendix: Naia Feature File Analysis
+## Part 9: Key Insights
 
-### Current Structure (06_entity_scopes.feature)
+### 1. The Problem Was Measurement, Not Judgment
 
-The naia feature files have a rich structure:
+The primary issue wasn't that we needed LLM judges — it was that we were measuring progress at the wrong time (after scenarios added, before bindings created).
 
-```
-Feature: Entity Scopes
-  
-  # NORMATIVE CONTRACT MIRROR (detailed spec in comments)
-  # - Core scope predicate definitions
-  # - Glossary of terms
-  # - Behavioral requirements in prose
-  
-  Rule: Rooms gating                    # 2 scenarios
-  Rule: Include/Exclude filter          # 3 scenarios  
-  Rule: Owner scope invariant           # 2 scenarios
-  Rule: Roomless entities               # 2 scenarios
-  Rule: Scope state effects             # 1 scenario ← needs more
-  Rule: Disconnect handling             # 1 scenario ← needs more
-```
+**Fix:** Chain missions and measure after the compound operation completes.
 
-**Observation:** This feature has good structure (6 rules, 11 scenarios, ~2 per rule). The NORMATIVE CONTRACT comments provide excellent traceability material.
+### 2. Deterministic Gates Beat LLM Gates
 
-### Coverage Assessment Approach for Naia
+For rule-count invariant, we don't need an LLM to "judge" whether new rules were added. We can count them.
 
-Given the detailed comments in naia's feature files, we could:
+**Principle:** Use deterministic checks for deterministic properties.
 
-1. **Extract behavioral statements** from the NORMATIVE sections
-2. **Map each statement to a Rule** 
-3. **Verify each Rule has adequate Scenarios**
+### 3. LLM Judgment is for Edge Cases
 
-Example mapping:
-```
-CONTRACT STATEMENT                              → RULE                        → SCENARIOS
-"SharesRoom(U,E) MUST be necessary precondition"  → "Rooms gating"              → 2 ✓
-"Owning client always in-scope for client-owned"  → "Owner scope invariant"     → 2 ✓
-"Entity in zero rooms → OutOfScope for all"       → "Roomless entities"         → 2 ✓
-```
+The 3-judge consensus approach is valid and research-backed, but it's overkill for most cases. The simple "2+ scenarios per rule" heuristic handles 90% of coverage decisions.
 
-This could be automated with an LLM in assessment mode.
+**Use LLM assessment when:**
+- Heuristic is ambiguous (rules with exactly 1 or 5+ scenarios)
+- You want to validate scenario quality (are these the RIGHT tests?)
+- You're assessing a completed feature before sign-off
 
----
+### 4. Simplicity Wins
 
-## Immediate Next Steps
+The best solution is:
+1. **Mission chaining** (AddScenarios → CreateBindings as one unit)
+2. **Rule-count invariant** (deterministic gate)
+3. **2-scenario minimum** (simple heuristic)
+4. **3-judge consensus** (only for ambiguous cases)
 
-1. [ ] **Verify namako exposes rule count** in review packet
-2. [ ] **Add rule-count tracking** to RepoState
-3. [ ] **Implement invariant check** in repl.rs for AddOrClarifyScenario
-4. [ ] **Improve mission brief** with explicit constraints and targets
-5. [ ] **Test with one feature** to validate the approach
-6. [ ] **Consider AssessSpecCoverage mission type** for semantic review
-7. [ ] **Update plan.md** with progress
+This is simple, elegant, research-backed, and fully autonomous.
 
 ---
 
 ## References
 
-- Gáspár Nagy: [Divide & Conquer à la BDD](https://gasparnagy.com/2019/05/divide-conquer-a-la-bdd-story-rule-scenario/)
-- [Comprehensive Evaluation of LLMs for BDD Test Formulation](https://arxiv.org/pdf/2403.14965) (2024)
-- [Agentic AI for BDD Testing using LLMs](https://www.researchgate.net/publication/389707150) (2025)
-- [AI-Enhanced Requirements Traceability (NASA)](https://ntrs.nasa.gov/api/citations/20250008721/downloads/AI-Enhanced%20Requirements%20Traceability.pdf)
-- [Bridging Natural Language and Formal Specification (Req2LTL)](https://arxiv.org/html/2512.17334v1)
-- Cucumber Docs: [BDD Best Practices](https://cucumber.io/docs/bdd/)
-- Matt Wynne: [Example Mapping](https://cucumber.io/blog/example-mapping-introduction/)
+- **LLM-as-Judge Research:**
+  - [Replacing Judges with Juries](https://arxiv.org/abs/2404.18796) (2024) — Diverse panels outperform single judges
+  - [Self-Consistency Improves Chain of Thought](https://research.google/pubs/self-consistency-improves-chain-of-thought-reasoning-in-language-models/) — Same model, multiple samples
+  - [Rulers: Locked Rubrics](https://arxiv.org/html/2601.08654v1) — Prevent evaluation drift
+  
+- **BDD Best Practices:**
+  - Gáspár Nagy: [Divide & Conquer à la BDD](https://gasparnagy.com/2019/05/divide-conquer-a-la-bdd-story-rule-scenario/)
+  - [Comprehensive Evaluation of LLMs for BDD](https://arxiv.org/pdf/2403.14965) (2024)
+  
+- **Traceability:**
+  - [NASA AI-Enhanced Requirements Traceability](https://ntrs.nasa.gov/api/citations/20250008721/downloads/AI-Enhanced%20Requirements%20Traceability.pdf)
