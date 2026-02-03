@@ -9,6 +9,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+/// Expand tier names to full copilot CLI model names.
+///
+/// Copilot CLI accepts specific model names like "claude-opus-4.5",
+/// not short tier names like "opus".
+fn expand_model_name(tier: &str) -> String {
+    match tier.to_lowercase().as_str() {
+        "opus" => "claude-opus-4.5".to_string(),
+        "sonnet" => "claude-sonnet-4.5".to_string(),  // 4.5 is default, 4 requires interactive activation
+        "haiku" => "claude-haiku-4.5".to_string(),
+        // Already a full name or unknown - pass through
+        _ => tier.to_string(),
+    }
+}
+
 /// Agent backend for GitHub Copilot CLI.
 ///
 /// Runs missions via `Runner` and provides chat planning via `ChatPlanner`.
@@ -84,7 +98,10 @@ impl CopilotAgent {
     fn build_runner_command(&self, mission_dir: &Path, config: &RunnerConfig) -> String {
         let base = self.expand_runner_command(mission_dir, &config.working_dir);
         match &config.model {
-            Some(model) => format!("{} --model {}", base, model),
+            Some(model) => {
+                let full_model = expand_model_name(model);
+                format!("{} --model {}", base, full_model)
+            }
             None => base,
         }
     }

@@ -18,6 +18,7 @@
 
 mod binding_extractor;
 mod config;
+mod error_parser;
 mod gate;
 mod issue_classifier;
 mod chat_plan;
@@ -1155,6 +1156,7 @@ use crate::codex_agent::CodexAgent;
     use crate::workspace::Workspace;
     use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker};
     use crate::surface_policy::SurfaceDefinition;
+    use crate::error_parser::{run_pre_gate_build, BuildCheckResult};
 
     // Canonicalize spec_root
     let spec_root = fs::canonicalize(spec_root)
@@ -1258,6 +1260,45 @@ use crate::codex_agent::CodexAgent;
     eprintln!("Spec root: {}", spec_root.display());
     eprintln!("Runner: {}", runner.name());
     eprintln!();
+
+    // Pre-gate build check (Sprint 4.1)
+    // Run cargo build before gate to catch compile errors early
+    eprintln!("[0/6] Pre-gate build check...");
+    let build_result = run_pre_gate_build(workspace.working_dir(), None);
+    if !build_result.success {
+        let error_summary = if build_result.errors.is_empty() {
+            build_result.stderr_excerpt.lines().take(10).collect::<Vec<_>>().join("\n")
+        } else {
+            build_result.errors.iter()
+                .take(5)
+                .map(|e| e.to_oneliner())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        eprintln!("  ❌ Build failed ({} errors)", build_result.total_errors);
+        eprintln!("  Top errors:\n{}", error_summary);
+        
+        // Store build result for potential retry context
+        let build_result_path = spec_root.join(".tesaki/last_build_result.json");
+        if let Ok(json) = serde_json::to_string_pretty(&build_result) {
+            let _ = fs::write(&build_result_path, json);
+        }
+        
+        let result = RunResult::error(
+            StopReason::GateFailed,
+            format!("Pre-gate build failed with {} compile errors. Fix compilation before running missions.\n\nTop errors:\n{}", 
+                build_result.total_errors, error_summary),
+        );
+        emit_run_result(&result, &spec_root)?;
+        log_session_end(logger, StopReason::GateFailed, result.details.clone());
+        eprintln!("STOP: BUILD_FAILED - Code does not compile");
+        return Ok(());
+    }
+    // Show warning if present (e.g., workspace-wide check failed but we're proceeding)
+    if let Some(ref warning) = build_result.warning {
+        eprintln!("  ⚠️  {}", warning);
+    }
+    eprintln!("  ✅ Build passed ({:.1}s)", build_result.elapsed_seconds);
 
     // Step 1: Measure via Namako packets
     eprintln!("[1/6] Running namako gate --json (pre-mission state)...");
@@ -1476,6 +1517,11 @@ use crate::codex_agent::CodexAgent;
         let outcome = runner.run(&mission.path, &runner_config)?;
         eprintln!("  Outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
             outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
+        
+        // Display token usage immediately after runner completes (before any move to failed/)
+        if let Some(ref usage) = outcome.token_usage {
+            eprintln!("  {}", usage.to_display_line());
+        }
 
         log_mission_executed(logger, mission.id.as_str(), runner.name(), &outcome);
         if let Some(invocation) = &planned_invocation {
@@ -2094,14 +2140,41 @@ fn has_progress(
 ) -> bool {
     let gate_improved = !pre.all_gates_pass() && post.all_gates_pass();
     let issue_count_decrease = post.total_issue_count() < pre.total_issue_count();
+    
+    // Use expected issue flow to calculate "adjusted" progress
+    // Some missions create expected downstream work (e.g., new scenarios need bindings)
+    let expected_flow = mission_type.expected_issue_flow();
+    
+    // Calculate adjusted issue delta (excluding expected increases)
+    let spec_delta = post.spec_issues.len() as i32 - pre.spec_issues.len() as i32;
+    let binding_delta = post.binding_issues.len() as i32 - pre.binding_issues.len() as i32;
+    let sut_delta = post.sut_issues.len() as i32 - pre.sut_issues.len() as i32;
+    
+    let adjusted_delta = {
+        let mut adj = spec_delta + binding_delta + sut_delta 
+            + (post.structure_issues.len() as i32 - pre.structure_issues.len() as i32);
+        if expected_flow.binding_increase_ok && binding_delta > 0 {
+            adj -= binding_delta;
+        }
+        if expected_flow.sut_increase_ok && sut_delta > 0 {
+            adj -= sut_delta;
+        }
+        adj
+    };
+    
+    // Progress if adjusted delta is negative (net improvement)
+    let adjusted_progress = adjusted_delta < 0;
 
     match mission_type {
         crate::mission_type::MissionType::CreateMissingBindings { scenario_key, .. } => {
             let pre_target = count_missing_bindings(pre, Some(scenario_key));
             let post_target = count_missing_bindings(post, Some(scenario_key));
+            // Progress: target bindings decreased, OR overall bindings decreased, OR gate improved
+            // SUT increase is expected (new bindings may surface test failures)
             (pre_target > 0 && post_target < pre_target)
                 || post.binding_issues.len() < pre.binding_issues.len()
                 || gate_improved
+                || adjusted_progress
         }
         crate::mission_type::MissionType::ImplementBehaviorForScenario { scenario_key, .. } => {
             let pre_target = count_failures(pre, scenario_key);
@@ -2118,11 +2191,37 @@ fn has_progress(
                 || gate_improved
         }
         crate::mission_type::MissionType::NormalizeIdentityTags { .. }
-        | crate::mission_type::MissionType::RefineFeatureIntent { .. }
-        | crate::mission_type::MissionType::AddOrClarifyScenario { .. } => {
+        | crate::mission_type::MissionType::RefineFeatureIntent { .. } => {
             post.spec_issues.len() < pre.spec_issues.len()
                 || post.structure_issues.len() < pre.structure_issues.len()
                 || gate_improved
+        }
+        crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } => {
+            // For AddOrClarifyScenario, progress means:
+            // 1. Spec issues for the target feature decreased, OR
+            // 2. Overall spec issues decreased, OR
+            // 3. Gate improved, OR
+            // 4. Binding issues increased (expected: new scenarios need bindings) AND
+            //    spec issues didn't increase catastrophically
+            let target_spec_improved = {
+                let pre_count = pre.spec_issues.iter()
+                    .filter(|i| i.feature_path.contains(feature_path))
+                    .count();
+                let post_count = post.spec_issues.iter()
+                    .filter(|i| i.feature_path.contains(feature_path))
+                    .count();
+                post_count < pre_count
+            };
+            
+            // Expected SDD flow: adding scenarios creates binding work
+            // If bindings increased but spec issues stayed flat or decreased for target, that's progress
+            let expected_flow_progress = binding_delta > 0 && spec_delta <= 2;
+            
+            target_spec_improved
+                || post.spec_issues.len() < pre.spec_issues.len()
+                || post.structure_issues.len() < pre.structure_issues.len()
+                || gate_improved
+                || expected_flow_progress
         }
         crate::mission_type::MissionType::StrengthenThenAssertions { .. }
         | crate::mission_type::MissionType::RefactorBindingsForClarity { .. }

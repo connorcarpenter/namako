@@ -1,15 +1,15 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
 **Last Updated:** 2026-02-02
-**MODE:** CONSUMPTION (v1.8 REPL + Headless Autonomous Loop)
+**MODE:** CONSUMPTION (v1.9 Research-Aligned Autonomous Loop)
 
 ---
 
 ## Executive Summary
 
-**Namako v1.8 is FUNCTIONALLY COMPLETE.** Tesaki supports both interactive REPL and headless autonomous mode.
+**Namako v1.9 is COMPLETE.** Tesaki supports optimized autonomous operation with research-aligned safety rails.
 
-**Turnkey command:** `tesaki --loop 10` — runs autonomous SDD loop without REPL.
+**Turnkey command:** `tesaki --loop 10` — runs autonomous SDD loop with token tracking, model tiering, and intelligent failure handling.
 
 | Milestone | Status |
 |-----------|--------|
@@ -18,29 +18,32 @@
 | Tesaki Task Orchestrator | ✅ COMPLETE |
 | CI Gates | ✅ ALL GREEN |
 | Bootstrap Exit Criteria | ✅ ALL SATISFIED |
-| **Namako v1.5 Explicit ID Tags** | ✅ **COMPLETE** |
-| **Namako v1.7 Runner Integration** | ✅ **VERIFIED** |
-| **Namako v1.8 Interactive REPL** | ✅ **VERIFIED** |
-| **Headless Mode (`--loop N`)** | ✅ **NEW** |
-| **CONSUMPTION Mode** | ✅ **ACTIVE** |
+| Namako v1.5 Explicit ID Tags | ✅ COMPLETE |
+| Namako v1.7 Runner Integration | ✅ VERIFIED |
+| Namako v1.8 Interactive REPL | ✅ VERIFIED |
+| Headless Mode (`--loop N`) | ✅ VERIFIED |
+| **Namako v1.9 Token + Model + Safety** | ✅ **COMPLETE** |
+| CONSUMPTION Mode | ✅ **ACTIVE** |
 
 ---
 
-## v1.8 Interactive Developer Experience — VERIFIED
+## v1.9 Optimization Improvements — COMPLETE
 
-**Scope:** Interactive REPL + headless autonomous mode with Copilot/Claude/Codex backends.
+**Scope:** Token tracking, model tiering, and research-aligned safety rails.
 
-| Component | Status | Description |
-|-----------|--------|-------------|
-| REPL entrypoint | ✅ | `tesaki` starts interactive session |
-| **Headless mode** | ✅ | `tesaki --loop N` runs without REPL |
-| Chat planner | ✅ | `mock`/`codex`/`claude`/`copilot` backends |
-| Runner backends | ✅ | `mock`/`cmd`/`claude`/`codex`/`copilot` |
-| `loop N` command | ✅ | Autonomous mission iteration |
-| Progress tracking | ✅ | Before/after issue counts with deltas |
-| Algorithmic selection | ✅ | No LLM for task selection |
-| Batched bindings | ✅ | All missing steps shown in one mission |
-| Config discovery | ✅ | `.tesaki/config.toml` auto-discovery |
+| Feature | Status | Files |
+|---------|--------|-------|
+| Token tracking | ✅ | `token_usage.rs` (12 tests) |
+| Model tiering | ✅ | `model_tier.rs` (10 tests) |
+| Pre-gate build check | ✅ | `error_parser.rs` (7 tests) |
+| Regression threshold | ✅ | `repl.rs` (+5 issues = stop) |
+| Consecutive failure skip | ✅ | `repl.rs` (2× = skip type) |
+| Slimmed templates | ✅ | 38% reduction (354→219 lines) |
+
+**Research Alignment:** Per `ARCHIVE/RESEARCH_FINDINGS.md`, we prioritized:
+- Simple loops over complex orchestration
+- Trusting the runner over exemplar injection
+- Verify results, not inputs
 
 ### How the Loop Works
 

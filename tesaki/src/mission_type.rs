@@ -76,6 +76,18 @@ pub enum EvidenceChange {
     GatePasses,
 }
 
+/// Describes expected issue flow for a mission type.
+/// Used to distinguish expected downstream effects from actual regressions.
+#[derive(Clone, Debug, Default)]
+pub struct ExpectedIssueFlow {
+    /// If true, binding issues may increase (e.g., new scenarios create binding gaps)
+    pub binding_increase_ok: bool,
+    /// If true, SUT issues may increase (e.g., new bindings make tests run and fail)
+    pub sut_increase_ok: bool,
+    /// If true, spec issues may increase (e.g., normalization reveals gaps)
+    pub spec_increase_ok: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MissionBrief {
     pub mission_type: MissionType,
@@ -217,6 +229,36 @@ impl MissionType {
         }
     }
 
+    /// Returns expected issue flow for this mission type.
+    /// 
+    /// In SDD, certain missions create expected downstream work:
+    /// - AddOrClarifyScenario: Adding scenarios creates binding gaps (expected)
+    /// - CreateMissingBindings: Creating bindings may surface SUT failures (expected)
+    /// 
+    /// This helps distinguish expected issue increases from actual regressions.
+    pub fn expected_issue_flow(&self) -> ExpectedIssueFlow {
+        match self {
+            // Spec missions: adding scenarios creates binding work
+            Self::AddOrClarifyScenario { .. } | Self::RefineFeatureIntent { .. } => {
+                ExpectedIssueFlow {
+                    binding_increase_ok: true,
+                    sut_increase_ok: false,
+                    spec_increase_ok: false,
+                }
+            }
+            // Binding missions: new bindings may reveal SUT failures
+            Self::CreateMissingBindings { .. } => {
+                ExpectedIssueFlow {
+                    binding_increase_ok: false,
+                    sut_increase_ok: true,
+                    spec_increase_ok: false,
+                }
+            }
+            // All other missions: no expected increases
+            _ => ExpectedIssueFlow::default(),
+        }
+    }
+
     pub fn generate_brief(&self, state: &RepoState) -> MissionBrief {
         match self {
             Self::CreateMissingBindings { scenario_key, missing_steps: _ } => {
@@ -329,20 +371,50 @@ impl MissionType {
                 context: format!("Feature {} is underspecified.", feature_path),
                 validation_criteria: vec!["Spec intent clarifications added".to_string()],
             },
-            Self::AddOrClarifyScenario { feature_path, rule_name } => MissionBrief {
-                mission_type: self.clone(),
-                title: format!("Add or clarify scenario in {}", feature_path),
-                objective: "Add or clarify scenarios to improve coverage.".to_string(),
-                context: format!(
-                    "Coverage gaps detected in {}{}.",
-                    feature_path,
-                    rule_name
-                        .as_ref()
-                        .map(|r| format!(" ({})", r))
-                        .unwrap_or_default()
-                ),
-                validation_criteria: vec!["New scenario(s) added".to_string()],
-            },
+            Self::AddOrClarifyScenario { feature_path, rule_name } => {
+                // Find all rules in this feature that need scenarios
+                let rules_needing_coverage: Vec<String> = state.spec_issues
+                    .iter()
+                    .filter(|i| i.feature_path == *feature_path)
+                    .filter_map(|i| i.rule_name.clone())
+                    .collect();
+                
+                let context = if rules_needing_coverage.is_empty() {
+                    format!(
+                        "Coverage gaps detected in {}{}.\n\n\
+                        **IMPORTANT:** Add scenarios to existing rules that need coverage. \
+                        Do NOT add new rules unless absolutely necessary.",
+                        feature_path,
+                        rule_name.as_ref().map(|r| format!(" ({})", r)).unwrap_or_default()
+                    )
+                } else {
+                    format!(
+                        "Coverage gaps detected in {}.\n\n\
+                        **Rules that need scenarios ({}):**\n{}\n\n\
+                        **IMPORTANT:** Add scenarios to these existing rules. \
+                        Do NOT add new rules - focus on covering the listed rules first.",
+                        feature_path,
+                        rules_needing_coverage.len(),
+                        rules_needing_coverage.iter()
+                            .take(10)
+                            .enumerate()
+                            .map(|(i, r)| format!("{}. {}", i + 1, r))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
+                };
+                
+                MissionBrief {
+                    mission_type: self.clone(),
+                    title: format!("Add scenarios to {}", feature_path),
+                    objective: "Add executable scenarios to rules that lack coverage. Do NOT add new rules.".to_string(),
+                    context,
+                    validation_criteria: vec![
+                        "New scenario(s) added to existing rules".to_string(),
+                        "Rules with zero scenarios now have coverage".to_string(),
+                    ],
+                }
+            }
             Self::NormalizeIdentityTags { feature_path, missing_tags } => MissionBrief {
                 mission_type: self.clone(),
                 title: format!("Normalize identity tags in {}", feature_path),

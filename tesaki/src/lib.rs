@@ -4,6 +4,7 @@
 
 pub mod binding_extractor;
 pub mod config;
+pub mod error_parser;
 pub mod gate;
 pub mod issue_classifier;
 pub mod chat_plan;

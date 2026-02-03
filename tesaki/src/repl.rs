@@ -14,6 +14,7 @@ use crate::claude_code_agent::ClaudeCodeAgent;
 use crate::codex_agent::CodexAgent;
 use crate::copilot_agent::CopilotAgent;
 use crate::config::{self, ConfigDiscoveryResult};
+use crate::mission_type::MissionType;
 use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
 use crate::repo_state::RepoState;
 use crate::session::{PendingMission, SessionState};
@@ -611,6 +612,13 @@ fn run_autonomous_loop(
     const MAX_STALLS: u32 = 3;
     let loop_start = Instant::now();
     
+    // Simple consecutive failure tracking (per OPTIMIZATION_ANALYSIS.md)
+    // If same mission type fails 2× in a row, skip it for this session
+    let mut last_mission_type: Option<String> = None;
+    let mut consecutive_failures: u32 = 0;
+    let mut skipped_types: Vec<String> = Vec::new();
+    const MAX_CONSECUTIVE_FAILURES: u32 = 2;
+    
     // Record initial issue count for session summary
     {
         let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
@@ -665,6 +673,18 @@ fn run_autonomous_loop(
         };
         
         let (mission_type, stage, surface_policy) = selection;
+        
+        // Check if this mission type is skipped due to consecutive failures
+        let type_name = mission_type.name().to_string();
+        if skipped_types.contains(&type_name) {
+            println!("⏭️  Skipping {} (failed {}× consecutively)", type_name, MAX_CONSECUTIVE_FAILURES);
+            stall_count += 1;
+            if stall_count >= MAX_STALLS {
+                println!("🛑 All available mission types stalled - stopping");
+                break;
+            }
+            continue;
+        }
         
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!("MISSION {}/{}", iteration, max_iterations);
@@ -748,20 +768,63 @@ fn run_autonomous_loop(
         // Calculate deltas
         let spec_delta = after_spec as i32 - before_spec as i32;
         let binding_delta = after_binding as i32 - before_binding as i32;
+        let sut_delta = after_sut as i32 - before_sut as i32;
         let total_delta = after_total as i32 - before_total as i32;
+        
+        // Calculate adjusted delta accounting for expected SDD flow
+        // AddOrClarifyScenario: adding scenarios creates binding gaps (expected, not regression)
+        // CreateMissingBindings: new bindings may surface SUT failures (expected, not regression)
+        let expected_flow = mission_type.expected_issue_flow();
+        let adjusted_delta = {
+            let mut adj = total_delta;
+            // If binding increase is expected for this mission type, don't count it as regression
+            if expected_flow.binding_increase_ok && binding_delta > 0 {
+                adj -= binding_delta;
+            }
+            // If SUT increase is expected for this mission type, don't count it as regression
+            if expected_flow.sut_increase_ok && sut_delta > 0 {
+                adj -= sut_delta;
+            }
+            adj
+        };
         
         println!();
         println!("After:   Spec:{} Bind:{} SUT:{} Struct:{} (total: {})",
             after_spec, after_binding, after_sut, after_structure, after_total);
-        println!("Delta:   Spec:{:+} Bind:{:+} Total:{:+}",
-            spec_delta, binding_delta, total_delta);
+        println!("Delta:   Spec:{:+} Bind:{:+} SUT:{:+} Total:{:+}{}",
+            spec_delta, binding_delta, sut_delta, total_delta,
+            if adjusted_delta != total_delta { format!(" (adj:{:+})", adjusted_delta) } else { String::new() });
         
-        // Determine if we made progress
-        // Progress = any category decreased, even if others increased
-        // (e.g., adding scenarios decreases spec issues but increases binding issues)
-        let made_progress = spec_delta < 0 || binding_delta < 0 || 
-            (after_sut as i32) < (before_sut as i32) ||
-            (after_structure as i32) < (before_structure as i32);
+        // Determine if we made progress - mission-type aware
+        // Each mission type has a PRIMARY metric that MUST improve (or at least not regress)
+        let (made_progress, violated_invariant) = match &mission_type {
+            MissionType::AddOrClarifyScenario { .. } | MissionType::RefineFeatureIntent { .. } => {
+                // Spec missions: spec_issues MUST NOT increase (would mean agent added rules)
+                // Binding increase is expected (new scenarios need bindings)
+                let progress = spec_delta < 0;
+                let violated = spec_delta > 0;  // Agent added rules = invariant violation
+                (progress, violated)
+            }
+            MissionType::CreateMissingBindings { .. } => {
+                // Binding missions: binding_issues MUST decrease
+                // SUT increase is expected (new bindings may surface test failures)
+                let progress = binding_delta < 0;
+                let violated = binding_delta > 0;  // Bindings increased = something wrong
+                (progress, violated)
+            }
+            MissionType::ImplementBehaviorForScenario { .. } | 
+            MissionType::FixRegressionFromGateFailure { .. } => {
+                // SUT missions: sut_issues MUST decrease
+                let progress = sut_delta < 0;
+                let violated = sut_delta > 0;  // SUT issues increased = regression
+                (progress, violated)
+            }
+            _ => {
+                // Other missions: any improvement counts, no strict invariant
+                let progress = spec_delta < 0 || binding_delta < 0 || sut_delta < 0;
+                (progress, false)
+            }
+        };
         
         let gates_now_pass = after_state.all_gates_pass();
         
@@ -771,23 +834,88 @@ fn run_autonomous_loop(
             println!("{}", msg);
         }
         
-        if gates_now_pass && !after_state.has_work() {
+        // Check for invariant violation first (stricter than general regression)
+        if violated_invariant {
+            println!("❌ Mission invariant violated: {} made its primary metric worse", type_name);
+            consecutive_failures += 1;
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES && !skipped_types.contains(&type_name) {
+                println!("⏭️  {} violated invariant {}× - skipping for this session", 
+                    type_name, consecutive_failures);
+                skipped_types.push(type_name.clone());
+            }
+            last_mission_type = Some(type_name.clone());
+            stall_count += 1;
+        } else if gates_now_pass && !after_state.has_work() {
             println!("🎉 All gates pass, no issues remaining. DONE!");
+            // Clear skipped types on success (system recovered)
+            skipped_types.clear();
+            consecutive_failures = 0;
             break;
         } else if made_progress {
             println!("✅ Progress made - continuing");
             stall_count = 0;
+            // Clear consecutive failure counter on progress
+            consecutive_failures = 0;
+            // Clear all skipped types when ANY mission succeeds
+            if !skipped_types.is_empty() {
+                println!("   (Unblocking previously skipped mission types)");
+                skipped_types.clear();
+            }
+            last_mission_type = Some(type_name.clone());
         } else if runner_succeeded && total_delta == 0 {
             stall_count += 1;
+            // Track consecutive failures for this mission type
+            if last_mission_type.as_ref() == Some(&type_name) {
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES && !skipped_types.contains(&type_name) {
+                    println!("⏭️  {} failed {}× consecutively - skipping for this session", 
+                        type_name, consecutive_failures);
+                    skipped_types.push(type_name.clone());
+                }
+            } else {
+                consecutive_failures = 1;
+            }
+            last_mission_type = Some(type_name.clone());
             println!("⚠️  No net progress (stall {}/{})", stall_count, MAX_STALLS);
             if stall_count >= MAX_STALLS {
                 println!("🛑 Too many stalls - stopping to avoid infinite loop");
                 break;
             }
-        } else if total_delta > 0 {
-            println!("⚠️  Regression detected (issues increased) - continuing anyway");
-            // Don't stop - the next mission type might fix it
+        } else if adjusted_delta > 0 {
+            // Regression: adjusted delta is positive (accounting for expected SDD flow)
+            // Track consecutive failures for regression too
+            if last_mission_type.as_ref() == Some(&type_name) {
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES && !skipped_types.contains(&type_name) {
+                    println!("⏭️  {} caused regression {}× - skipping for this session", 
+                        type_name, consecutive_failures);
+                    skipped_types.push(type_name.clone());
+                }
+            } else {
+                consecutive_failures = 1;
+            }
+            last_mission_type = Some(type_name.clone());
+            
+            // Check for catastrophic regression (per OPTIMIZATION_ANALYSIS.md)
+            const MAX_REGRESSION_TOLERATED: i32 = 5;
+            if adjusted_delta > MAX_REGRESSION_TOLERATED {
+                println!("🛑 EMERGENCY STOP: Regression of +{} issues exceeds threshold of {}", 
+                    adjusted_delta, MAX_REGRESSION_TOLERATED);
+                println!("   Last mission made things significantly worse. Human review required.");
+                break;
+            }
+            println!("⚠️  Regression detected (+{} adjusted issues) - continuing cautiously", adjusted_delta);
             stall_count += 1;
+        } else if total_delta > 0 && adjusted_delta <= 0 {
+            // Total increased but adjusted is fine = expected SDD flow (e.g., scenarios added, bindings needed)
+            println!("✅ Expected SDD flow: {} issues added (bindings/SUT work created)", total_delta);
+            stall_count = 0;
+            consecutive_failures = 0;
+            if !skipped_types.is_empty() {
+                println!("   (Unblocking previously skipped mission types)");
+                skipped_types.clear();
+            }
+            last_mission_type = Some(type_name.clone());
         }
         
         println!();
@@ -881,20 +1009,37 @@ fn format_mission_success(
 }
 
 /// Read the most recent token_usage.json from the mission directory.
-/// Looks in .tesaki/missions/ for the latest mission bundle.
+/// Looks in both .tesaki/missions/ and .tesaki/failed/ for the latest mission bundle.
 fn read_latest_token_usage(spec_root: &Path) -> Option<TokenUsage> {
     let missions_dir = spec_root.join(".tesaki/missions");
-    if !missions_dir.exists() {
+    let failed_dir = spec_root.join(".tesaki/failed");
+    
+    // Collect entries from both directories
+    let mut entries: Vec<_> = Vec::new();
+    
+    if missions_dir.exists() {
+        if let Ok(dir) = std::fs::read_dir(&missions_dir) {
+            entries.extend(
+                dir.filter_map(|e| e.ok())
+                   .filter(|e| e.path().is_dir())
+            );
+        }
+    }
+    
+    if failed_dir.exists() {
+        if let Ok(dir) = std::fs::read_dir(&failed_dir) {
+            entries.extend(
+                dir.filter_map(|e| e.ok())
+                   .filter(|e| e.path().is_dir())
+            );
+        }
+    }
+    
+    if entries.is_empty() {
         return None;
     }
     
-    // Find the most recent mission directory (sorted by name, which includes timestamp)
-    let mut entries: Vec<_> = std::fs::read_dir(&missions_dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .collect();
-    
+    // Find the most recent mission directory (sorted by name, which includes sequence number)
     entries.sort_by_key(|e| e.path());
     let latest = entries.last()?;
     

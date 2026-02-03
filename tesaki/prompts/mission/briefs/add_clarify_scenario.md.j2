@@ -3,98 +3,42 @@
 Required context:
 - feature_path: String
 - rule_name: Option<String>
-- current_scenario_count: Integer (optional)
 - rules_without_scenarios: Vec<String> (optional)
-- feature_intent: String (optional, from contract header)
-- example_scenario: String (optional, example from repo)
 #}
 # Add or Clarify Scenarios
 
-**Mission Type:** AddOrClarifyScenario
-**Target Feature:** {{ feature_path }}
+**Target:** {{ feature_path }}
 {% if rule_name %}**Focus Rule:** {{ rule_name }}{% endif %}
 
----
+## What To Do
 
-## What You Need To Do
+Add executable scenarios to rules that lack coverage. Read the feature file's NORMATIVE CONTRACT MIRROR header for requirements.
 
-Add executable scenarios to cover the rules defined in this feature file. Each rule should have at least one scenario that tests its stated guarantee.
-
----
-
-## Current State
-
-{% if current_scenario_count is defined %}
-- **Executable scenarios:** {{ current_scenario_count }}
-{% endif %}
 {% if rules_without_scenarios and rules_without_scenarios | length > 0 %}
-- **Rules needing scenarios:** 
+## Rules Needing Scenarios
+
 {% for rule in rules_without_scenarios %}
-  - {{ rule }}
+- {{ rule }}
 {% endfor %}
-{% else %}
-- Check the feature file for Rules that lack scenario coverage
 {% endif %}
 
----
+## Pattern
 
-## How To Add Scenarios
-
-1. **Read the NORMATIVE CONTRACT MIRROR** — The feature file header contains the authoritative contract. Read it carefully.
-
-2. **For each Rule, add 1-3 scenarios that test the guarantee:**
-   - Use explicit ID tags: `@Rule(NN)` and `@Scenario(NN)`
-   - Write scenarios in business language (Given/When/Then)
-   - Focus on observable behavior, not implementation details
-
-3. **Use this pattern:**
 ```gherkin
-@Rule(01)
-Rule: [Rule name from contract]
+@Rule(NN)
+Rule: [Rule name]
 
-  @Scenario(01)
-  Scenario: [Specific testable behavior]
+  @Scenario(NN)
+  Scenario: [Testable behavior]
     Given [precondition]
     When [action]
     Then [observable outcome]
 ```
 
----
+## Verify
 
-{% if example_scenario %}
-## Example Scenario (from this repository)
-
-```gherkin
-{{ example_scenario }}
+```bash
+namako gate --specs-dir test/specs
 ```
 
-{% else %}
-## Example Scenario Pattern
-
-```gherkin
-@Rule(01)
-Rule: Event ordering
-
-  @Scenario(01)
-  Scenario: Server observes ConnectEvent when client connects
-    Given a server is running
-    When a client connects
-    Then the server has observed ConnectEvent
-```
-
-{% endif %}
----
-
-## Validation Criteria
-
-1. ✅ New scenario(s) added to the feature file
-2. ✅ Each scenario has explicit `@Rule(NN)` and `@Scenario(NN)` tags
-3. ✅ Scenarios are placed under the correct Rule
-
----
-
-## Important Notes
-
-- **This will create binding work** — Adding scenarios that use new step text will require bindings to be created in a follow-up mission. This is expected.
-- **Don't implement bindings** — Just add the scenarios. The next mission will handle bindings.
-- **Match existing step vocabulary** — Reuse step text from other features when possible to leverage existing bindings.
+**Note:** This creates binding work — adding scenarios with new steps will require bindings in a follow-up mission.

@@ -97,6 +97,12 @@ pub struct Config {
     /// Optional model overrides for intelligent tiering
     #[serde(default)]
     pub model_overrides: Option<ModelOverrides>,
+
+    /// Pre-gate build command (default: auto-detect test harness or "cargo check")
+    /// Use this to specify which crate(s) to build-check before running missions.
+    /// Example: "cargo build -p my-test-harness"
+    #[serde(default)]
+    pub pre_gate_build: Option<String>,
 }
 
 /// Surface patterns override

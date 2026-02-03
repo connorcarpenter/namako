@@ -930,8 +930,9 @@ mod tests {
 
         let result = render_brief(&mission_type, &state).unwrap();
 
-        assert!(result.contains("**Target Scenario:** feature:Rule(01):Scenario(01)"));
-        assert!(result.contains("2 unique patterns"));
+        // Slimmed template (per OPTIMIZATION_ANALYSIS.md)
+        assert!(result.contains("**Target:** feature:Rule(01):Scenario(01)"));
+        assert!(result.contains("**Bindings Needed:** 2"));
         assert!(result.contains("`Given a test`"));
         assert!(result.contains("`When something happens`"));
     }
