@@ -22,10 +22,4 @@ Required context:
 
 Add bindings to files in `test/tests/src/steps/`. Look at existing bindings for patterns.
 
-## Verify
-
-```bash
-namako gate --specs-dir test/specs
-```
-
-**Note:** Create bindings only — don't implement SUT behavior.
+**Note:** Create bindings only — don't implement SUT behavior. Do NOT run `namako gate`/`namako lint`/`namako steps`; Tesaki will validate.

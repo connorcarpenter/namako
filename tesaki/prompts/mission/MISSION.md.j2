@@ -53,6 +53,17 @@ Required context:
 
 {{ context }}
 
+{% if previous_failure %}
+---
+
+## Previous Failure (for context)
+
+- Mission: {{ previous_failure.mission_type }}
+{% if previous_failure.target %}- Target: {{ previous_failure.target }}{% endif %}
+- Reason: {{ previous_failure.stop_reason }}
+{% if previous_failure.details %}- Details: {{ previous_failure.details }}{% endif %}
+{% endif %}
+
 {% if previous_mission %}
 ---
 
@@ -85,6 +96,8 @@ This is normal in spec-driven development. The next mission will address the dow
 1. `namako gate --json` must pass
 {% endfor %}
 
+**Do NOT run `namako` commands or any build/test commands (`cargo`, etc.). Tesaki will validate.**
+
 ---
 
 ## Budgets
@@ -94,14 +107,6 @@ This is normal in spec-driven development. The next mission will address the dow
 | Max files changed | {{ budgets.max_files_changed }} |
 | Max scenarios promoted | {{ budgets.max_scenarios_promoted }} |
 | Max runtime (seconds) | {{ budgets.max_runtime_seconds }} |
-
----
-
-## Verify
-
-```bash
-namako gate --adapter-cmd "cargo run --manifest-path test/npa/Cargo.toml --" --specs-dir test/specs
-```
 
 ---
 

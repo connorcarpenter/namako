@@ -117,7 +117,7 @@ mod tests {
             max_runtime_seconds: 60,
             working_dir: temp_dir.path().to_path_buf(),
             model: None,
-            stream_output: false,
+            stream_output: true,
         };
 
         let outcome = runner.run(&mission_dir, &config).unwrap();
@@ -137,7 +137,7 @@ mod tests {
             max_runtime_seconds: 60,
             working_dir: temp_dir.path().to_path_buf(),
             model: None,
-            stream_output: false,
+            stream_output: true,
         };
 
         let outcome = runner.run(&mission_dir, &config).unwrap();

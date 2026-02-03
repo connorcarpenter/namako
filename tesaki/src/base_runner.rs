@@ -5,6 +5,7 @@
 use crate::runner::{OutcomeClassification, RunnerConfig, RunnerOutcome};
 use crate::token_usage::TokenUsage;
 use anyhow::Result;
+use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -18,6 +19,123 @@ pub(crate) enum WaitResult {
     Completed(std::process::Output),
     Timeout,
     Error(std::io::Error),
+}
+
+struct StreamLine {
+    text: String,
+    newline: bool,
+}
+
+fn format_stream_line(line: &str) -> Option<StreamLine> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('{') {
+        return Some(StreamLine {
+            text: line.to_string(),
+            newline: true,
+        });
+    }
+
+    let value: Value = match serde_json::from_str(trimmed) {
+        Ok(val) => val,
+        Err(_) => {
+            return Some(StreamLine {
+                text: line.to_string(),
+                newline: true,
+            })
+        }
+    };
+
+    let line_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match line_type {
+        "stream_event" => format_claude_stream_event(&value),
+        "user" => format_claude_user_event(&value),
+        "assistant" | "result" | "system" => None,
+        _ => Some(StreamLine {
+            text: line.to_string(),
+            newline: true,
+        }),
+    }
+}
+
+fn format_claude_stream_event(value: &Value) -> Option<StreamLine> {
+    let event = value.get("event")?;
+    let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match event_type {
+        "content_block_delta" => {
+            let delta = event.get("delta")?;
+            let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if delta_type == "text_delta" {
+                let text = delta.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                if text.is_empty() {
+                    return None;
+                }
+                return Some(StreamLine {
+                    text: text.to_string(),
+                    newline: false,
+                });
+            }
+            None
+        }
+        "content_block_start" => {
+            let block = event.get("content_block")?;
+            let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if block_type == "tool_use" {
+                let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+                return Some(StreamLine {
+                    text: format!("\n[tool] {}", name),
+                    newline: true,
+                });
+            }
+            None
+        }
+        "message_stop" => Some(StreamLine {
+            text: String::new(),
+            newline: true,
+        }),
+        _ => None,
+    }
+}
+
+fn format_claude_user_event(value: &Value) -> Option<StreamLine> {
+    if let Some(tool_result) = value.get("tool_use_result") {
+        let stdout = tool_result
+            .get("stdout")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let stderr = tool_result
+            .get("stderr")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let content = if !stdout.trim().is_empty() { stdout } else { stderr };
+        if !content.trim().is_empty() {
+            return Some(StreamLine {
+                text: format!("\n[tool_result] {}", truncate_line(content, 200)),
+                newline: true,
+            });
+        }
+    }
+
+    let content_array = value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array());
+
+    if let Some(items) = content_array {
+        for item in items {
+            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if item_type == "tool_result" {
+                let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                if !content.trim().is_empty() {
+                    return Some(StreamLine {
+                        text: format!("\n[tool_result] {}", truncate_line(content, 200)),
+                        newline: true,
+                    });
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Wait for a child process with a timeout.
@@ -96,7 +214,14 @@ fn wait_with_streaming(
             for line in reader.lines() {
                 if let Ok(line) = line {
                     if stream {
-                        let _ = writeln!(std::io::stdout(), "{}", line);
+                        if let Some(rendered) = format_stream_line(&line) {
+                            if rendered.newline {
+                                let _ = writeln!(std::io::stdout(), "{}", rendered.text);
+                            } else {
+                                let _ = write!(std::io::stdout(), "{}", rendered.text);
+                                let _ = std::io::stdout().flush();
+                            }
+                        }
                     }
                     let mut buf = stdout_buf_clone.lock().unwrap();
                     buf.extend_from_slice(line.as_bytes());
@@ -113,7 +238,14 @@ fn wait_with_streaming(
             for line in reader.lines() {
                 if let Ok(line) = line {
                     if stream {
-                        let _ = writeln!(std::io::stderr(), "{}", line);
+                        if let Some(rendered) = format_stream_line(&line) {
+                            if rendered.newline {
+                                let _ = writeln!(std::io::stderr(), "{}", rendered.text);
+                            } else {
+                                let _ = write!(std::io::stderr(), "{}", rendered.text);
+                                let _ = std::io::stderr().flush();
+                            }
+                        }
                     }
                     let mut buf = stderr_buf_clone.lock().unwrap();
                     buf.extend_from_slice(line.as_bytes());
@@ -372,6 +504,10 @@ fn is_rate_limited(output: &std::process::Output) -> bool {
         "hit your limit",
         "you've hit your limit",
         "quota exceeded",
+        "insufficient credits",
+        "out of credits",
+        "payment required",
+        "billing",
         "too many requests",
         "429",
         "try again later",
@@ -432,6 +568,12 @@ mod tests {
     #[test]
     fn test_rate_limit_detection_quota() {
         let output = make_output("API quota exceeded. Please try again later.", "");
+        assert!(is_rate_limited(&output));
+    }
+
+    #[test]
+    fn test_rate_limit_detection_credits() {
+        let output = make_output("", "Payment required: insufficient credits");
         assert!(is_rate_limited(&output));
     }
 

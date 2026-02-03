@@ -80,6 +80,41 @@ pub enum GateOutcome {
     FailOther,
 }
 
+/// Returns true if the gate failed *only* due to missing step bindings in lint.
+///
+/// This is used to allow AddOrClarifyScenario to succeed when it introduces new steps
+/// that require follow-up bindings (spec -> bindings chaining).
+pub fn is_missing_bindings_only(json: &str) -> bool {
+    let gate: GateJson = match serde_json::from_str(json) {
+        Ok(val) => val,
+        Err(_) => return false,
+    };
+
+    if gate.lint.status != PhaseStatus::Fail {
+        return false;
+    }
+
+    let errors = match &gate.lint.errors {
+        Some(errors) if !errors.is_empty() => errors,
+        _ => return false,
+    };
+
+    let all_missing_bindings = errors.iter().all(|err| {
+        err.step_text
+            .as_ref()
+            .map(|text| !text.trim().is_empty())
+            .unwrap_or(false)
+    });
+
+    if !all_missing_bindings {
+        return false;
+    }
+
+    // If lint failed due to missing bindings, downstream phases should be skipped.
+    matches!(gate.run.status, PhaseStatus::Skipped)
+        && matches!(gate.verify.status, PhaseStatus::Skipped)
+}
+
 impl GateOutcome {
     /// Classify gate outcome from parsed gate JSON.
     pub fn classify(gate: &GateJson) -> Self {

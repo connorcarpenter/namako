@@ -37,6 +37,7 @@ mod base_runner;
 mod claude_code_agent;
 mod codex_agent;
 mod copilot_agent;
+mod agent_fallback;
 mod runner_test;
 mod scenario_extractor;
 mod session;
@@ -220,7 +221,6 @@ struct ResolvedArgs {
     max_files_changed: Option<usize>,
     surfaces: Option<config::SurfacesConfig>,
     model: Option<String>,
-    stream_output: bool,
 }
 
 /// Resolve configuration from CLI flags, falling back to config file if flags are missing.
@@ -253,7 +253,6 @@ fn resolve_config_or_flags(
             max_files_changed,
             surfaces: None,
             model: None,
-            stream_output: false,
         });
     }
 
@@ -285,7 +284,6 @@ fn resolve_config_or_flags(
                 max_files_changed: max_files_changed.or(cfg.max_files_changed),
                 surfaces: cfg.surfaces,
                 model: cfg.model,
-                stream_output: cfg.stream_output,
             })
         }
         config::ConfigDiscoveryResult::NotFound { .. } => {
@@ -373,7 +371,11 @@ fn run_status_cmd(
     namako_cli: NamakoCliResolution,
     logger: &logging::JsonlLogger,
 ) -> Result<()> {
-    use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
+    use crate::packet_parser::{
+        parse_gate_json,
+        parse_review_json,
+        parse_status_json,
+    };
     use crate::repo_state::RepoState;
     use crate::stage::detect_stage;
 
@@ -550,7 +552,8 @@ fn run_next(
 
     // Define artifact paths used throughout
     let artifacts_dir = spec_root.join("target/namako_artifacts");
-    let run_report_path = artifacts_dir.join("run_report.json");
+    let run_report_path =
+        resolve_run_report_path(&spec_root).unwrap_or_else(|| artifacts_dir.join("run_report.json"));
     let cert_path = spec_root.join("certification.json");
     let log_path = out_dir.join(UPDATE_CERT_LOG);
 
@@ -772,6 +775,18 @@ fn run_namako_status(
     }
 
     Ok(stdout)
+}
+
+fn resolve_run_report_path(spec_root: &PathBuf) -> Option<PathBuf> {
+    let primary = spec_root.join("run_report.json");
+    if primary.exists() {
+        return Some(primary);
+    }
+    let fallback = spec_root.join("target/namako_artifacts/run_report.json");
+    if fallback.exists() {
+        return Some(fallback);
+    }
+    None
 }
 
 fn run_namako_review(
@@ -1133,7 +1148,6 @@ fn run_run(
     max_files_changed: u32,
     max_retries: u32,
     model: Option<String>,
-    stream_output: bool,
     stage: Option<String>,
     surfaces: Option<config::SurfacesConfig>,
     surface_overrides: Option<crate::surface_policy::SurfacePolicy>,
@@ -1145,18 +1159,29 @@ fn run_run(
     use crate::mission::SurfaceDefinitions;
     use crate::mission_selector::select_with_constraints;
     use crate::model_tier::select_model_for_attempt;
-    use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
+    use crate::packet_parser::{
+        failures_from_run_report,
+        parse_gate_json,
+        parse_review_json,
+        parse_run_report_json,
+        parse_status_json,
+    };
     use crate::runner::{Runner, RunnerConfig, OutcomeClassification};
-    use crate::runner_test::MockRunner;
-use crate::claude_code_agent::ClaudeCodeAgent;
-use crate::codex_agent::CodexAgent;
+    use crate::agent_fallback::{
+        runner_candidates,
+        describe_candidates,
+        build_runner,
+        should_fallback_on_outcome,
+        normalize_model_for_runner,
+        outcome_from_error,
+    };
     use crate::repo_state::RepoState;
     use crate::stage::{Stage, StageConstraint, detect_stage};
     use crate::stop_reason::{StopReason, RunResult};
     use crate::workspace::Workspace;
-    use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker};
+    use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker, is_missing_bindings_only};
     use crate::surface_policy::SurfaceDefinition;
-    use crate::error_parser::{run_pre_gate_build, BuildCheckResult};
+    use crate::error_parser::run_pre_gate_build;
 
     // Canonicalize spec_root
     let spec_root = fs::canonicalize(spec_root)
@@ -1164,6 +1189,18 @@ use crate::codex_agent::CodexAgent;
 
     // Canonicalize adapter command
     let adapter = canonicalize_adapter_cmd(adapter)?;
+
+    // Enforce a minimum timeout to avoid premature aborts.
+    const MIN_RUNTIME_SECONDS: u32 = 180;
+    let max_runtime_seconds = if max_runtime_seconds < MIN_RUNTIME_SECONDS {
+        eprintln!(
+            "  ⚠️  max_runtime_seconds={} is below minimum; clamping to {}",
+            max_runtime_seconds, MIN_RUNTIME_SECONDS
+        );
+        MIN_RUNTIME_SECONDS
+    } else {
+        max_runtime_seconds
+    };
 
     // Set up budgets
     let budgets = MissionBudgets {
@@ -1197,64 +1234,54 @@ use crate::codex_agent::CodexAgent;
     // Determine namako CLI command
     let namako = namako_cli.command.clone();
 
+    let runner_candidates = runner_candidates(runner_name, runner_cmd.clone());
+    if runner_candidates.len() > 1 {
+        eprintln!(
+            "Runner fallback chain: {}",
+            describe_candidates(&runner_candidates)
+        );
+    }
+    let mut runner_index = 0usize;
+    let mut runner: Option<Box<dyn Runner>> = None;
+    let mut last_runner_error: Option<anyhow::Error> = None;
+    while runner_index < runner_candidates.len() {
+        let candidate = &runner_candidates[runner_index];
+        match build_runner(candidate, &spec_root, max_runtime_seconds) {
+            Ok(selected) => {
+                runner = Some(selected);
+                break;
+            }
+            Err(err) => {
+                eprintln!(
+                    "  ⚠️  Runner {} unavailable: {}",
+                    candidate.name, err
+                );
+                last_runner_error = Some(err);
+                runner_index += 1;
+            }
+        }
+    }
+    let mut runner = match runner {
+        Some(runner) => runner,
+        None => {
+            let err = last_runner_error
+                .unwrap_or_else(|| anyhow::anyhow!("No runner candidates available"));
+            let result = RunResult::error(StopReason::EnvironmentError, format!("{}", err));
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
+            eprintln!("STOP: {}", result.reason);
+            return Ok(());
+        }
+    };
+
     log_session_start(
         logger,
         &spec_root,
         &adapter,
         &namako_cli,
-        Some(runner_name),
+        Some(runner.name()),
         None,
     );
-
-    // Create the runner backend
-    let runner: Box<dyn Runner> = match runner_name {
-        "mock" => Box::new(MockRunner::success()),
-        "claude" => {
-            if let Err(e) = ClaudeCodeAgent::check_available() {
-                let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
-                emit_run_result(&result, &spec_root)?;
-                log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
-                eprintln!("STOP: {}", result.reason);
-                return Ok(());
-            }
-            Box::new(ClaudeCodeAgent::new(
-                runner_cmd,
-                None,
-                spec_root.clone(),
-            )?)
-        }
-        "codex" => {
-            if let Err(e) = CodexAgent::check_available() {
-                let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
-                emit_run_result(&result, &spec_root)?;
-                log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
-                eprintln!("STOP: {}", result.reason);
-                return Ok(());
-            }
-            Box::new(CodexAgent::new(
-                runner_cmd,
-                None,
-                spec_root.clone(),
-            )?)
-        }
-        "copilot" => {
-            if let Err(e) = copilot_agent::CopilotAgent::check_available() {
-                let result = RunResult::error(StopReason::EnvironmentError, format!("{}", e));
-                emit_run_result(&result, &spec_root)?;
-                log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
-                eprintln!("STOP: {}", result.reason);
-                return Ok(());
-            }
-            Box::new(copilot_agent::CopilotAgent::new_with_timeout_and_stream(
-                runner_cmd,
-                None,
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(max_runtime_seconds as u64)),
-                stream_output,
-            )?)
-        }
-        _ => anyhow::bail!("Unknown runner: {}", runner_name),
-    };
 
     eprintln!("=== Tesaki v1.9 ===");
     eprintln!("Spec root: {}", spec_root.display());
@@ -1319,13 +1346,8 @@ use crate::codex_agent::CodexAgent;
 
     let status_path = out_dir.join("status.json");
     let review_path = out_dir.join("review.json");
-    let run_report_path = spec_root.join("target/namako_artifacts/run_report.json");
-
-    let run_report_opt = if run_report_path.exists() {
-        Some(&run_report_path)
-    } else {
-        None
-    };
+    let run_report_path = resolve_run_report_path(&spec_root);
+    let run_report_opt = run_report_path.as_ref().filter(|path| path.exists());
 
     let status_json =
         run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
@@ -1333,7 +1355,17 @@ use crate::codex_agent::CodexAgent;
     let review_json = run_namako_review(&namako, &adapter, &spec_root, logger)?;
     fs::write(&review_path, &review_json)?;
 
-    let status_packet = parse_status_json(&status_json)?;
+    let mut status_packet = parse_status_json(&status_json)?;
+    if let Some(path) = run_report_opt {
+        if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(report) = parse_run_report_json(&content) {
+                let failures = failures_from_run_report(&report);
+                if !failures.is_empty() {
+                    status_packet.last_run_failures = failures;
+                }
+            }
+        }
+    }
     let review_packet = parse_review_json(&review_json)?;
 
     let repo_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
@@ -1377,8 +1409,20 @@ use crate::codex_agent::CodexAgent;
         }
     };
 
+    let (pre_rule_count, feature_snapshot) = match &mission_type {
+        crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } => (
+            repo_state.rule_count_for_feature(feature_path),
+            read_feature_snapshot(&spec_root, feature_path),
+        ),
+        _ => (None, None),
+    };
+
     if let Some(record) = load_no_progress_record(&spec_root) {
-        if record.matches(&mission_type, &pre_fingerprint) {
+        let skip_cooldown = matches!(
+            mission_type,
+            crate::mission_type::MissionType::AddOrClarifyScenario { .. }
+        );
+        if record.matches(&mission_type, &pre_fingerprint) && !skip_cooldown {
             let details = format!(
                 "No new evidence since last no-progress mission ({}).",
                 record.mission_type
@@ -1391,13 +1435,20 @@ use crate::codex_agent::CodexAgent;
         }
     }
 
-    // Compute directories for dynamic context extraction
-    let steps_dir = spec_root.join("test/tests/src/steps");
-    let steps_dir_opt = if steps_dir.is_dir() { Some(steps_dir.as_path()) } else { None };
-    let specs_dir = spec_root.join("test/specs/features");
-    let specs_dir_opt = if specs_dir.is_dir() { Some(specs_dir.as_path()) } else { None };
-    
-    let brief = mission_type.generate_brief_with_exemplars(&repo_state, steps_dir_opt, specs_dir_opt);
+    let previous_failure = load_failure_record(&spec_root).and_then(|record| {
+        if record.matches(&mission_type) {
+            Some(crate::prompts::PreviousFailureContext {
+                mission_type: record.mission_type,
+                target: record.target,
+                stop_reason: record.stop_reason,
+                details: record.details,
+            })
+        } else {
+            None
+        }
+    });
+
+    let brief = mission_type.generate_brief(&repo_state);
 
     eprintln!("  Type: {}", mission_type.name());
     if let Some(target) = mission_type.target_label() {
@@ -1472,6 +1523,7 @@ use crate::codex_agent::CodexAgent;
             &surface_definitions,
             &inputs,
             budgets.clone(),
+            previous_failure.clone(),
         )?;
         eprintln!("  Mission: {}", mission.id);
         eprintln!("  Path: {}", mission.path.display());
@@ -1492,15 +1544,24 @@ use crate::codex_agent::CodexAgent;
             Some(tier.to_string())
         };
 
+        let normalized_model = normalize_model_for_runner(runner.name(), selected_model.clone());
         if let Some(ref m) = selected_model {
-            eprintln!("  Model: {} (attempt {}, prev_failed={})", m, attempts_made, prev_attempt_failed);
+            if normalized_model.is_none() && runner.name() != "claude" {
+                eprintln!("  Model: {} (ignored by {})", m, runner.name());
+            }
+        }
+        if let Some(ref m) = normalized_model {
+            eprintln!(
+                "  Model: {} (attempt {}, prev_failed={})",
+                m, attempts_made, prev_attempt_failed
+            );
         }
 
         let runner_config = RunnerConfig {
             max_runtime_seconds,
             working_dir: workspace.working_dir().to_path_buf(),
-            model: selected_model,
-            stream_output,
+            model: normalized_model,
+            stream_output: true,
         };
 
         let planned_invocation = runner.planned_invocation(&mission.path, &runner_config);
@@ -1514,7 +1575,10 @@ use crate::codex_agent::CodexAgent;
             );
         }
 
-        let outcome = runner.run(&mission.path, &runner_config)?;
+        let outcome = match runner.run(&mission.path, &runner_config) {
+            Ok(outcome) => outcome,
+            Err(err) => outcome_from_error(err),
+        };
         eprintln!("  Outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
             outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
         
@@ -1534,6 +1598,40 @@ use crate::codex_agent::CodexAgent;
         fs::write(&stop_reason_path, stop_reason_json)
             .context("Failed to write RUNNER_OUTPUT/stop_reason.json")?;
 
+        if should_fallback_on_outcome(&outcome) {
+            let mut next_index = runner_index + 1;
+            let mut next_runner: Option<(usize, Box<dyn Runner>, String)> = None;
+            while next_index < runner_candidates.len() {
+                let candidate = &runner_candidates[next_index];
+                match build_runner(candidate, &spec_root, max_runtime_seconds) {
+                    Ok(next) => {
+                        next_runner = Some((next_index, next, candidate.name.clone()));
+                        break;
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "  ⚠️  Runner {} unavailable: {}",
+                            candidate.name, err
+                        );
+                        next_index += 1;
+                    }
+                }
+            }
+            if let Some((new_index, new_runner, new_name)) = next_runner {
+                eprintln!(
+                    "  ⚠️  Rate limited on {}. Switching runner to {}.",
+                    runner.name(),
+                    new_name
+                );
+                let _ = mission.preserve_failed()?;
+                runner = new_runner;
+                runner_index = new_index;
+                prev_attempt_failed = false;
+                attempts_made = attempts_made.saturating_sub(1);
+                continue;
+            }
+        }
+
         // Determine stop reason from runner outcome
         let runner_stop = match outcome.classification {
             OutcomeClassification::Ok => None,
@@ -1550,6 +1648,7 @@ use crate::codex_agent::CodexAgent;
                 let result = RunResult::error(stop.clone(), format!("Runner failed: {:?}", outcome.classification))
                     .with_mission_path(failed_path.display().to_string())
                     .with_missions(attempts_made);
+                let _ = save_failure_record(&spec_root, &mission_type, stop.clone(), result.details.clone());
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, stop.clone(), result.details.clone());
                 eprintln!("STOP: {} - After {} attempt(s)", stop, attempts_made);
@@ -1570,6 +1669,7 @@ use crate::codex_agent::CodexAgent;
             let result = RunResult::error(StopReason::NoProgress, details.clone())
                 .with_mission_path(failed_path.display().to_string())
                 .with_missions(attempts_made);
+            let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
             emit_run_result(&result, &spec_root)?;
             save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
             log_session_end(logger, StopReason::NoProgress, Some(details));
@@ -1585,6 +1685,7 @@ use crate::codex_agent::CodexAgent;
         mission.write_gate_result(&post_gate_json)?;
 
         let gate_outcome = GateOutcome::from_json_str(&post_gate_json);
+        let missing_bindings_only = is_missing_bindings_only(&post_gate_json);
         eprintln!("  Gate outcome: {:?}", gate_outcome);
         log_post_gate(logger, gate_outcome, mission.path.join("POST_GATE.json"));
 
@@ -1601,12 +1702,38 @@ use crate::codex_agent::CodexAgent;
         let post_gate_packet = parse_gate_json(&post_gate_json)?;
         let post_state = RepoState::compute(&post_status_packet, &post_review_packet, &post_gate_packet, None)?;
 
+        if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } = &mission_type {
+            let post_rule_count = post_state.rule_count_for_feature(feature_path);
+            let rules_increased = matches!((pre_rule_count, post_rule_count), (Some(pre), Some(post)) if post > pre);
+            if rules_increased {
+                if let Some(snapshot) = feature_snapshot.as_ref() {
+                    let _ = restore_feature_snapshot(&spec_root, feature_path, snapshot);
+                }
+                let details = format!(
+                    "Rule-count invariant violated for {} (before: {:?}, after: {:?}).",
+                    feature_path, pre_rule_count, post_rule_count
+                );
+                let failed_path = mission.preserve_failed()?;
+                let result = RunResult::error(StopReason::NoProgress, details.clone())
+                    .with_mission_path(failed_path.display().to_string())
+                    .with_missions(attempts_made);
+                let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+                emit_run_result(&result, &spec_root)?;
+                save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
+                log_session_end(logger, StopReason::NoProgress, Some(details));
+                eprintln!("STOP: RULE_COUNT_INCREASE - Mission rejected");
+                eprintln!("Failed mission preserved at: {}", failed_path.display());
+                return Ok(());
+            }
+        }
+
         if !has_progress(&repo_state, &post_state, &mission_type) {
             let details = "Post-gate evidence shows no progress for the mission target.".to_string();
             let failed_path = mission.preserve_failed()?;
             let result = RunResult::error(StopReason::NoProgress, details.clone())
                 .with_mission_path(failed_path.display().to_string())
                 .with_missions(attempts_made);
+            let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
             emit_run_result(&result, &spec_root)?;
             save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
             log_session_end(logger, StopReason::NoProgress, Some(details));
@@ -1615,11 +1742,26 @@ use crate::codex_agent::CodexAgent;
             return Ok(());
         }
 
+        if missing_bindings_only {
+            if matches!(mission_type, crate::mission_type::MissionType::AddOrClarifyScenario { .. }) {
+                eprintln!("  Gate failed due to missing bindings only; accepting scenario additions and chaining to bindings.");
+                let mut result = RunResult::done(attempts_made, cert_updates_made)
+                    .with_mission_path(mission.path.display().to_string());
+                result.details = Some("Missing bindings detected after adding scenarios; follow-up CreateMissingBindings is required.".to_string());
+                clear_failure_record(&spec_root);
+                emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::Done, result.details.clone());
+                eprintln!("\nSUCCESS: Scenarios added (bindings pending)");
+                return Ok(());
+            }
+        }
+
         match gate_outcome {
             GateOutcome::Pass => {
                 // Success!
                 let result = RunResult::done(attempts_made, cert_updates_made)
                     .with_mission_path(mission.path.display().to_string());
+                clear_failure_record(&spec_root);
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::Done, None);
                 eprintln!("\nSUCCESS: Mission completed after {} attempt(s)", attempts_made);
@@ -1638,7 +1780,9 @@ use crate::codex_agent::CodexAgent;
                         cert_updates_made, max_cert_updates);
 
                     // Paths for update-cert
-                    let run_report_path = spec_root.join("target/namako_artifacts/run_report.json");
+                    let run_report_path =
+                        resolve_run_report_path(&spec_root)
+                            .unwrap_or_else(|| spec_root.join("run_report.json"));
                     let cert_path = spec_root.join("certification.json");
 
                     // Read old identity for logging
@@ -1703,6 +1847,7 @@ use crate::codex_agent::CodexAgent;
                             eprintln!("  ✓ Gate passes after update-cert");
                             let result = RunResult::done(attempts_made, cert_updates_made)
                                 .with_mission_path(mission.path.display().to_string());
+                            clear_failure_record(&spec_root);
                             emit_run_result(&result, &spec_root)?;
                             log_session_end(logger, StopReason::Done, None);
                             eprintln!("\nSUCCESS: Mission completed after {} attempt(s), {} cert update(s)",
@@ -1731,6 +1876,7 @@ use crate::codex_agent::CodexAgent;
                     .with_mission_path(failed_path.display().to_string())
                     .with_missions(attempts_made)
                     .with_cert_updates(cert_updates_made);
+                let _ = save_failure_record(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone());
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Verify still failing after update-cert");
@@ -1753,6 +1899,7 @@ use crate::codex_agent::CodexAgent;
                 let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed (lint or run)")
                     .with_mission_path(failed_path.display().to_string())
                     .with_missions(attempts_made);
+                let _ = save_failure_record(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone());
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Post-run validation failed");
@@ -2124,6 +2271,65 @@ fn save_no_progress_record(
     Ok(())
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct FailureRecord {
+    mission_type: String,
+    target: Option<String>,
+    stop_reason: String,
+    details: Option<String>,
+    timestamp_utc: String,
+}
+
+impl FailureRecord {
+    fn matches(&self, mission_type: &crate::mission_type::MissionType) -> bool {
+        if self.mission_type != mission_type.name() {
+            return false;
+        }
+        match (&self.target, mission_type.target_label()) {
+            (Some(expected), Some(actual)) => expected == &actual,
+            (None, _) => true,
+            _ => false,
+        }
+    }
+}
+
+fn last_failure_path(spec_root: &PathBuf) -> PathBuf {
+    spec_root.join(".tesaki").join("last_failure.json")
+}
+
+fn load_failure_record(spec_root: &PathBuf) -> Option<FailureRecord> {
+    let path = last_failure_path(spec_root);
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn save_failure_record(
+    spec_root: &PathBuf,
+    mission_type: &crate::mission_type::MissionType,
+    stop_reason: stop_reason::StopReason,
+    details: Option<String>,
+) -> Result<()> {
+    let record = FailureRecord {
+        mission_type: mission_type.name().to_string(),
+        target: mission_type.target_label(),
+        stop_reason: stop_reason.to_string(),
+        details,
+        timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+    let path = last_failure_path(spec_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&record)?;
+    fs::write(path, json)?;
+    Ok(())
+}
+
+fn clear_failure_record(spec_root: &PathBuf) {
+    let path = last_failure_path(spec_root);
+    let _ = fs::remove_file(path);
+}
+
 fn fingerprint_packets(status: &str, review: &str, gate: &str) -> String {
     let mut data = String::new();
     data.push_str(status);
@@ -2197,31 +2403,24 @@ fn has_progress(
                 || gate_improved
         }
         crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } => {
-            // For AddOrClarifyScenario, progress means:
-            // 1. Spec issues for the target feature decreased, OR
-            // 2. Overall spec issues decreased, OR
-            // 3. Gate improved, OR
-            // 4. Binding issues increased (expected: new scenarios need bindings) AND
-            //    spec issues didn't increase catastrophically
-            let target_spec_improved = {
-                let pre_count = pre.spec_issues.iter()
-                    .filter(|i| i.feature_path.contains(feature_path))
-                    .count();
-                let post_count = post.spec_issues.iter()
-                    .filter(|i| i.feature_path.contains(feature_path))
-                    .count();
-                post_count < pre_count
-            };
-            
-            // Expected SDD flow: adding scenarios creates binding work
-            // If bindings increased but spec issues stayed flat or decreased for target, that's progress
-            let expected_flow_progress = binding_delta > 0 && spec_delta <= 2;
-            
-            target_spec_improved
-                || post.spec_issues.len() < pre.spec_issues.len()
-                || post.structure_issues.len() < pre.structure_issues.len()
-                || gate_improved
-                || expected_flow_progress
+            // For AddOrClarifyScenario, progress means new scenarios were added to the target feature.
+            let pre_count = pre.scenario_count_for_feature(feature_path);
+            let post_count = post.scenario_count_for_feature(feature_path);
+            let scenarios_added = matches!((pre_count, post_count), (Some(pre), Some(post)) if post > pre);
+            let counts_known = pre_count.is_some() && post_count.is_some();
+
+            if scenarios_added {
+                true
+            } else if !counts_known {
+                // If counts are unavailable (e.g., feature file missing), fall back to expected flow.
+                let expected_flow_progress = binding_delta > 0;
+                expected_flow_progress || gate_improved || adjusted_progress
+            } else {
+                false
+            }
+        }
+        crate::mission_type::MissionType::AssessSpecCoverage => {
+            pre.coverage_assessment.is_none() && post.coverage_assessment.is_some()
         }
         crate::mission_type::MissionType::StrengthenThenAssertions { .. }
         | crate::mission_type::MissionType::RefactorBindingsForClarity { .. }
@@ -2245,6 +2444,26 @@ fn count_missing_bindings(state: &crate::repo_state::RepoState, scenario_key: Op
             (None, _) => true,
         })
         .count()
+}
+
+fn resolve_feature_path(spec_root: &PathBuf, feature_path: &str) -> PathBuf {
+    let path = PathBuf::from(feature_path);
+    if path.is_absolute() {
+        path
+    } else {
+        spec_root.join(feature_path)
+    }
+}
+
+fn read_feature_snapshot(spec_root: &PathBuf, feature_path: &str) -> Option<String> {
+    let path = resolve_feature_path(spec_root, feature_path);
+    fs::read_to_string(path).ok()
+}
+
+fn restore_feature_snapshot(spec_root: &PathBuf, feature_path: &str, snapshot: &str) -> Result<()> {
+    let path = resolve_feature_path(spec_root, feature_path);
+    fs::write(path, snapshot)?;
+    Ok(())
 }
 
 fn count_failures(state: &crate::repo_state::RepoState, scenario_key: &str) -> usize {

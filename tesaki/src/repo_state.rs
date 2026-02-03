@@ -6,6 +6,10 @@
 //!
 //! Tesaki never relies on "chat memory" to decide what's next — it recomputes.
 
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 use crate::issue_classifier::{
@@ -351,6 +355,25 @@ pub struct RepoState {
     pub global_blockers: Vec<Blocker>,
 
     // -------------------------------------------------------------------------
+    // Feature stats (from feature files)
+    // -------------------------------------------------------------------------
+    /// Total scenario counts per feature (including non-executable scenarios).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub scenarios_per_feature: HashMap<String, usize>,
+    /// Scenario counts per rule (keyed by "feature_path::rule_name").
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub scenarios_per_rule: HashMap<String, usize>,
+    /// Rule counts per feature (from feature files).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub rules_per_feature: HashMap<String, usize>,
+    /// Coverage ambiguity indicators (rules with 1 or >4 executable scenarios).
+    #[serde(default, skip_serializing_if = "CoverageAmbiguity::is_empty")]
+    pub coverage_ambiguity: CoverageAmbiguity,
+    /// Latest LLM coverage assessment, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage_assessment: Option<CoverageAssessment>,
+
+    // -------------------------------------------------------------------------
     // Candidate tasks (derived)
     // -------------------------------------------------------------------------
     /// Candidate tasks derived from issues, sorted by priority.
@@ -397,7 +420,7 @@ impl RepoState {
             })
             .collect::<Vec<_>>();
 
-        let spec_issues = classify_spec_issues(review);
+        let mut spec_issues = classify_spec_issues(review);
         let structure_issues = classify_structure_issues(status, review);
         let binding_issues = classify_binding_issues(review, status);
         let sut_issues = classify_sut_issues(status);
@@ -409,6 +432,26 @@ impl RepoState {
             &binding_issues,
             &sut_issues,
         );
+
+        let scenario_counts = collect_scenario_counts(review);
+        let coverage_ambiguity = compute_coverage_ambiguity(review);
+        let coverage_assessment = load_coverage_assessment(&review.spec_root);
+        if let Some(assessment) = &coverage_assessment {
+            let verdict = assessment.verdict.trim().to_ascii_uppercase();
+            if verdict == "ADEQUATE" {
+                spec_issues.retain(|issue| issue.kind != SpecIssueKind::Ambiguous);
+            } else if verdict == "INADEQUATE" {
+                for issue in spec_issues.iter_mut() {
+                    if issue.kind == SpecIssueKind::Ambiguous {
+                        issue.kind = SpecIssueKind::MissingCoverage;
+                        issue.description = format!(
+                            "Coverage judge: INADEQUATE. {}",
+                            issue.description
+                        );
+                    }
+                }
+            }
+        }
 
         let current_identity = Some(Identity {
             hash_contract_version: status.identity.current.hash_contract_version.clone(),
@@ -434,6 +477,11 @@ impl RepoState {
             binding_issues,
             sut_issues,
             global_blockers,
+            scenarios_per_feature: scenario_counts.scenarios_per_feature,
+            scenarios_per_rule: scenario_counts.scenarios_per_rule,
+            rules_per_feature: scenario_counts.rules_per_feature,
+            coverage_ambiguity,
+            coverage_assessment,
             candidate_tasks,
             current_identity,
             baseline_identity,
@@ -502,6 +550,187 @@ impl RepoState {
             finalize: self.total_issue_count() == 0,
         }
     }
+
+    /// Lookup total scenario count for a feature, if available.
+    pub fn scenario_count_for_feature(&self, feature_path: &str) -> Option<usize> {
+        self.scenarios_per_feature.get(feature_path).copied()
+    }
+
+    /// Lookup scenario count for a specific rule in a feature, if available.
+    pub fn scenario_count_for_rule(&self, feature_path: &str, rule_name: &str) -> Option<usize> {
+        self.scenarios_per_rule.get(&rule_key(feature_path, rule_name)).copied()
+    }
+
+    /// Lookup rule count for a feature, if available.
+    pub fn rule_count_for_feature(&self, feature_path: &str) -> Option<usize> {
+        self.rules_per_feature.get(feature_path).copied()
+    }
+
+    pub fn coverage_is_ambiguous(&self) -> bool {
+        !self.coverage_ambiguity.is_empty()
+    }
+}
+
+#[derive(Debug, Default)]
+struct ScenarioCountSummary {
+    scenarios_per_feature: HashMap<String, usize>,
+    scenarios_per_rule: HashMap<String, usize>,
+    rules_per_feature: HashMap<String, usize>,
+}
+
+#[derive(Debug, Default)]
+struct FeatureScenarioCounts {
+    rule_count: usize,
+    scenario_total: usize,
+    scenarios_per_rule: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleCoverageInfo {
+    pub feature_path: String,
+    pub rule_name: String,
+    pub executable_scenarios: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CoverageAmbiguity {
+    pub rules_with_one_scenario: Vec<RuleCoverageInfo>,
+    pub rules_with_many_scenarios: Vec<RuleCoverageInfo>,
+}
+
+impl CoverageAmbiguity {
+    fn is_empty(&self) -> bool {
+        self.rules_with_one_scenario.is_empty() && self.rules_with_many_scenarios.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoverageAssessment {
+    pub verdict: String,
+    pub score: f32,
+    #[serde(default)]
+    pub gaps: Vec<String>,
+    #[serde(default)]
+    pub judges: Vec<CoverageJudgeScore>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoverageJudgeScore {
+    pub judge_id: String,
+    pub score: f32,
+    pub verdict: String,
+}
+
+fn collect_scenario_counts(review: &ReviewPacket) -> ScenarioCountSummary {
+    let mut summary = ScenarioCountSummary::default();
+
+    for feature in &review.features {
+        let feature_path = resolve_feature_path(&review.spec_root, &feature.feature_path);
+        let Some(counts) = parse_feature_scenario_counts(&feature_path) else {
+            continue;
+        };
+
+        summary
+            .scenarios_per_feature
+            .insert(feature.feature_path.clone(), counts.scenario_total);
+        summary
+            .rules_per_feature
+            .insert(feature.feature_path.clone(), counts.rule_count);
+
+        for (rule_name, count) in counts.scenarios_per_rule {
+            summary
+                .scenarios_per_rule
+                .insert(rule_key(&feature.feature_path, &rule_name), count);
+        }
+    }
+
+    summary
+}
+
+fn resolve_feature_path(spec_root: &str, feature_path: &str) -> PathBuf {
+    let path = PathBuf::from(feature_path);
+    if path.is_absolute() {
+        return path;
+    }
+    Path::new(spec_root).join(feature_path)
+}
+
+fn parse_feature_scenario_counts(path: &Path) -> Option<FeatureScenarioCounts> {
+    if !path.is_file() {
+        return None;
+    }
+    let content = fs::read_to_string(path).ok()?;
+    let mut counts = FeatureScenarioCounts::default();
+    let mut current_rule: Option<String> = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if let Some(rule_name) = trimmed.strip_prefix("Rule:") {
+            let rule_name = rule_name.trim();
+            counts.rule_count += 1;
+            current_rule = Some(rule_name.to_string());
+            counts
+                .scenarios_per_rule
+                .entry(rule_name.to_string())
+                .or_insert(0);
+            continue;
+        }
+
+        if trimmed.starts_with("Scenario:") || trimmed.starts_with("Scenario Outline:") {
+            counts.scenario_total += 1;
+            if let Some(rule_name) = current_rule.as_ref() {
+                let entry = counts
+                    .scenarios_per_rule
+                    .entry(rule_name.clone())
+                    .or_insert(0);
+                *entry += 1;
+            }
+        }
+    }
+
+    Some(counts)
+}
+
+fn compute_coverage_ambiguity(review: &ReviewPacket) -> CoverageAmbiguity {
+    let mut ambiguity = CoverageAmbiguity::default();
+
+    for feature in &review.features {
+        for rule in &feature.rules {
+            let count = rule.executable_scenarios.len();
+            if count == 1 {
+                ambiguity.rules_with_one_scenario.push(RuleCoverageInfo {
+                    feature_path: feature.feature_path.clone(),
+                    rule_name: rule.rule_name.clone(),
+                    executable_scenarios: count,
+                });
+            } else if count > 4 {
+                ambiguity.rules_with_many_scenarios.push(RuleCoverageInfo {
+                    feature_path: feature.feature_path.clone(),
+                    rule_name: rule.rule_name.clone(),
+                    executable_scenarios: count,
+                });
+            }
+        }
+    }
+
+    ambiguity
+}
+
+fn load_coverage_assessment(spec_root: &str) -> Option<CoverageAssessment> {
+    let path = Path::new(spec_root).join(".tesaki/coverage_assessment.json");
+    if !path.is_file() {
+        return None;
+    }
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn rule_key(feature_path: &str, rule_name: &str) -> String {
+    format!("{}::{}", feature_path, rule_name)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -642,6 +871,8 @@ fn derive_candidate_tasks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_gate_status_default() {
@@ -995,6 +1226,235 @@ mod tests {
         let state = RepoState::compute(&status_stub(), &review_stub(), &gate_stub(), None).unwrap();
         let identity = state.current_identity.unwrap();
         assert_eq!(identity.hash_contract_version, "namako-v1-json+blake3-256");
+    }
+
+    #[test]
+    fn test_compute_scenario_counts_from_features() {
+        let temp = tempdir().unwrap();
+        let spec_root = temp.path();
+        let features_dir = spec_root.join("features");
+        fs::create_dir_all(&features_dir).unwrap();
+
+        let feature_path = features_dir.join("a.feature");
+        fs::write(
+            &feature_path,
+            r#"
+Feature: Example
+
+  @Rule(01)
+  Rule: First rule
+
+    @Scenario(01)
+    Scenario: First scenario
+      Given a precondition
+      When an action happens
+      Then an outcome occurs
+
+  @Rule(02)
+  Rule: Second rule
+
+    @Scenario(01)
+    Scenario: Another scenario
+      Given a precondition
+      When an action happens
+      Then an outcome occurs
+
+    @Scenario(02)
+    Scenario: Third scenario
+      Given a precondition
+      When an action happens
+      Then an outcome occurs
+"#,
+        )
+        .unwrap();
+
+        let review = ReviewPacket {
+            version: 1,
+            spec_root: spec_root.to_string_lossy().to_string(),
+            identity_current: crate::packet_parser::IdentityFields {
+                hash_contract_version: "namako-v1-json+blake3-256".to_string(),
+                feature_fingerprint_hash: "a".to_string(),
+                step_registry_hash: "b".to_string(),
+                resolved_plan_hash: "c".to_string(),
+            },
+            features: vec![crate::packet_parser::FeatureReview {
+                feature_path: "features/a.feature".to_string(),
+                feature_name: "Example".to_string(),
+                rules: vec![
+                    crate::packet_parser::RuleReview {
+                        rule_name: "First rule".to_string(),
+                        source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 10 },
+                        executable_scenarios: vec![],
+                        deferred_items: vec![],
+                    },
+                    crate::packet_parser::RuleReview {
+                        rule_name: "Second rule".to_string(),
+                        source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 10 },
+                        executable_scenarios: vec![],
+                        deferred_items: vec![],
+                    },
+                ],
+            }],
+            coverage_summary: crate::packet_parser::CoverageSummary {
+                rules_total: 2,
+                rules_with_zero_executable: 2,
+                executable_scenarios_total: 0,
+                deferred_items_total: 0,
+            },
+            deferred_items: vec![],
+            promotion_candidates: vec![],
+            missing_bindings_for_top_candidates: vec![],
+            harness_gaps: vec![],
+            suggested_binding_bundle: None,
+        };
+
+        let status = StatusPacket {
+            version: 1,
+            spec_root: spec_root.to_string_lossy().to_string(),
+            recommended_next_action: "DONE".to_string(),
+            lint_status: PacketStatusValue::Pass,
+            run_status: PacketStatusValue::Pass,
+            verify_status: PacketStatusValue::Pass,
+            drift: None,
+            last_run_failures: vec![],
+            identity: crate::packet_parser::IdentitySection {
+                current: review.identity_current.clone(),
+                baseline: None,
+            },
+            metadata: None,
+            gates: None,
+        };
+
+        let state = RepoState::compute(&status, &review, &gate_stub(), None).unwrap();
+        assert_eq!(state.scenario_count_for_feature("features/a.feature"), Some(3));
+        assert_eq!(state.rule_count_for_feature("features/a.feature"), Some(2));
+
+        let first_rule_key = super::rule_key("features/a.feature", "First rule");
+        let second_rule_key = super::rule_key("features/a.feature", "Second rule");
+        assert_eq!(state.scenarios_per_rule.get(&first_rule_key), Some(&1));
+        assert_eq!(state.scenarios_per_rule.get(&second_rule_key), Some(&2));
+    }
+
+    #[test]
+    fn test_rule_count_increases_across_versions() {
+        let temp = tempdir().unwrap();
+        let spec_root = temp.path();
+        let features_dir = spec_root.join("features");
+        fs::create_dir_all(&features_dir).unwrap();
+
+        let feature_path = features_dir.join("a.feature");
+        fs::write(
+            &feature_path,
+            r#"
+Feature: Example
+
+  @Rule(01)
+  Rule: First rule
+
+    @Scenario(01)
+    Scenario: First scenario
+      Given a precondition
+      When an action happens
+      Then an outcome occurs
+"#,
+        )
+        .unwrap();
+
+        let review = ReviewPacket {
+            version: 1,
+            spec_root: spec_root.to_string_lossy().to_string(),
+            identity_current: crate::packet_parser::IdentityFields {
+                hash_contract_version: "namako-v1-json+blake3-256".to_string(),
+                feature_fingerprint_hash: "a".to_string(),
+                step_registry_hash: "b".to_string(),
+                resolved_plan_hash: "c".to_string(),
+            },
+            features: vec![crate::packet_parser::FeatureReview {
+                feature_path: "features/a.feature".to_string(),
+                feature_name: "Example".to_string(),
+                rules: vec![crate::packet_parser::RuleReview {
+                    rule_name: "First rule".to_string(),
+                    source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 10 },
+                    executable_scenarios: vec![],
+                    deferred_items: vec![],
+                }],
+            }],
+            coverage_summary: crate::packet_parser::CoverageSummary {
+                rules_total: 1,
+                rules_with_zero_executable: 1,
+                executable_scenarios_total: 0,
+                deferred_items_total: 0,
+            },
+            deferred_items: vec![],
+            promotion_candidates: vec![],
+            missing_bindings_for_top_candidates: vec![],
+            harness_gaps: vec![],
+            suggested_binding_bundle: None,
+        };
+
+        let status = StatusPacket {
+            version: 1,
+            spec_root: spec_root.to_string_lossy().to_string(),
+            recommended_next_action: "DONE".to_string(),
+            lint_status: PacketStatusValue::Pass,
+            run_status: PacketStatusValue::Pass,
+            verify_status: PacketStatusValue::Pass,
+            drift: None,
+            last_run_failures: vec![],
+            identity: crate::packet_parser::IdentitySection {
+                current: review.identity_current.clone(),
+                baseline: None,
+            },
+            metadata: None,
+            gates: None,
+        };
+
+        let state_before = RepoState::compute(&status, &review, &gate_stub(), None).unwrap();
+        assert_eq!(state_before.rule_count_for_feature("features/a.feature"), Some(1));
+
+        fs::write(
+            &feature_path,
+            r#"
+Feature: Example
+
+  @Rule(01)
+  Rule: First rule
+
+    @Scenario(01)
+    Scenario: First scenario
+      Given a precondition
+      When an action happens
+      Then an outcome occurs
+
+  @Rule(02)
+  Rule: Second rule
+
+    @Scenario(01)
+    Scenario: Another scenario
+      Given a precondition
+      When an action happens
+      Then an outcome occurs
+"#,
+        )
+        .unwrap();
+
+        let state_after = RepoState::compute(&status, &review, &gate_stub(), None).unwrap();
+        assert_eq!(state_after.rule_count_for_feature("features/a.feature"), Some(2));
+    }
+
+    #[test]
+    fn test_coverage_ambiguity_detects_one_scenario() {
+        let mut review = review_stub();
+        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
+            rule.executable_scenarios.push(crate::packet_parser::ScenarioReview {
+                name: "Scenario A".to_string(),
+                source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 5 },
+                steps: vec![],
+            });
+        }
+
+        let state = RepoState::compute(&status_stub(), &review, &gate_stub(), None).unwrap();
+        assert_eq!(state.coverage_ambiguity.rules_with_one_scenario.len(), 1);
     }
 
     #[test]

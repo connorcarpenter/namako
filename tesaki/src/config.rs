@@ -12,9 +12,10 @@
 //! adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
 //!
 //! # Optional
-//! runner = "mock"           # mock, cmd, claude, or codex
+//! agent = "mock"            # mock, cmd, claude, codex, or copilot (applies to runner+planner)
+//! runner = "mock"           # override runner only
 //! runner_cmd = "..."        # only used when runner = "cmd"
-//! planner = "mock"          # mock, codex, or claude
+//! planner = "mock"          # override planner only
 //! planner_cmd = "..."       # optional override for codex/claude planner command
 //! max_retries = 2
 //! max_cert_updates = 3
@@ -50,9 +51,13 @@ pub struct Config {
     #[serde(default)]
     pub namako_cli: Option<String>,
 
-    /// Runner backend to use (mock, cmd, claude, codex)
+    /// Runner backend to use (mock, cmd, claude, codex, copilot)
     #[serde(default)]
     pub runner: Option<String>,
+
+    /// Agent backend alias for both runner and planner (mock, cmd, claude, codex, copilot)
+    #[serde(default)]
+    pub agent: Option<String>,
 
     /// Command template for cmd runner (use {mission_dir} placeholder)
     #[serde(default)]
@@ -62,11 +67,7 @@ pub struct Config {
     #[serde(default)]
     pub model: Option<String>,
 
-    /// Stream runner output to terminal in real-time (default: false)
-    #[serde(default)]
-    pub stream_output: Option<bool>,
-
-    /// Planner backend for interactive REPL (mock, codex, claude)
+    /// Planner backend for interactive REPL (mock, codex, claude, copilot)
     #[serde(default)]
     pub planner: Option<String>,
 
@@ -170,9 +171,6 @@ pub struct ResolvedConfig {
 
     /// Model to use for the AI runner
     pub model: Option<String>,
-
-    /// Stream runner output to terminal in real-time
-    pub stream_output: bool,
 
     /// Planner backend
     pub planner: Option<String>,
@@ -287,17 +285,20 @@ fn resolve_config(config: Config, config_root: &Path, config_path: &Path) -> Res
     // Handle --manifest-path arguments specially
     let adapter_cmd = resolve_adapter_cmd(&config.adapter_cmd, config_root)?;
 
+    let agent = config.agent.clone();
+    let runner = config.runner.or_else(|| agent.clone());
+    let planner = config.planner.or(agent);
+
     Ok(ResolvedConfig {
         config_root: config_root.to_path_buf(),
         config_path: config_path.to_path_buf(),
         specs_dir,
         adapter_cmd,
         namako_cli: config.namako_cli,
-        runner: config.runner,
+        runner,
         runner_cmd: config.runner_cmd,
         model: config.model,
-        stream_output: config.stream_output.unwrap_or(false),
-        planner: config.planner,
+        planner,
         planner_cmd: config.planner_cmd,
         max_retries: config.max_retries,
         max_cert_updates: config.max_cert_updates,
@@ -357,33 +358,14 @@ specs_dir = "test/specs"
 # Required: Adapter command to run the test adapter
 adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
 
-# Optional: Runner backend (mock, cmd, claude, or codex)
-runner = "mock"
-
-# Optional: Command for cmd runner (use {mission_dir} placeholder)
-# runner_cmd = "my-agent --mission {mission_dir}"
-
-# Optional: Planner backend for REPL (mock, codex, or claude)
-planner = "mock"
-
-# Optional: Planner command override (use {input_file} placeholder)
-# planner_cmd = "my-planner --input {input_file}"
+# Optional: Primary agent (applies to both runner + planner)
+# agent = "copilot"
 
 # Optional: Budget limits
 max_retries = 2
 max_cert_updates = 3
 max_runtime_seconds = 600
 max_files_changed = 10
-
-# Optional: Surface overrides
-[surfaces.spec]
-patterns = ["test/specs/**/*.feature"]
-
-[surfaces.tests]
-patterns = ["test/tests/**", "test/harness/**"]
-
-[surfaces.sut]
-patterns = ["src/**", "client/**", "server/**"]
 "#
 }
 
@@ -561,6 +543,29 @@ patterns = ["src/**"]
                 assert_eq!(config.max_runtime_seconds, Some(1200));
                 assert_eq!(config.max_files_changed, Some(20));
                 assert!(config.surfaces.is_some());
+            }
+            ConfigDiscoveryResult::NotFound { .. } => panic!("Expected to find config"),
+        }
+    }
+
+    #[test]
+    fn test_agent_alias_sets_runner_and_planner() {
+        let temp = TempDir::new().unwrap();
+        let tesaki_dir = temp.path().join(".tesaki");
+        fs::create_dir_all(&tesaki_dir).unwrap();
+
+        let config_content = r#"
+specs_dir = "specs"
+adapter_cmd = "test"
+agent = "copilot"
+"#;
+        fs::write(tesaki_dir.join("config.toml"), config_content).unwrap();
+
+        let result = discover_config(temp.path()).unwrap();
+        match result {
+            ConfigDiscoveryResult::Found(config) => {
+                assert_eq!(config.runner, Some("copilot".to_string()));
+                assert_eq!(config.planner, Some("copilot".to_string()));
             }
             ConfigDiscoveryResult::NotFound { .. } => panic!("Expected to find config"),
         }

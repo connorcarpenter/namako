@@ -17,7 +17,8 @@ Required context:
 1. **NO COMMITS** — Do not run `git commit`. Tesaki handles all commits.
 2. **NO ORCHESTRATION** — Do not call `tesaki`. You are the runner, not the orchestrator.
 3. **NO GIT OPERATIONS** — Do not run `git push`, `git reset`, or other destructive git commands.
-4. **WRITE ATTEMPT REPORT** — Write a summary of your work to `RUNNER_OUTPUT/attempt_report.md`.
+4. **NO BUILD/TEST COMMANDS** — Do not run `cargo`, `make`, or other build/test commands. Tesaki validates.
+5. **WRITE ATTEMPT REPORT** — Write a summary of your work to `RUNNER_OUTPUT/attempt_report.md`.
 
 ## Allowed Edit Surfaces
 

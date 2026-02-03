@@ -10,9 +10,7 @@ use crate::chat_plan::{
     SurfaceLock as PlanSurfaceLock, SurfacePolicy as PlanSurfacePolicy,
 };
 use crate::chat_planner::{ChatPlanner, MockChatPlanner};
-use crate::claude_code_agent::ClaudeCodeAgent;
-use crate::codex_agent::CodexAgent;
-use crate::copilot_agent::CopilotAgent;
+use crate::agent_fallback::{planner_candidates, describe_planner_candidates, FallbackChatPlanner};
 use crate::config::{self, ConfigDiscoveryResult};
 use crate::mission_type::MissionType;
 use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
@@ -113,58 +111,38 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
     let planner_name = config.planner.as_deref().unwrap_or("mock");
     if config.planner.is_none() {
         println!(
-            "Planner not configured. Set `planner = \"mock\" | \"codex\" | \"claude\" | \"copilot\"` in .tesaki/config.toml."
+            "Planner not configured. Set `agent = \"claude\" | \"codex\" | \"copilot\"` or `planner = \"mock\" | \"codex\" | \"claude\" | \"copilot\"` in .tesaki/config.toml."
         );
     } else if planner_name == "mock" {
         println!(
-            "Planner is set to \"mock\". To enable interactive planning, set `planner = \"codex\" | \"claude\" | \"copilot\"` in .tesaki/config.toml."
+            "Planner is set to \"mock\". To enable interactive planning, set `agent = \"claude\" | \"codex\" | \"copilot\"` or `planner = \"codex\" | \"claude\" | \"copilot\"` in .tesaki/config.toml."
         );
     }
 
-    let planner: Box<dyn ChatPlanner> = match planner_name {
-        "mock" => Box::new(MockChatPlanner::new(ChatPlan {
-            say: "Planner not configured. Set planner in .tesaki/config.toml.".to_string(),
+    let planner_candidates = planner_candidates(
+        planner_name,
+        config.runner_cmd.clone(),
+        config.planner_cmd.clone(),
+    );
+    if planner_candidates.len() > 1 {
+        println!(
+            "Planner fallback chain: {}",
+            describe_planner_candidates(&planner_candidates)
+        );
+    }
+    let planner: Box<dyn ChatPlanner> = if planner_name == "mock" {
+        Box::new(MockChatPlanner::new(ChatPlan {
+            say: "Planner not configured. Set `agent` or `planner` in .tesaki/config.toml.".to_string(),
             run: vec![],
             mission_proposal: None,
             done: true,
-        })),
-        "codex" => {
-            if let Err(err) = CodexAgent::check_available() {
-                anyhow::bail!("Codex planner unavailable: {}", err);
-            }
-            Box::new(CodexAgent::new_with_timeout_and_stream(
-                config.runner_cmd.clone(),
-                config.planner_cmd.clone(),
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
-                true,
-            )?)
-        }
-        "claude" => {
-            if let Err(err) = ClaudeCodeAgent::check_available() {
-                anyhow::bail!("Claude planner unavailable: {}", err);
-            }
-            Box::new(ClaudeCodeAgent::new_with_timeout_and_stream(
-                config.runner_cmd.clone(),
-                config.planner_cmd.clone(),
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
-                true,
-            )?)
-        }
-        "copilot" => {
-            if let Err(err) = CopilotAgent::check_available() {
-                anyhow::bail!("Copilot planner unavailable: {}", err);
-            }
-            Box::new(CopilotAgent::new_with_timeout_and_stream(
-                config.runner_cmd.clone(),
-                config.planner_cmd.clone(),
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(DEFAULT_PLANNER_TIMEOUT_SECONDS)),
-                true,
-            )?)
-        }
-        other => anyhow::bail!("Unsupported planner backend: {}", other),
+        }))
+    } else {
+        Box::new(FallbackChatPlanner::new(
+            planner_candidates,
+            &spec_root,
+            DEFAULT_PLANNER_TIMEOUT_SECONDS,
+        )?)
     };
 
     let mut session = SessionState::default();
@@ -446,7 +424,6 @@ fn execute_proposed_mission(
         max_files_changed,
         max_retries,
         None,  // model - use default
-        false, // stream_output - don't stream in REPL context (planner is interactive)
         Some(stage_to_arg(stage)),
         None,
         constraint.surface_overrides,
@@ -492,6 +469,26 @@ fn stage_to_arg(stage: Stage) -> String {
         Stage::Finalize => "finalize",
     }
     .to_string()
+}
+
+fn resolve_feature_path(spec_root: &Path, feature_path: &str) -> PathBuf {
+    let path = PathBuf::from(feature_path);
+    if path.is_absolute() {
+        path
+    } else {
+        spec_root.join(feature_path)
+    }
+}
+
+fn read_feature_snapshot(spec_root: &Path, feature_path: &str) -> Option<String> {
+    let path = resolve_feature_path(spec_root, feature_path);
+    std::fs::read_to_string(path).ok()
+}
+
+fn restore_feature_snapshot(spec_root: &Path, feature_path: &str, snapshot: &str) -> Result<()> {
+    let path = resolve_feature_path(spec_root, feature_path);
+    std::fs::write(path, snapshot)?;
+    Ok(())
 }
 
 fn convert_surface_policy(input: &PlanSurfacePolicy) -> RepoSurfacePolicy {
@@ -611,6 +608,7 @@ fn run_autonomous_loop(
     let mut stall_count = 0;
     const MAX_STALLS: u32 = 3;
     let loop_start = Instant::now();
+    let mut chained_stage: Option<Stage> = None;
     
     // Simple consecutive failure tracking (per OPTIMIZATION_ANALYSIS.md)
     // If same mission type fails 2× in a row, skip it for this session
@@ -654,13 +652,16 @@ fn run_autonomous_loop(
         
         // Check if truly done (all gates pass AND no issues)
         if state.all_gates_pass() && !state.has_work() {
-            println!("🎉 All gates pass, no issues remaining. DONE!");
-            break;
+            let assessment_needed = state.coverage_is_ambiguous() && state.coverage_assessment.is_none();
+            if !assessment_needed {
+                println!("🎉 All gates pass, no issues remaining. DONE!");
+                break;
+            }
         }
         
         // Algorithmic mission selection (NO LLM)
         let constraint = StageConstraint {
-            stage: session.intent.stage,
+            stage: chained_stage.take().or(session.intent.stage),
             surface_overrides: None,
         };
         
@@ -673,6 +674,14 @@ fn run_autonomous_loop(
         };
         
         let (mission_type, stage, surface_policy) = selection;
+        let (before_scenario_count, before_rule_count, before_feature_snapshot) = match &mission_type {
+            MissionType::AddOrClarifyScenario { feature_path, .. } => (
+                state.scenario_count_for_feature(feature_path),
+                state.rule_count_for_feature(feature_path),
+                read_feature_snapshot(spec_root, feature_path),
+            ),
+            _ => (None, None, None),
+        };
         
         // Check if this mission type is skipped due to consecutive failures
         let type_name = mission_type.name().to_string();
@@ -711,7 +720,6 @@ fn run_autonomous_loop(
             max_files_changed,
             max_retries,
             None,  // model - use default
-            false, // stream_output
             Some(stage_to_arg(stage)),
             None,
             Some(surface_policy),
@@ -758,6 +766,19 @@ fn run_autonomous_loop(
         let status_packet = parse_status_json(&status_json)?;
         let review_packet = parse_review_json(&review_json)?;
         let after_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+        let after_scenario_count = match &mission_type {
+            MissionType::AddOrClarifyScenario { feature_path, .. } => {
+                after_state.scenario_count_for_feature(feature_path)
+            }
+            _ => None,
+        };
+        let after_rule_count = match &mission_type {
+            MissionType::AddOrClarifyScenario { feature_path, .. } => {
+                after_state.rule_count_for_feature(feature_path)
+            }
+            _ => None,
+        };
+        let assessment_added = state.coverage_assessment.is_none() && after_state.coverage_assessment.is_some();
         
         let after_spec = after_state.spec_issues.len();
         let after_binding = after_state.binding_issues.len();
@@ -770,6 +791,16 @@ fn run_autonomous_loop(
         let binding_delta = after_binding as i32 - before_binding as i32;
         let sut_delta = after_sut as i32 - before_sut as i32;
         let total_delta = after_total as i32 - before_total as i32;
+        let scenario_delta = match (before_scenario_count, after_scenario_count) {
+            (Some(before), Some(after)) => Some(after as i32 - before as i32),
+            _ => None,
+        };
+        let scenarios_added = scenario_delta.map(|delta| delta > 0).unwrap_or(false);
+        let rule_delta = match (before_rule_count, after_rule_count) {
+            (Some(before), Some(after)) => Some(after as i32 - before as i32),
+            _ => None,
+        };
+        let rules_increased = rule_delta.map(|delta| delta > 0).unwrap_or(false);
         
         // Calculate adjusted delta accounting for expected SDD flow
         // AddOrClarifyScenario: adding scenarios creates binding gaps (expected, not regression)
@@ -798,11 +829,16 @@ fn run_autonomous_loop(
         // Determine if we made progress - mission-type aware
         // Each mission type has a PRIMARY metric that MUST improve (or at least not regress)
         let (made_progress, violated_invariant) = match &mission_type {
-            MissionType::AddOrClarifyScenario { .. } | MissionType::RefineFeatureIntent { .. } => {
-                // Spec missions: spec_issues MUST NOT increase (would mean agent added rules)
-                // Binding increase is expected (new scenarios need bindings)
+            MissionType::AddOrClarifyScenario { .. } => {
+                // Spec missions: progress is measured by added scenarios in the target feature.
+                let progress = scenarios_added;
+                let violated = rules_increased;
+                (progress, violated)
+            }
+            MissionType::RefineFeatureIntent { .. } => {
+                // Spec missions: spec_issues should not increase.
                 let progress = spec_delta < 0;
-                let violated = spec_delta > 0;  // Agent added rules = invariant violation
+                let violated = spec_delta > 0;
                 (progress, violated)
             }
             MissionType::CreateMissingBindings { .. } => {
@@ -819,6 +855,10 @@ fn run_autonomous_loop(
                 let violated = sut_delta > 0;  // SUT issues increased = regression
                 (progress, violated)
             }
+            MissionType::AssessSpecCoverage => {
+                let progress = assessment_added;
+                (progress, false)
+            }
             _ => {
                 // Other missions: any improvement counts, no strict invariant
                 let progress = spec_delta < 0 || binding_delta < 0 || sut_delta < 0;
@@ -828,14 +868,19 @@ fn run_autonomous_loop(
         
         let gates_now_pass = after_state.all_gates_pass();
         
-        // Show mission-specific success message
-        let mission_success_msg = format_mission_success(&mission_type, before_binding, after_binding, before_sut, after_sut, before_spec, after_spec);
-        if let Some(msg) = mission_success_msg {
-            println!("{}", msg);
-        }
-        
         // Check for invariant violation first (stricter than general regression)
         if violated_invariant {
+            if let MissionType::AddOrClarifyScenario { feature_path, .. } = &mission_type {
+                if rules_increased {
+                    if let Some(snapshot) = before_feature_snapshot.as_ref() {
+                        if let Err(err) = restore_feature_snapshot(spec_root, feature_path, snapshot) {
+                            println!("⚠️  Failed to restore feature after rule-count violation: {}", err);
+                        } else {
+                            println!("↩️  Restored feature file after rule-count violation");
+                        }
+                    }
+                }
+            }
             println!("❌ Mission invariant violated: {} made its primary metric worse", type_name);
             consecutive_failures += 1;
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES && !skipped_types.contains(&type_name) {
@@ -846,12 +891,59 @@ fn run_autonomous_loop(
             last_mission_type = Some(type_name.clone());
             stall_count += 1;
         } else if gates_now_pass && !after_state.has_work() {
+            let assessment_needed = after_state.coverage_is_ambiguous() && after_state.coverage_assessment.is_none();
+            if assessment_needed {
+                println!("🧭 Coverage assessment pending - continuing");
+                stall_count = 0;
+                consecutive_failures = 0;
+                last_mission_type = Some(type_name.clone());
+                println!();
+                continue;
+            }
+            // Show mission-specific success message
+            if let Some(msg) = format_mission_success(
+                &mission_type,
+                before_binding,
+                after_binding,
+                before_sut,
+                after_sut,
+                before_spec,
+                after_spec,
+                scenario_delta,
+            ) {
+                println!("{}", msg);
+            }
             println!("🎉 All gates pass, no issues remaining. DONE!");
             // Clear skipped types on success (system recovered)
             skipped_types.clear();
             consecutive_failures = 0;
             break;
         } else if made_progress {
+            // Show mission-specific success message
+            if let Some(msg) = format_mission_success(
+                &mission_type,
+                before_binding,
+                after_binding,
+                before_sut,
+                after_sut,
+                before_spec,
+                after_spec,
+                scenario_delta,
+            ) {
+                println!("{}", msg);
+            }
+            if let MissionType::AssessSpecCoverage = &mission_type {
+                if let Some(assessment) = after_state.coverage_assessment.as_ref() {
+                    println!(
+                        "🧭 Coverage assessment: {} (score {:.1})",
+                        assessment.verdict,
+                        assessment.score
+                    );
+                    if !assessment.gaps.is_empty() {
+                        println!("   Gaps: {}", assessment.gaps.join("; "));
+                    }
+                }
+            }
             println!("✅ Progress made - continuing");
             stall_count = 0;
             // Clear consecutive failure counter on progress
@@ -860,6 +952,12 @@ fn run_autonomous_loop(
             if !skipped_types.is_empty() {
                 println!("   (Unblocking previously skipped mission types)");
                 skipped_types.clear();
+            }
+            if matches!(mission_type, MissionType::AddOrClarifyScenario { .. }) && scenarios_added {
+                if after_binding > 0 {
+                    chained_stage = Some(Stage::ImplementTests);
+                    println!("↪️  Chaining to CreateMissingBindings (binding issues now present)");
+                }
             }
             last_mission_type = Some(type_name.clone());
         } else if runner_succeeded && total_delta == 0 {
@@ -966,6 +1064,7 @@ fn format_mission_success(
     after_sut: usize,
     before_spec: usize,
     after_spec: usize,
+    scenario_delta: Option<i32>,
 ) -> Option<String> {
     use crate::mission_type::MissionType;
     
@@ -992,6 +1091,17 @@ fn format_mission_success(
             }
         }
         MissionType::AddOrClarifyScenario { .. } => {
+            if let Some(delta) = scenario_delta {
+                if delta > 0 {
+                    let cascade_msg = if after_binding > before_binding {
+                        format!(" → {} binding(s) now needed (expected cascade)", after_binding - before_binding)
+                    } else {
+                        String::new()
+                    };
+                    return Some(format!("📋 Added {} scenario(s){}", delta, cascade_msg));
+                }
+            }
+
             let specs_improved = before_spec.saturating_sub(after_spec);
             if specs_improved > 0 {
                 let cascade_msg = if after_binding > before_binding {

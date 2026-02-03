@@ -1,7 +1,7 @@
 //! Mission type selection logic for Tesaki v1.8.
 
 use crate::mission_type::{MissionType, MissionTypeCategory};
-use crate::repo_state::{BindingIssueKind, RepoState};
+use crate::repo_state::{BindingIssueKind, RepoState, SpecIssueKind};
 use crate::stage::{detect_stage, Stage, StageConstraint};
 use crate::surface_policy::SurfacePolicy;
 
@@ -29,6 +29,18 @@ pub fn select_mission_type(state: &RepoState) -> Option<MissionType> {
         });
     }
 
+    let has_missing = state
+        .spec_issues
+        .iter()
+        .any(|issue| issue.kind == SpecIssueKind::MissingCoverage);
+    let has_ambiguous = state
+        .spec_issues
+        .iter()
+        .any(|issue| issue.kind == SpecIssueKind::Ambiguous);
+    if has_ambiguous && !has_missing && state.coverage_assessment.is_none() {
+        return Some(MissionType::AssessSpecCoverage);
+    }
+
     if let Some(issue) = state.spec_issues.first() {
         return Some(MissionType::AddOrClarifyScenario {
             feature_path: issue.feature_path.clone(),
@@ -44,11 +56,14 @@ pub fn select_mission_type_for_stage(
     state: &RepoState,
     stage: Option<Stage>,
 ) -> Option<MissionType> {
-    let candidate = select_mission_type(state)?;
     let stage = stage?;
 
-    if stage.applicable_mission_types().contains(&candidate.category()) {
-        Some(candidate)
+    if let Some(candidate) = select_mission_type(state) {
+        if stage.applicable_mission_types().contains(&candidate.category()) {
+            Some(candidate)
+        } else {
+            select_alternative_for_stage(state, stage)
+        }
     } else {
         select_alternative_for_stage(state, stage)
     }
@@ -86,6 +101,18 @@ fn select_alternative_for_stage(state: &RepoState, stage: Stage) -> Option<Missi
     }
 
     if category.contains(&MissionTypeCategory::Spec) {
+        let has_missing = state
+            .spec_issues
+            .iter()
+            .any(|issue| issue.kind == SpecIssueKind::MissingCoverage);
+        let has_ambiguous = state
+            .spec_issues
+            .iter()
+            .any(|issue| issue.kind == SpecIssueKind::Ambiguous);
+        if has_ambiguous && !has_missing && state.coverage_assessment.is_none() {
+            return Some(MissionType::AssessSpecCoverage);
+        }
+
         if let Some(issue) = state.spec_issues.first() {
             return Some(MissionType::AddOrClarifyScenario {
                 feature_path: issue.feature_path.clone(),
@@ -95,6 +122,9 @@ fn select_alternative_for_stage(state: &RepoState, stage: Stage) -> Option<Missi
     }
 
     if category.contains(&MissionTypeCategory::Finalize) && !state.has_work() {
+        if state.coverage_is_ambiguous() && state.coverage_assessment.is_none() {
+            return Some(MissionType::AssessSpecCoverage);
+        }
         return Some(MissionType::SummarizeAndClose);
     }
 
@@ -107,9 +137,12 @@ pub fn select_with_constraints(
     constraint: &StageConstraint,
 ) -> Option<(MissionType, Stage, SurfacePolicy)> {
     let detected_stage = detect_stage(state);
-    let active_stage = constraint.stage.unwrap_or(detected_stage);
+    let mut active_stage = constraint.stage.unwrap_or(detected_stage);
 
     let mission_type = select_mission_type_for_stage(state, Some(active_stage))?;
+    if matches!(mission_type, MissionType::AssessSpecCoverage) {
+        active_stage = Stage::Finalize;
+    }
 
     let surface_policy = constraint
         .surface_overrides
@@ -122,7 +155,7 @@ pub fn select_with_constraints(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repo_state::{BindingIssue, BindingIssueKind, SpecIssue, SpecIssueKind};
+    use crate::repo_state::{BindingIssue, BindingIssueKind, CoverageAmbiguity, RuleCoverageInfo, SpecIssue, SpecIssueKind};
 
     #[test]
     fn selects_binding_issue_before_spec_issue() {
@@ -169,5 +202,48 @@ mod tests {
         let (mission, stage, _) = select_with_constraints(&state, &constraint).unwrap();
         assert_eq!(stage, Stage::RefineSpec);
         assert!(matches!(mission, MissionType::AddOrClarifyScenario { .. }));
+    }
+
+    #[test]
+    fn selects_assess_spec_coverage_for_ambiguous_only() {
+        let state = RepoState {
+            spec_issues: vec![SpecIssue {
+                kind: SpecIssueKind::Ambiguous,
+                feature_path: "features/a.feature".to_string(),
+                description: "Ambiguous coverage".to_string(),
+                rule_name: Some("Rule(01)".to_string()),
+            }],
+            ..Default::default()
+        };
+
+        let mission = select_mission_type(&state).unwrap();
+        assert!(matches!(mission, MissionType::AssessSpecCoverage));
+    }
+
+    #[test]
+    fn select_finalize_prefers_assess_spec_coverage_when_ambiguous() {
+        let state = RepoState {
+            lint_status: crate::repo_state::GateStatus::Pass,
+            run_status: crate::repo_state::GateStatus::Pass,
+            verify_status: crate::repo_state::GateStatus::Pass,
+            coverage_ambiguity: CoverageAmbiguity {
+                rules_with_one_scenario: vec![RuleCoverageInfo {
+                    feature_path: "features/a.feature".to_string(),
+                    rule_name: "Rule A".to_string(),
+                    executable_scenarios: 1,
+                }],
+                rules_with_many_scenarios: vec![],
+            },
+            ..Default::default()
+        };
+
+        let constraint = StageConstraint {
+            stage: Some(Stage::Finalize),
+            surface_overrides: None,
+        };
+
+        let (mission, stage, _) = select_with_constraints(&state, &constraint).unwrap();
+        assert_eq!(stage, Stage::Finalize);
+        assert!(matches!(mission, MissionType::AssessSpecCoverage));
     }
 }

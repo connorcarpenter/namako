@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use crate::mission_type::{MissionBrief, MissionType};
 use crate::prompts::{
     render_mission_md, render_policy_md, BudgetsContext, MissionContext, PolicyContext,
-    SurfaceDefinitionsContext, SurfacePolicyContext, TESAKI_VERSION,
+    SurfaceDefinitionsContext, SurfacePolicyContext, TESAKI_VERSION, PreviousFailureContext,
 };
 use crate::stage::Stage;
 use crate::surface_policy::{SurfaceDefinition, SurfacePolicy};
@@ -218,6 +218,7 @@ impl MissionBundle {
         surface_definitions: &SurfaceDefinitions,
         inputs: &MissionInputs,
         budgets: MissionBudgets,
+        previous_failure: Option<PreviousFailureContext>,
     ) -> Result<Self> {
         // Generate identity data for hash
         let identity_data = format!(
@@ -242,7 +243,16 @@ impl MissionBundle {
         fs::create_dir_all(&runner_output_dir)?;
 
         // Write MISSION.md
-        let mission_content = Self::generate_mission_content(brief, mission_type, stage, surface_policy, surface_definitions, &id, &budgets);
+        let mission_content = Self::generate_mission_content(
+            brief,
+            mission_type,
+            stage,
+            surface_policy,
+            surface_definitions,
+            &id,
+            &budgets,
+            previous_failure,
+        );
         fs::write(mission_dir.join("MISSION.md"), &mission_content)?;
 
         // Write POLICY.md
@@ -321,6 +331,7 @@ impl MissionBundle {
         surface_definitions: &SurfaceDefinitions,
         id: &MissionId,
         budgets: &MissionBudgets,
+        previous_failure: Option<PreviousFailureContext>,
     ) -> String {
         let ctx = MissionContext {
             mission_id: id.as_str().to_string(),
@@ -334,6 +345,7 @@ impl MissionBundle {
             surface_definitions: SurfaceDefinitionsContext::from(surface_definitions),
             budgets: BudgetsContext::from(budgets),
             version: TESAKI_VERSION.to_string(),
+            previous_failure,
         };
 
         render_mission_md(&ctx).unwrap_or_else(|e| {
@@ -445,6 +457,7 @@ mod tests {
             &surface_definitions,
             &inputs,
             MissionBudgets::default(),
+            None,
         ).unwrap();
 
         // Verify directory structure
@@ -500,6 +513,7 @@ mod tests {
             &surface_definitions,
             &inputs,
             MissionBudgets::default(),
+            None,
         ).unwrap();
 
         let original_path = bundle.path.clone();
@@ -553,6 +567,7 @@ mod tests {
             &surface_definitions,
             &inputs,
             MissionBudgets::default(),
+            None,
         ).unwrap();
 
         let gate_result = r#"{"lint": {"status": "pass"}, "run": {"status": "pass"}, "verify": {"status": "pass"}}"#;

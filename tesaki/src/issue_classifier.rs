@@ -27,18 +27,98 @@ pub fn classify_spec_issues(review: &ReviewPacket) -> Vec<SpecIssue> {
         }
 
         for rule in &feature.rules {
-            if rule.executable_scenarios.is_empty() {
+            let executable_count = rule.executable_scenarios.len();
+            if executable_count < 2 {
+                let mut description = format!(
+                    "Rule '{}' has {} executable scenario(s); minimum is 2.",
+                    rule.rule_name, executable_count
+                );
+                if executable_count == 0 && !rule.deferred_items.is_empty() {
+                    description = format!(
+                        "Rule '{}' has 0 executable scenarios but {} deferred. Promote a scenario by removing @Deferred to make it executable.",
+                        rule.rule_name,
+                        rule.deferred_items.len()
+                    );
+                }
                 issues.push(SpecIssue {
                     kind: SpecIssueKind::MissingCoverage,
                     feature_path: feature.feature_path.clone(),
-                    description: format!("Rule '{}' has zero executable scenarios.", rule.rule_name),
+                    description,
                     rule_name: Some(rule.rule_name.clone()),
                 });
+            } else {
+                let unique_then_sets = unique_then_sets_excluding_safety(rule);
+                let unique_condition_sets = unique_condition_sets(rule);
+                if unique_then_sets < 2 && unique_condition_sets < 2 {
+                    issues.push(SpecIssue {
+                        kind: SpecIssueKind::Ambiguous,
+                        feature_path: feature.feature_path.clone(),
+                        description: format!(
+                            "Rule '{}' has {} scenarios but lacks distinct outcomes or input conditions. Coverage may be sufficient or may need a new scenario with a different outcome (beyond 'no panic occurs') or distinct Given/When conditions.",
+                            rule.rule_name, executable_count
+                        ),
+                        rule_name: Some(rule.rule_name.clone()),
+                    });
+                }
             }
         }
     }
 
     issues
+}
+
+fn unique_then_sets_excluding_safety(rule: &crate::packet_parser::RuleReview) -> usize {
+    use std::collections::HashSet;
+
+    let mut unique_sets: HashSet<String> = HashSet::new();
+    for scenario in &rule.executable_scenarios {
+        let mut thens: Vec<String> = extract_steps_by_kind(&scenario.steps, "then")
+            .into_iter()
+            .filter(|text| text.as_str() != "no panic occurs")
+            .collect();
+
+        thens.sort();
+        thens.dedup();
+        unique_sets.insert(thens.join(" | "));
+    }
+
+    unique_sets.len()
+}
+
+fn unique_condition_sets(rule: &crate::packet_parser::RuleReview) -> usize {
+    use std::collections::HashSet;
+
+    let mut unique_sets: HashSet<String> = HashSet::new();
+    for scenario in &rule.executable_scenarios {
+        let mut conditions = Vec::new();
+        conditions.extend(extract_steps_by_kind(&scenario.steps, "given"));
+        conditions.extend(extract_steps_by_kind(&scenario.steps, "when"));
+        conditions.sort();
+        conditions.dedup();
+        unique_sets.insert(conditions.join(" | "));
+    }
+
+    unique_sets.len()
+}
+
+fn extract_steps_by_kind(steps: &[crate::packet_parser::StepInfo], kind: &str) -> Vec<String> {
+    let mut current_kind: Option<String> = None;
+    let mut collected = Vec::new();
+    for step in steps {
+        let step_kind = step.kind.trim().to_ascii_lowercase();
+        let normalized = if step_kind == "and" || step_kind == "but" {
+            current_kind.clone().unwrap_or_default()
+        } else {
+            step_kind.clone()
+        };
+        if !step_kind.is_empty() && step_kind != "and" && step_kind != "but" {
+            current_kind = Some(normalized.clone());
+        }
+        if normalized == kind {
+            collected.push(step.text.trim().to_ascii_lowercase());
+        }
+    }
+    collected
 }
 
 /// Classify structure issues from status and review packets.
@@ -109,9 +189,15 @@ fn parse_missing_steps_from_summary(summary: &str) -> Vec<BindingIssue> {
         let feature_path = cap.get(3).map(|m| m.as_str().to_string());
         let line = cap.get(4).and_then(|m| m.as_str().parse::<u32>().ok());
         
+        let scenario_key = match (&feature_path, line) {
+            (Some(path), Some(line)) => Some(format!("{}:{}", path, line)),
+            (Some(path), None) => Some(path.clone()),
+            _ => None,
+        };
+
         issues.push(BindingIssue {
             kind: BindingIssueKind::MissingBinding,
-            scenario_key: None,
+            scenario_key,
             step_text: step_text.clone(),
             description: format!(
                 "Missing {} binding for \"{}\" at {}:{}",
@@ -162,7 +248,7 @@ pub fn classify_blockers(review: &ReviewPacket) -> Vec<Blocker> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packet_parser::{CoverageSummary, FeatureReview, IdentityFields, MissingBindingInfo, ReviewPacket, RuleReview, SourceSpan, StatusPacket, StatusValue};
+    use crate::packet_parser::{CoverageSummary, FeatureReview, IdentityFields, MissingBindingInfo, ReviewPacket, RuleReview, ScenarioReview, SourceSpan, StatusPacket, StatusValue, StepInfo};
 
     fn review_stub() -> ReviewPacket {
         ReviewPacket {
@@ -204,6 +290,104 @@ mod tests {
         let issues = classify_spec_issues(&review);
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].kind, SpecIssueKind::MissingCoverage);
+    }
+
+    #[test]
+    fn classify_spec_issues_detects_insufficient_coverage() {
+        let mut review = review_stub();
+        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
+            rule.executable_scenarios = vec![ScenarioReview {
+                name: "Scenario A".to_string(),
+                source_span: SourceSpan { start_line: 1, end_line: 5 },
+                steps: vec![],
+            }];
+        }
+
+        let issues = classify_spec_issues(&review);
+        assert!(issues.iter().any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
+    }
+
+    #[test]
+    fn classify_spec_issues_detects_duplicate_then_sets() {
+        let mut review = review_stub();
+        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
+            rule.executable_scenarios = vec![
+                ScenarioReview {
+                    name: "Scenario A".to_string(),
+                    source_span: SourceSpan { start_line: 1, end_line: 5 },
+                    steps: vec![
+                        StepInfo { kind: "Then".to_string(), text: "the operation returns an Err result".to_string() },
+                    ],
+                },
+                ScenarioReview {
+                    name: "Scenario B".to_string(),
+                    source_span: SourceSpan { start_line: 6, end_line: 10 },
+                    steps: vec![
+                        StepInfo { kind: "Then".to_string(), text: "the operation returns an Err result".to_string() },
+                        StepInfo { kind: "Then".to_string(), text: "no panic occurs".to_string() },
+                    ],
+                },
+            ];
+        }
+
+        let issues = classify_spec_issues(&review);
+        assert!(issues.iter().any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
+    }
+
+    #[test]
+    fn classify_spec_issues_allows_distinct_then_sets() {
+        let mut review = review_stub();
+        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
+            rule.executable_scenarios = vec![
+                ScenarioReview {
+                    name: "Scenario A".to_string(),
+                    source_span: SourceSpan { start_line: 1, end_line: 5 },
+                    steps: vec![
+                        StepInfo { kind: "Then".to_string(), text: "the operation returns an Err result".to_string() },
+                    ],
+                },
+                ScenarioReview {
+                    name: "Scenario B".to_string(),
+                    source_span: SourceSpan { start_line: 6, end_line: 10 },
+                    steps: vec![
+                        StepInfo { kind: "Then".to_string(), text: "the client receives the response".to_string() },
+                    ],
+                },
+            ];
+        }
+
+        let issues = classify_spec_issues(&review);
+        assert!(!issues.iter().any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
+    }
+
+    #[test]
+    fn classify_spec_issues_allows_distinct_conditions() {
+        let mut review = review_stub();
+        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
+            rule.executable_scenarios = vec![
+                ScenarioReview {
+                    name: "Scenario A".to_string(),
+                    source_span: SourceSpan { start_line: 1, end_line: 5 },
+                    steps: vec![
+                        StepInfo { kind: "Given".to_string(), text: "the client sends an oversize packet".to_string() },
+                        StepInfo { kind: "When".to_string(), text: "the server receives the packet".to_string() },
+                        StepInfo { kind: "Then".to_string(), text: "the packet is dropped".to_string() },
+                    ],
+                },
+                ScenarioReview {
+                    name: "Scenario B".to_string(),
+                    source_span: SourceSpan { start_line: 6, end_line: 10 },
+                    steps: vec![
+                        StepInfo { kind: "Given".to_string(), text: "the client sends a malformed packet".to_string() },
+                        StepInfo { kind: "When".to_string(), text: "the server receives the packet".to_string() },
+                        StepInfo { kind: "Then".to_string(), text: "the packet is dropped".to_string() },
+                    ],
+                },
+            ];
+        }
+
+        let issues = classify_spec_issues(&review);
+        assert!(!issues.iter().any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
     }
 
     fn status_stub() -> StatusPacket {

@@ -227,6 +227,32 @@ pub struct MissingBindingInfo {
     pub missing_step_texts: Vec<String>,
 }
 
+// =============================================================================
+// Run Report Packet
+// =============================================================================
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RunReport {
+    pub scenarios: Vec<RunReportScenario>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RunReportScenario {
+    pub scenario_key: String,
+    #[serde(default)]
+    pub scenario_name: Option<String>,
+    pub status: String,
+    #[serde(default)]
+    pub steps: Vec<RunReportStep>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RunReportStep {
+    pub status: String,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct HarnessGap {
@@ -350,10 +376,42 @@ pub fn parse_gate_json(content: &str) -> Result<GatePacket> {
         .context("Failed to parse gate.json")
 }
 
+pub fn parse_run_report_json(content: &str) -> Result<RunReport> {
+    serde_json::from_str::<RunReport>(content)
+        .context("Failed to parse run_report.json")
+}
+
 #[allow(dead_code)]
 pub fn parse_explain_json(content: &str) -> Result<ExplainPacket> {
     serde_json::from_str::<ExplainPacket>(content)
         .context("Failed to parse explain.json")
+}
+
+/// Extract failure records from a run_report.json payload.
+pub fn failures_from_run_report(report: &RunReport) -> Vec<FailureRecord> {
+    report
+        .scenarios
+        .iter()
+        .filter(|scenario| scenario.status.to_ascii_lowercase().starts_with("fail"))
+        .map(|scenario| {
+            let summary = scenario
+                .steps
+                .iter()
+                .find(|step| step.status.to_ascii_lowercase().starts_with("fail"))
+                .and_then(|step| step.error_message.clone())
+                .unwrap_or_else(|| "Scenario failed".to_string());
+
+            FailureRecord {
+                scenario_key: scenario.scenario_key.clone(),
+                scenario_name: scenario
+                    .scenario_name
+                    .clone()
+                    .unwrap_or_else(|| scenario.scenario_key.clone()),
+                failure_kind: "run_report".to_string(),
+                summary,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -608,6 +666,31 @@ mod tests {
 
         let parsed = parse_gate_json(json).unwrap();
         assert!(parsed.determinism.is_some());
+    }
+
+    #[test]
+    fn parse_run_report_json_minimal() {
+        let json = r#"{
+            "header": { "version": 1 },
+            "scenarios": [
+                {
+                    "scenario_key": "feature:Rule(01):Scenario(01)",
+                    "scenario_name": null,
+                    "status": "failed",
+                    "steps": [
+                        { "status": "passed", "error_message": null },
+                        { "status": "failed", "error_message": "Scenario::expect timed out" }
+                    ]
+                }
+            ]
+        }"#;
+
+        let report = parse_run_report_json(json).unwrap();
+        assert_eq!(report.scenarios.len(), 1);
+        let failures = failures_from_run_report(&report);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].scenario_key, "feature:Rule(01):Scenario(01)");
+        assert_eq!(failures[0].summary, "Scenario::expect timed out");
     }
 
     #[test]

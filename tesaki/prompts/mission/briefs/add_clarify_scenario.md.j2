@@ -12,7 +12,19 @@ Required context:
 
 ## What To Do
 
-Add executable scenarios to rules that lack coverage. Read the feature file's NORMATIVE CONTRACT MIRROR header for requirements.
+Add scenarios to rules that lack coverage. Read the feature file's NORMATIVE CONTRACT MIRROR header for requirements.
+If new step phrases are required, add them — Tesaki will automatically follow up with CreateMissingBindings.
+Prefer existing step phrases where possible to minimize new bindings.
+
+## Constraints (MUST NOT VIOLATE)
+
+- Do NOT add new `Rule:` blocks — only add Scenarios under existing Rules.
+- Do NOT modify the Feature description or existing Rule text.
+- Validation will reject changes if the rule count increases.
+- You MUST increase executable scenarios by at least one. Promoting a @Deferred scenario counts.
+- It is OK if lint fails due to missing bindings; that is expected and will be handled next.
+- New scenarios must add a distinct "Then" outcome (not just repeating the same Then set or only adding "no panic occurs").
+- If a rule has only `@Deferred` scenarios, promote at least one by removing `@Deferred` (preferred to adding new scenarios).
 
 {% if rules_without_scenarios and rules_without_scenarios | length > 0 %}
 ## Rules Needing Scenarios
@@ -35,10 +47,4 @@ Rule: [Rule name]
     Then [observable outcome]
 ```
 
-## Verify
-
-```bash
-namako gate --specs-dir test/specs
-```
-
-**Note:** This creates binding work — adding scenarios with new steps will require bindings in a follow-up mission.
+**Note:** This creates binding work — Tesaki will automatically follow up with CreateMissingBindings when new steps are introduced. Do NOT run `namako gate`/`namako lint`/`namako steps`; Tesaki will validate.

@@ -61,6 +61,7 @@ pub enum MissionType {
     // Finalize
     SummarizeAndClose,
     CleanupAfterSuccess,
+    AssessSpecCoverage,
 
     // Meta (no runner)
     ExplainState,
@@ -130,6 +131,7 @@ impl MissionType {
             Self::RefactorBindingsForClarity { .. } => "RefactorBindingsForClarity",
             Self::SummarizeAndClose => "SummarizeAndClose",
             Self::CleanupAfterSuccess => "CleanupAfterSuccess",
+            Self::AssessSpecCoverage => "AssessSpecCoverage",
             Self::ExplainState => "ExplainState",
             Self::TriageFailures => "TriageFailures",
         }
@@ -144,7 +146,9 @@ impl MissionType {
             | Self::FixRegressionFromGateFailure { .. } => MissionTypeCategory::Sut,
             Self::RefineFeatureIntent { .. } | Self::AddOrClarifyScenario { .. } => MissionTypeCategory::Spec,
             Self::NormalizeIdentityTags { .. } => MissionTypeCategory::Structure,
-            Self::SummarizeAndClose | Self::CleanupAfterSuccess => MissionTypeCategory::Finalize,
+            Self::SummarizeAndClose | Self::CleanupAfterSuccess | Self::AssessSpecCoverage => {
+                MissionTypeCategory::Finalize
+            }
             Self::ExplainState | Self::TriageFailures => MissionTypeCategory::Meta,
         }
     }
@@ -158,7 +162,9 @@ impl MissionType {
             | Self::FixRegressionFromGateFailure { .. } => SurfacePolicy::for_implement_sut(),
             Self::RefineFeatureIntent { .. } | Self::AddOrClarifyScenario { .. } => SurfacePolicy::for_refine_spec(),
             Self::NormalizeIdentityTags { .. } => SurfacePolicy::for_structure_spec(),
-            Self::SummarizeAndClose | Self::CleanupAfterSuccess => SurfacePolicy::for_finalize(),
+            Self::SummarizeAndClose | Self::CleanupAfterSuccess | Self::AssessSpecCoverage => {
+                SurfacePolicy::for_finalize()
+            }
             Self::ExplainState | Self::TriageFailures => SurfacePolicy::for_finalize(),
         }
     }
@@ -182,6 +188,7 @@ impl MissionType {
             Self::StrengthenThenAssertions { .. } => vec![EvidenceChange::GatePasses],
             Self::RefactorBindingsForClarity { .. } => vec![EvidenceChange::GatePasses],
             Self::SummarizeAndClose | Self::CleanupAfterSuccess => vec![EvidenceChange::GatePasses],
+            Self::AssessSpecCoverage => vec![],
             Self::ExplainState | Self::TriageFailures => vec![],
         }
     }
@@ -196,7 +203,7 @@ impl MissionType {
             Self::NormalizeIdentityTags { feature_path, .. } => Some(feature_path.clone()),
             Self::StrengthenThenAssertions { scenario_key, .. } => Some(scenario_key.clone()),
             Self::RefactorBindingsForClarity { .. } => None,
-            Self::SummarizeAndClose | Self::CleanupAfterSuccess => None,
+            Self::SummarizeAndClose | Self::CleanupAfterSuccess | Self::AssessSpecCoverage => None,
             Self::ExplainState | Self::TriageFailures => None,
         }
     }
@@ -213,6 +220,7 @@ impl MissionType {
             Self::AddOrClarifyScenario { .. } => "opus",
             Self::RefineFeatureIntent { .. } => "opus",
             Self::FixRegressionFromGateFailure { .. } => "opus",
+            Self::AssessSpecCoverage => "opus",
 
             // Structured work with patterns
             Self::CreateMissingBindings { .. } => "sonnet",
@@ -460,6 +468,56 @@ impl MissionType {
                 context: "All gates pass; finalize cleanup.".to_string(),
                 validation_criteria: vec!["No leftover artifacts".to_string()],
             },
+            Self::AssessSpecCoverage => {
+                let mut context = String::from(
+                    "Assess spec coverage quality using the locked rubric. \
+                    Use INPUTS/review.json and feature files to judge coverage quality. \
+                    Write the assessment JSON to `.tesaki/coverage_assessment.json`.",
+                );
+
+                if state.coverage_is_ambiguous() {
+                    let mut lines = Vec::new();
+                    if !state.coverage_ambiguity.rules_with_one_scenario.is_empty() {
+                        lines.push("Rules with 1 executable scenario:".to_string());
+                        for rule in &state.coverage_ambiguity.rules_with_one_scenario {
+                            lines.push(format!("- {} :: {}", rule.feature_path, rule.rule_name));
+                        }
+                    }
+                    if !state.coverage_ambiguity.rules_with_many_scenarios.is_empty() {
+                        lines.push("Rules with >4 executable scenarios:".to_string());
+                        for rule in &state.coverage_ambiguity.rules_with_many_scenarios {
+                            lines.push(format!("- {} :: {}", rule.feature_path, rule.rule_name));
+                        }
+                    }
+                    context.push_str("\n\nAmbiguous coverage signals:\n");
+                    context.push_str(&lines.join("\n"));
+                }
+
+                let ambiguous_rules: Vec<String> = state
+                    .spec_issues
+                    .iter()
+                    .filter(|issue| issue.kind == crate::repo_state::SpecIssueKind::Ambiguous)
+                    .map(|issue| {
+                        if let Some(rule) = &issue.rule_name {
+                            format!("- {} :: {}", issue.feature_path, rule)
+                        } else {
+                            format!("- {}", issue.feature_path)
+                        }
+                    })
+                    .collect();
+                if !ambiguous_rules.is_empty() {
+                    context.push_str("\n\nRules flagged as coverage-ambiguous:\n");
+                    context.push_str(&ambiguous_rules.join("\n"));
+                }
+
+                MissionBrief {
+                    mission_type: self.clone(),
+                    title: "Assess spec coverage quality".to_string(),
+                    objective: "Produce a rubric-based coverage assessment and verdict.".to_string(),
+                    context,
+                    validation_criteria: vec!["coverage_assessment.json written".to_string()],
+                }
+            }
             Self::ExplainState => MissionBrief {
                 mission_type: self.clone(),
                 title: "Explain state".to_string(),
@@ -545,6 +603,7 @@ mod tests {
     fn mission_type_requires_runner() {
         assert!(!MissionType::ExplainState.requires_runner());
         assert!(MissionType::SummarizeAndClose.requires_runner());
+        assert!(MissionType::AssessSpecCoverage.requires_runner());
     }
 
     #[test]
@@ -562,6 +621,7 @@ mod tests {
     fn recommended_model_opus_for_high_intelligence_tasks() {
         assert_eq!(MissionType::AddOrClarifyScenario { feature_path: "f".into(), rule_name: None }.recommended_model(), "opus");
         assert_eq!(MissionType::RefineFeatureIntent { feature_path: "f".into() }.recommended_model(), "opus");
+        assert_eq!(MissionType::AssessSpecCoverage.recommended_model(), "opus");
         assert_eq!(MissionType::FixRegressionFromGateFailure {
             failure: crate::repo_state::FailureInfo {
                 scenario_key: "s".into(),

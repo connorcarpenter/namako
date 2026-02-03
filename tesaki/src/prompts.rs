@@ -98,6 +98,12 @@ pub fn create_environment() -> Environment<'static> {
     .expect("Failed to load cleanup_after_success.md.j2");
 
     env.add_template(
+        "mission/briefs/assess_spec_coverage.md.j2",
+        include_str!("../prompts/mission/briefs/assess_spec_coverage.md.j2"),
+    )
+    .expect("Failed to load assess_spec_coverage.md.j2");
+
+    env.add_template(
         "mission/briefs/explain_state.md.j2",
         include_str!("../prompts/mission/briefs/explain_state.md.j2"),
     )
@@ -205,6 +211,18 @@ pub struct MissionContext {
     pub surface_definitions: SurfaceDefinitionsContext,
     pub budgets: BudgetsContext,
     pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_failure: Option<PreviousFailureContext>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct PreviousFailureContext {
+    pub mission_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    pub stop_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
 }
 
 /// Context for rendering POLICY.md.
@@ -310,6 +328,7 @@ pub fn render_mission_md(ctx: &MissionContext) -> Result<String> {
             surface_definitions => ctx.surface_definitions,
             budgets => ctx.budgets,
             version => ctx.version,
+            previous_failure => ctx.previous_failure,
         })
         .context("Failed to render MISSION.md")
 }
@@ -436,11 +455,10 @@ impl BriefContext {
                 feature_path,
                 rule_name,
             } => {
-                // Count scenarios for this feature from spec_issues
-                let scenario_count = state.spec_issues
-                    .iter()
-                    .filter(|i| i.feature_path == *feature_path)
-                    .count();
+                // Count scenarios for this feature from feature files (not just executable scenarios)
+                let scenario_count = state
+                    .scenario_count_for_feature(feature_path)
+                    .unwrap_or(0);
                 
                 // Find rules that might need scenarios
                 let rules_needing_scenarios: Vec<String> = state.spec_issues
@@ -483,6 +501,10 @@ impl BriefContext {
                 ..Default::default()
             },
             MissionType::CleanupAfterSuccess => Self::default(),
+            MissionType::AssessSpecCoverage => Self {
+                repo_summary: Some(state.summary()),
+                ..Default::default()
+            },
             MissionType::ExplainState => Self {
                 repo_summary: Some(state.summary()),
                 ..Default::default()
@@ -536,6 +558,7 @@ pub fn brief_template_name(mission_type: &MissionType) -> &'static str {
         MissionType::RefactorBindingsForClarity { .. } => "mission/briefs/refactor_bindings.md.j2",
         MissionType::SummarizeAndClose => "mission/briefs/summarize_and_close.md.j2",
         MissionType::CleanupAfterSuccess => "mission/briefs/cleanup_after_success.md.j2",
+        MissionType::AssessSpecCoverage => "mission/briefs/assess_spec_coverage.md.j2",
         MissionType::ExplainState => "mission/briefs/explain_state.md.j2",
         MissionType::TriageFailures => "mission/briefs/triage_failures.md.j2",
     }
@@ -868,6 +891,7 @@ mod tests {
                 max_retries: 2,
             },
             version: TESAKI_VERSION.to_string(),
+            previous_failure: None,
         };
 
         let result = render_mission_md(&ctx).unwrap();

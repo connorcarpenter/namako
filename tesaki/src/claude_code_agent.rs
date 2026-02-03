@@ -60,7 +60,13 @@ impl ClaudeCodeAgent {
         let runner_cmd = runner_command.unwrap_or_else(|| {
             // Default Claude Code command.
             // The runner reads MISSION.md and sends it via stdin.
-            "claude --print --dangerously-skip-permissions".to_string()
+            // When streaming is enabled, request stream-json output for live progress.
+            if stream_output {
+                "claude --print --dangerously-skip-permissions --output-format stream-json --include-partial-messages --verbose"
+                    .to_string()
+            } else {
+                "claude --print --dangerously-skip-permissions".to_string()
+            }
         });
         let planner_cmd = planner_command.unwrap_or_else(|| {
             // Default Claude planner command uses stdin input.
