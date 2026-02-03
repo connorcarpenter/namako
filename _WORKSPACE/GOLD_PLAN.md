@@ -148,7 +148,7 @@ The loop that Opus/Claude follows **while building the Namako/Tesaki toolchain**
 2. Identify next toolchain gap (Namako CLI, Tesaki driver, harness, adapter)
 3. Implement minimal fix
 4. Run gates (`namako gate`, `namako gate --determinism`, `cargo test`)
-5. Update docs (CURRENT_STATUS.md, OUTPUT.md)
+5. Update docs (CURRENT_STATUS.md, TODO.md)
 6. Stop (human reviews diff)
 
 **Scope:** Building the spec-driven development infrastructure itself.
@@ -187,7 +187,7 @@ Naia product core (anything outside `naia/test/**`):
 - `naia/adapters/**`
 - Any other Naia crate not under `test/`
 
-**Violation handling:** Revert and record incident in OUTPUT.md.
+**Violation handling:** Revert and record incident in CURRENT_STATUS.md.
 
 #### 2.4.3 CONSUMPTION Allowed Edit Surface
 
@@ -1122,7 +1122,7 @@ Current implementation uses feature fingerprint (content hash) rather than Featu
 
 **Outputs:**
 - Repo patches only (no commits)
-- Logs / OUTPUT.md
+- Logs / CURRENT_STATUS.md
 
 ### 9.2 The Development FSM (Normative)
 

@@ -1,16 +1,26 @@
 # CURRENT_STATUS.md — Comprehensive Implementation Status
 
-**Last Updated:** 2026-02-02
-**MODE:** CONSUMPTION (v1.9 Research-Aligned Autonomous Loop)
+**Last Updated:** 2026-02-03
+**MODE:** CONSUMPTION
 
 ---
 
 ## Executive Summary
 
-**Namako v1.9 is COMPLETE.** Tesaki supports optimized autonomous operation with research-aligned safety rails.
+**Current reality (2026-02-03):**
+- Tesaki autonomous loop is functional and deterministic selection is in place.
+- Token usage tracking, model tiering, and pre-gate build checks exist in code.
+- AddOrClarifyScenario progress is still measured via spec_issues (not scenario count).
+- Mission chaining from AddOrClarifyScenario → CreateMissingBindings is not implemented.
+- Rule-count invariant (no new `Rule:` blocks) is not enforced.
+- Coverage heuristic (2+ executable scenarios per rule) is not enforced.
+- LLM coverage assessment (3-judge self-consistency) is not implemented.
 
-**Turnkey command:** `tesaki --loop 10` — runs autonomous SDD loop with token tracking, model tiering, and intelligent failure handling.
+**Next steps:** See `namako/_WORKSPACE/TODO.md` (step-by-step plan) and `namako/_WORKSPACE/PATH_FORWARD.md` (canonical vision).
 
+**Note:** The sections below include a historical snapshot from 2026-02-02. They are retained for reference only.
+
+### Historical Milestones (2026-02-02)
 | Milestone | Status |
 |-----------|--------|
 | Namako v1 Core | ✅ COMPLETE |
@@ -27,7 +37,7 @@
 
 ---
 
-## v1.9 Optimization Improvements — COMPLETE
+## Historical Snapshot (2026-02-02) — retained for reference
 
 **Scope:** Token tracking, model tiering, and research-aligned safety rails.
 

@@ -135,8 +135,8 @@ cargo run -p namako-cli -- --help
 
 ## Files to Read First
 
-1. `_WORKSPACE/CURRENT_STATUS.md` - Overall project status
-2. `_WORKSPACE/DEV_EX.md` - Developer experience design
-3. `_WORKSPACE/UX_TEST_LOG.md` - Lessons from testing
+1. `_WORKSPACE/PATH_FORWARD.md` - Canonical vision and next steps
+2. `_WORKSPACE/TODO.md` - Step-by-step implementation plan
+3. `_WORKSPACE/CURRENT_STATUS.md` - Current reality snapshot
 4. `tesaki/src/main.rs` - CLI entrypoint
 5. `tesaki/src/repl.rs` - Interactive session logic
