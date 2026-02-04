@@ -45,10 +45,36 @@ pub fn select_mission_type(state: &RepoState) -> Option<MissionType> {
     }
 
     if let Some(issue) = select_spec_issue_for_add_scenario(state) {
-        return Some(MissionType::AddOrClarifyScenario {
-            feature_path: issue.feature_path.clone(),
-            rule_name: issue.rule_name.clone(),
-        });
+        // Check if this is a zero-coverage rule
+        let rule_has_zero_scenarios = issue.rule_name.as_ref()
+            .map(|r| state.scenario_count_for_rule(&issue.feature_path, r) == Some(0))
+            .unwrap_or(false);
+
+        // Check for deferred scenarios that could be promoted
+        let deferred = issue.rule_name.as_ref()
+            .map(|r| state.deferred_scenarios_for_rule(&issue.feature_path, r))
+            .unwrap_or_default();
+
+        if !deferred.is_empty() {
+            // Has deferred scenarios — pick PromoteScenariosToExecutable
+            return Some(MissionType::PromoteScenariosToExecutable {
+                feature_path: issue.feature_path.clone(),
+                scenario_name: deferred[0].clone(),
+                rule_name: issue.rule_name.clone().unwrap_or_default(),
+            });
+        } else if rule_has_zero_scenarios {
+            // Zero coverage, no deferred — pick DraftSpecScenarios
+            return Some(MissionType::DraftSpecScenarios {
+                feature_path: issue.feature_path.clone(),
+                rule_name: issue.rule_name.clone(),
+            });
+        } else {
+            // Partial coverage — use AddOrClarifyScenario
+            return Some(MissionType::AddOrClarifyScenario {
+                feature_path: issue.feature_path.clone(),
+                rule_name: issue.rule_name.clone(),
+            });
+        }
     }
 
     None
@@ -120,10 +146,36 @@ fn select_alternative_for_stage(state: &RepoState, stage: Stage) -> Option<Missi
         }
 
         if let Some(issue) = select_spec_issue_for_add_scenario(state) {
-            return Some(MissionType::AddOrClarifyScenario {
-                feature_path: issue.feature_path.clone(),
-                rule_name: issue.rule_name.clone(),
-            });
+            // Check if this is a zero-coverage rule
+            let rule_has_zero_scenarios = issue.rule_name.as_ref()
+                .map(|r| state.scenario_count_for_rule(&issue.feature_path, r) == Some(0))
+                .unwrap_or(false);
+
+            // Check for deferred scenarios that could be promoted
+            let deferred = issue.rule_name.as_ref()
+                .map(|r| state.deferred_scenarios_for_rule(&issue.feature_path, r))
+                .unwrap_or_default();
+
+            if !deferred.is_empty() {
+                // Has deferred scenarios — pick PromoteScenariosToExecutable
+                return Some(MissionType::PromoteScenariosToExecutable {
+                    feature_path: issue.feature_path.clone(),
+                    scenario_name: deferred[0].clone(),
+                    rule_name: issue.rule_name.clone().unwrap_or_default(),
+                });
+            } else if rule_has_zero_scenarios {
+                // Zero coverage, no deferred — pick DraftSpecScenarios
+                return Some(MissionType::DraftSpecScenarios {
+                    feature_path: issue.feature_path.clone(),
+                    rule_name: issue.rule_name.clone(),
+                });
+            } else {
+                // Partial coverage — use AddOrClarifyScenario
+                return Some(MissionType::AddOrClarifyScenario {
+                    feature_path: issue.feature_path.clone(),
+                    rule_name: issue.rule_name.clone(),
+                });
+            }
         }
     }
 
@@ -296,10 +348,10 @@ mod tests {
 
         let mission = select_mission_type(&state).unwrap();
         match mission {
-            MissionType::AddOrClarifyScenario { feature_path, .. } => {
+            MissionType::DraftSpecScenarios { feature_path, .. } => {
                 assert_eq!(feature_path, "features/zero.feature");
             }
-            _ => panic!("expected AddOrClarifyScenario"),
+            _ => panic!("expected DraftSpecScenarios for zero-coverage rule"),
         }
     }
 
@@ -407,5 +459,72 @@ mod tests {
         let mission = select_mission_type(&state).unwrap();
         // Falls through structure_issues (ParseError doesn't match) to spec issues
         assert!(matches!(mission, MissionType::AddOrClarifyScenario { .. }));
+    }
+
+    #[test]
+    fn selects_draft_spec_for_zero_coverage_rule() {
+        let state = RepoState {
+            spec_issues: vec![SpecIssue {
+                kind: SpecIssueKind::MissingCoverage,
+                feature_path: "features/a.feature".to_string(),
+                description: "Rule has 0 scenarios".to_string(),
+                rule_name: Some("Empty Rule".to_string()),
+            }],
+            scenarios_per_rule: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("features/a.feature::Empty Rule".to_string(), 0);
+                map
+            },
+            ..Default::default()
+        };
+
+        let mission = select_mission_type(&state).unwrap();
+        assert!(matches!(mission, MissionType::DraftSpecScenarios { .. }));
+    }
+
+    #[test]
+    fn selects_promote_when_deferred_exists() {
+        use crate::packet_parser::{ReviewPacket, DeferredScenarioItem, BlockerType, IdentityFields, CoverageSummary};
+
+        let state = RepoState {
+            spec_issues: vec![SpecIssue {
+                kind: SpecIssueKind::MissingCoverage,
+                feature_path: "features/a.feature".to_string(),
+                description: "Rule has 0 executable scenarios".to_string(),
+                rule_name: Some("Deferred Rule".to_string()),
+            }],
+            review: Some(ReviewPacket {
+                version: 1,
+                spec_root: "/test".to_string(),
+                identity_current: IdentityFields {
+                    hash_contract_version: "v1".to_string(),
+                    feature_fingerprint_hash: "a".to_string(),
+                    step_registry_hash: "b".to_string(),
+                    resolved_plan_hash: "c".to_string(),
+                },
+                features: vec![],
+                coverage_summary: CoverageSummary {
+                    rules_total: 1,
+                    rules_with_zero_executable: 1,
+                    executable_scenarios_total: 0,
+                    deferred_items_total: 1,
+                },
+                deferred_items: vec![DeferredScenarioItem {
+                    scenario_key: "features/a.feature::Deferred Rule::Deferred scenario".to_string(),
+                    scenario_name: "Deferred scenario".to_string(),
+                    feature_path: "features/a.feature".to_string(),
+                    rule_name: "Deferred Rule".to_string(),
+                    blocker: BlockerType::External,
+                }],
+                promotion_candidates: vec![],
+                missing_bindings_for_top_candidates: vec![],
+                harness_gaps: vec![],
+                suggested_binding_bundle: None,
+            }),
+            ..Default::default()
+        };
+
+        let mission = select_mission_type(&state).unwrap();
+        assert!(matches!(mission, MissionType::PromoteScenariosToExecutable { .. }));
     }
 }

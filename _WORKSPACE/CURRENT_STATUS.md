@@ -1,47 +1,54 @@
 # CURRENT_STATUS.md — Namako/Tesaki Tooling Status
 
-**Last Updated:** 2026-02-04
-**Mode:** CONSUMPTION
-**Scope:** Namako/Tesaki toolchain only (not Naia product development)
+**Last Updated:** 2026-02-03
+**Status:** Stable — All implementation gaps closed
+**Mode:** CONSUMPTION (tool is ready for use)
 
 ---
 
 ## TL;DR
 
-- Tool quality roadmap in `namako/_WORKSPACE/TODO.md` is complete.
-- Expected cascades are handled as success (EXPECTED_CASCADE) after AddOrClarifyScenario.
-- Pre-gate build is skipped for Spec-only missions (configurable).
-- Policy violations are reported (no hard enforcement).
-- AddOrClarifyScenario budgets to exactly one executable scenario by default.
+The Tesaki v1.9 implementation is complete. All gaps from the implementation plan have been closed:
 
-## Start Here (New Agent)
+- Surface lock enforcement triggers automatic rollback on violations
+- Draft/Promote mission types are now selectable by the mission selector
+- `tesaki diagnose <mission_id>` command works
+- `quality_gates_enabled` config flag is wired through
+- Mission briefs include selection evidence
 
-1) Read `namako/_WORKSPACE/RUNBOOK.md` for the turnkey loop checklist.
-2) Skim `namako/_WORKSPACE/TODO.md` to see what’s done and what remains in scope.
-3) Optional deep spec: `namako/_WORKSPACE/GOLD_PLAN.md` (historical system design).
-4) Historical artifacts: `namako/_WORKSPACE/ARCHIVE/`.
+## For AI Agents: Start Here
 
-## How to Validate This Repo
+**Single entrypoint:** [`../_AGENTS/AGENT_GUIDE.md`](../_AGENTS/AGENT_GUIDE.md)
 
-From `namako/`:
+That file contains everything needed to understand and work on this codebase.
 
-```bash
-cargo test
-```
-
-Targeted alternatives:
+## Quick Validation
 
 ```bash
-cargo test -p tesaki
-cargo test -p namako-codegen
+cd namako/
+cargo test -p tesaki    # 222 tests, all passing
 ```
 
-## Notes / Known Quirks
+## Documentation Map
 
-- Codegen example features include one intentional failing scenario; tests still pass.
-- Expected cascade after AddOrClarifyScenario is labeled EXPECTED_CASCADE (not STOP).
+| Document | Purpose |
+|----------|---------|
+| `_AGENTS/AGENT_GUIDE.md` | **Complete guide for AI coding agents** |
+| `_WORKSPACE/RUNBOOK.md` | Turnkey loop execution checklist |
+| `_WORKSPACE/ARCHIVE/` | Historical docs (GOLD_PLAN, old plans) |
 
-## Doc Cleanup Recommendations
+## Recent Completions (2026-02-03)
 
-- Keep `RUNBOOK.md` and `TODO.md` for day-to-day work.
-- If you want a lean workspace, you can delete `ARCHIVE/` and/or `GOLD_PLAN.md` once you’re comfortable; they are useful for historical context but not required for routine work.
+| Feature | Status |
+|---------|--------|
+| Surface policy violation → rollback | ✅ Complete |
+| `DraftSpecScenarios` mission type | ✅ Selectable |
+| `PromoteScenariosToExecutable` mission type | ✅ Selectable |
+| `tesaki diagnose` CLI command | ✅ Working |
+| `quality_gates_enabled` config flag | ✅ Wired through |
+| Selection evidence in MISSION.md | ✅ Rendering |
+
+## Known Quirks
+
+- Codegen example features include one intentional failing scenario; tests still pass
+- Expected cascade after AddOrClarifyScenario is labeled EXPECTED_CASCADE (not STOP)

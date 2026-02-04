@@ -55,6 +55,15 @@ Required context:
 
 {{ context }}
 
+{% if selection_evidence %}
+**Selection Evidence:**
+- Type: {{ selection_evidence.issue_type }}
+{% if selection_evidence.file_path %}- File: `{{ selection_evidence.file_path }}`{% endif %}
+{% if selection_evidence.line %}- Line: {{ selection_evidence.line }}{% endif %}
+- {{ selection_evidence.description }}
+{% if selection_evidence.example %}- Example: {{ selection_evidence.example }}{% endif %}
+{% endif %}
+
 {% if previous_failure %}
 ---
 

@@ -1,126 +1,128 @@
-# RUNBOOK.md — Turnkey Loop Checklist
+# RUNBOOK.md — Turnkey Loop Execution
 
-**Last Updated:** 2026-02-04
-**Scope:** Tesaki + Namako toolchain usage (spec repo only)
+**Last Updated:** 2026-02-03
 
 ---
 
-## Turnkey Loop Checklist
+## Quick Start
 
-### 0) Mission Default (When Asked to "Work on Naia")
-If the request is to work on `naia/` using Tesaki/Namako, the default mission is:
-1. Use `naia/` as the target repo.
-2. Verify `.tesaki/config.toml` exists; if it already exists, do not recreate it.
-3. Run the loop from `naia/` (see Step 2).
-4. Keep brief notes on friction/streamlining opportunities during the loop.
+### 1. Configure Target Repo
 
-### 1) Config (Required)
 Create `.tesaki/config.toml` in your target repo:
 
 ```toml
 specs_dir = "test/specs"
 adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
 
-# Optional
-agent = "copilot"          # runner + planner
-max_retries = 0
+# Optional settings
+agent = "copilot"           # runner backend (copilot, claude, codex, mock)
+max_retries = 0             # Fresh context > stale retries
 max_cert_updates = 3
 max_runtime_seconds = 600
 max_files_changed = 10
+quality_gates_enabled = true
 
 # Pre-gate build (optional)
 # pre_gate_build = "cargo check -p my-test-harness"
-# pre_gate_build_mode = "auto"   # auto | always | never
+# pre_gate_build_mode = "auto"  # auto | always | never
 ```
 
-### 2) One-Command Loop
-From the repo root:
+### 2. Run the Loop
 
 ```bash
+# From target repo root
 tesaki --loop 10
 ```
 
 Or interactive:
-
 ```bash
 tesaki
 > loop 10
 ```
 
-### 3) Expected Cascade (Normal)
-If you add scenarios, lint can fail due to missing bindings. This is expected.
-Tesaki will report:
+---
+
+## Stop Conditions
+
+Tesaki stops when:
+
+| Reason | Meaning |
+|--------|---------|
+| `DONE` | All gates pass, no issues remain |
+| `NO_PROGRESS` | No changes made after attempts |
+| `GATE_FAILED` | Lint/run/verify failed |
+| `POLICY_VIOLATION` | Runner edited locked surface |
+| `HUMAN_REQUIRED` | Manual intervention needed |
+| `BUDGET` | Runtime/attempt limits hit |
+
+---
+
+## Expected Cascade (Normal)
+
+After `AddOrClarifyScenario`, lint may fail due to missing bindings. This is expected:
 
 ```
 Expected cascade: missing bindings created.
 ```
 
-The next mission should be `CreateMissingBindings`.
-
-### 4) Stop Criteria (When It’s Over)
-Tesaki will stop when:
-- `DONE`: All gates pass and no issues remain
-- `NO_PROGRESS`: Runner made no changes or evidence didn’t improve
-- `GATE_FAILED`: Lint/run/verify failed after retries
-- `HUMAN_REQUIRED`: Workspace dirty or manual approval needed
-- `BUDGET`: Runtime or attempt limits hit
-
-### 5) Pre-Gate Build Behavior
-- **auto**: skipped for spec-only missions (Tests/SUT locked)
-- **always**: run build check every mission
-- **never**: skip build check entirely
-
-### 6) Validate This Repo (Tooling)
-From `namako/`:
-
-```bash
-cargo test
-```
-
-Or target a package:
-
-```bash
-cargo test -p tesaki
-cargo test -p namako-codegen
-```
-
----
+The next mission will be `CreateMissingBindings`.
 
 ---
 
 ## Quality Guardrails
 
-These checks run automatically to prevent low-quality spec edits from entering the pipeline:
+### Spec Quality Gate (after AddOrClarifyScenario)
 
-### Spec Quality Gate (runs after AddOrClarifyScenario)
+| Rule | Blocks |
+|------|--------|
+| `NO_PLACEHOLDER_STEPS` | Generic steps: "Given a test scenario", "Then no panic occurs" |
+| `DOMAIN_NOUN_REQUIRED` | Scenarios unrelated to parent Rule |
+| `NO_ORPHAN_STUBS` | Stub markers outside `_orphan_stubs.feature` |
 
-| Rule | What it blocks |
-|------|---------------|
-| `NO_PLACEHOLDER_STEPS` | `Given a test scenario`, `Then no panic occurs`, `Then the system intentionally fails` |
-| `DOMAIN_NOUN_REQUIRED` | Scenarios whose name + steps share no significant word with the parent Rule header |
-| `NO_ORPHAN_STUBS` | Stub markers (`<stub>`, `<placeholder>`, `<todo>`) outside `_orphan_stubs.feature` |
+Set `quality_gates_enabled = false` in config to disable.
 
-If any rule fires the mission is marked NO_PROGRESS and the violation details are injected into the next mission context.
+### Surface Policy Enforcement
 
-### Regression Rollback
-
-If a mission increases the total adjusted issue count, Tesaki rolls back spec-repo changes via `git checkout -- .` and skips that mission type for the remainder of the session. A hard stop is triggered when adjusted regression exceeds 5 issues.
+If a mission edits files outside its allowed surface:
+1. Changes are rolled back
+2. Mission marked `POLICY_VIOLATION`
+3. Session stops
 
 ### Evidence-Driven Selection
 
-A mission type is only selected when its corresponding packet evidence exists:
+Missions require concrete evidence:
 
-| Mission type | Required evidence |
-|---|---|
-| NormalizeIdentityTags | `structure_issues` with MissingIdentityTag kind |
-| CreateMissingBindings | `binding_issues` with a concrete `scenario_key` |
-| AddOrClarifyScenario | `spec_issues` > 0 or rules with zero scenarios |
-| FixRegressionFromGateFailure | `sut_issues` > 0 |
+| Mission Type | Required Evidence |
+|--------------|-------------------|
+| `FixRegressionFromGateFailure` | `sut_issues` > 0 |
+| `CreateMissingBindings` | `binding_issues` with scenario_key |
+| `DraftSpecScenarios` | Rule with 0 scenarios, no deferred |
+| `PromoteScenariosToExecutable` | Deferred scenarios exist |
+| `AddOrClarifyScenario` | Partial coverage |
 
-Missions with no concrete target are skipped.
+---
 
-### Failure Feedback
+## Debugging
 
-Gate errors from the previous mission are captured in `.tesaki/last_failure.json` and injected into the next mission's MISSION.md under "Previous attempt failed". This prevents repeated blind retries.
+```bash
+# Check mission details
+tesaki diagnose M-abc123
 
-*This runbook reflects current tool behavior. Update alongside tool changes.*
+# Validate tooling
+cd namako/
+cargo test -p tesaki
+```
+
+---
+
+## Pre-Gate Build Modes
+
+| Mode | Behavior |
+|------|----------|
+| `auto` | Skip for spec-only missions (Tests/SUT locked) |
+| `always` | Run build check every mission |
+| `never` | Skip build check entirely |
+
+---
+
+*Update this runbook alongside tool changes.*

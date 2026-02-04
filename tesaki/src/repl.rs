@@ -43,6 +43,7 @@ pub fn run_loop_headless(start_dir: PathBuf, max_iterations: u32, logger: &crate
     let max_files_changed = config.max_files_changed.unwrap_or(10) as u32;
     let pre_gate_build_cmd = config.pre_gate_build.clone();
     let pre_gate_build_mode = config.pre_gate_build_mode;
+    let quality_gates_enabled = config.quality_gates_enabled;
     let namako_resolution = crate::resolve_namako_cli(None, config.namako_cli.clone(), &spec_root);
     let namako_cmd = namako_resolution.command.clone();
 
@@ -78,6 +79,7 @@ pub fn run_loop_headless(start_dir: PathBuf, max_iterations: u32, logger: &crate
         max_files_changed,
         pre_gate_build_cmd,
         pre_gate_build_mode,
+        quality_gates_enabled,
         &mut session,
         logger,
     )
@@ -102,6 +104,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
     let max_files_changed = config.max_files_changed.unwrap_or(10) as u32;
     let pre_gate_build_cmd = config.pre_gate_build.clone();
     let pre_gate_build_mode = config.pre_gate_build_mode;
+    let quality_gates_enabled = config.quality_gates_enabled;
     let namako_resolution = crate::resolve_namako_cli(None, config.namako_cli.clone(), &spec_root);
     let namako_cmd = namako_resolution.command.clone();
 
@@ -198,6 +201,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
                 max_files_changed,
                 pre_gate_build_cmd.clone(),
                 pre_gate_build_mode,
+                quality_gates_enabled,
                 &mut session,
                 logger,
             )?;
@@ -616,6 +620,7 @@ fn run_autonomous_loop(
     max_files_changed: u32,
     pre_gate_build_cmd: Option<String>,
     pre_gate_build_mode: crate::config::PreGateBuildMode,
+    quality_gates_enabled: bool,
     session: &mut SessionState,
     logger: &crate::logging::JsonlLogger,
 ) -> Result<()> {
@@ -978,26 +983,28 @@ fn run_autonomous_loop(
                 skipped_types.clear();
             }
             // Phase 6: Spec quality gate — check feature file after scenario addition
-            if let MissionType::AddOrClarifyScenario { ref feature_path, .. } = mission_type {
-                let feature_file = spec_root.join(feature_path);
-                if let Ok(content) = std::fs::read_to_string(&feature_file) {
-                    let quality = crate::spec_quality::check_feature_quality(feature_path, &content);
-                    if !quality.passed {
-                        println!("⚠️  Spec quality violations detected:");
-                        println!("{}", quality.to_markdown());
-                        // Roll back the bad scenarios
-                        if let Some(snapshot) = before_feature_snapshot.as_ref() {
-                            if let Err(err) = restore_feature_snapshot(spec_root, feature_path, snapshot) {
-                                println!("⚠️  Failed to restore feature after quality violation: {}", err);
-                            } else {
-                                println!("↩️  Restored feature file after spec quality violation");
+            if quality_gates_enabled {
+                if let MissionType::AddOrClarifyScenario { ref feature_path, .. } = mission_type {
+                    let feature_file = spec_root.join(feature_path);
+                    if let Ok(content) = std::fs::read_to_string(&feature_file) {
+                        let quality = crate::spec_quality::check_feature_quality(feature_path, &content);
+                        if !quality.passed {
+                            println!("⚠️  Spec quality violations detected:");
+                            println!("{}", quality.to_markdown());
+                            // Roll back the bad scenarios
+                            if let Some(snapshot) = before_feature_snapshot.as_ref() {
+                                if let Err(err) = restore_feature_snapshot(spec_root, feature_path, snapshot) {
+                                    println!("⚠️  Failed to restore feature after quality violation: {}", err);
+                                } else {
+                                    println!("↩️  Restored feature file after spec quality violation");
+                                }
                             }
+                            stall_count += 1;
+                            println!("Outcome: QUALITY_VIOLATION");
+                            last_mission_type = Some(type_name.clone());
+                            println!();
+                            continue;
                         }
-                        stall_count += 1;
-                        println!("Outcome: QUALITY_VIOLATION");
-                        last_mission_type = Some(type_name.clone());
-                        println!();
-                        continue;
                     }
                 }
             }

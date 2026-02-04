@@ -36,6 +36,9 @@ pub enum StopReason {
 
     /// Rate limited by AI provider - no retry, wait for limit reset.
     RateLimited,
+
+    /// Surface policy violation - runner modified locked surfaces.
+    PolicyViolation,
 }
 
 impl StopReason {
@@ -83,6 +86,7 @@ impl StopReason {
             StopReason::NoProgress => "No progress made after retries",
             StopReason::GateFailed => "Gate failed after retries",
             StopReason::RateLimited => "Rate limited by AI provider",
+            StopReason::PolicyViolation => "Surface policy violation detected",
         }
     }
 }

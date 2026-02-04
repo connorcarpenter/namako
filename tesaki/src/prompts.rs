@@ -385,6 +385,24 @@ pub struct BriefContext {
 
     // TriageFailures
     pub failure_count: Option<usize>,
+
+    /// Structured evidence that triggered mission selection
+    pub selection_evidence: Option<SelectionEvidence>,
+}
+
+/// Structured evidence that triggered mission selection
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectionEvidence {
+    /// The issue type that triggered selection
+    pub issue_type: String,
+    /// File path if applicable
+    pub file_path: Option<String>,
+    /// Line number if applicable
+    pub line: Option<u32>,
+    /// Description of the specific issue
+    pub description: String,
+    /// Example from the issue list (first entry)
+    pub example: Option<String>,
 }
 
 /// A binding exemplar to include in mission context
@@ -417,16 +435,25 @@ impl BriefContext {
                     .filter(|b| matches!(b.kind, crate::repo_state::BindingIssueKind::MissingBinding))
                     .filter_map(|b| b.step_text.clone())
                     .collect();
-                
+
                 let mut unique_steps = all_missing.clone();
                 unique_steps.sort();
                 unique_steps.dedup();
-                
+
+                let selection_evidence = Some(SelectionEvidence {
+                    issue_type: "MissingBinding".to_string(),
+                    file_path: Some(scenario_key.split("::").next().unwrap_or("").to_string()),
+                    line: None,
+                    description: format!("{} missing step(s)", missing_steps.len()),
+                    example: missing_steps.first().cloned(),
+                });
+
                 Self {
                     scenario_key: Some(scenario_key.clone()),
                     missing_steps: Some(missing_steps.clone()),
                     all_missing_steps: Some(unique_steps),
                     binding_exemplars: None, // TODO: Could extract from existing bindings
+                    selection_evidence,
                     ..Default::default()
                 }
             },
@@ -459,7 +486,7 @@ impl BriefContext {
                 let scenario_count = state
                     .scenario_count_for_feature(feature_path)
                     .unwrap_or(0);
-                
+
                 // Find rules that might need scenarios
                 let rules_needing_scenarios: Vec<String> = state.spec_issues
                     .iter()
@@ -467,16 +494,28 @@ impl BriefContext {
                     .filter(|i| matches!(i.kind, crate::repo_state::SpecIssueKind::MissingCoverage))
                     .filter_map(|i| i.rule_name.clone())
                     .collect();
-                
+
+                let issue = state.spec_issues.iter()
+                    .find(|i| &i.feature_path == feature_path);
+
+                let selection_evidence = issue.map(|i| SelectionEvidence {
+                    issue_type: "MissingCoverage".to_string(),
+                    file_path: Some(feature_path.clone()),
+                    line: None,
+                    description: i.description.clone(),
+                    example: rule_name.clone(),
+                });
+
                 Self {
                     feature_path: Some(feature_path.clone()),
                     rule_name: rule_name.clone(),
                     current_scenario_count: Some(scenario_count),
-                    rules_without_scenarios: if rules_needing_scenarios.is_empty() { 
-                        None 
-                    } else { 
-                        Some(rules_needing_scenarios) 
+                    rules_without_scenarios: if rules_needing_scenarios.is_empty() {
+                        None
+                    } else {
+                        Some(rules_needing_scenarios)
                     },
+                    selection_evidence,
                     ..Default::default()
                 }
             },
@@ -545,6 +584,7 @@ impl Default for BriefContext {
             binding_ids: None,
             repo_summary: None,
             failure_count: None,
+            selection_evidence: None,
         }
     }
 }

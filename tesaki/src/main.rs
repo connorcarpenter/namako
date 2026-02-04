@@ -49,8 +49,8 @@ mod token_usage;
 mod spec_quality;
 mod workspace;
 
-use anyhow::{Context, Result};
-use clap::Parser;
+use anyhow::{bail, Context, Result};
+use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,9 +85,21 @@ struct IdentitySnapshot {
 #[command(disable_version_flag = true)]
 #[command(after_help = "Run `tesaki` to start the interactive REPL, or `tesaki --loop N` for autonomous mode.")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Run autonomous loop for N iterations (or until done/stalled)
     #[arg(long, short = 'l')]
     r#loop: Option<u32>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Diagnose a mission by ID
+    Diagnose {
+        /// Mission ID (e.g., M-abc123)
+        mission_id: String,
+    },
 }
 
 /// Status JSON structure from `namako status --json`
@@ -181,18 +193,125 @@ struct MissingBindings {
 }
 
 
+fn cmd_diagnose(mission_id: &str, spec_root: &Path) -> Result<()> {
+    // Find mission directory
+    let missions_dir = spec_root.join(".tesaki").join("missions");
+    let mission_dir = find_mission_by_id(&missions_dir, mission_id)?;
+
+    // Read mission metadata
+    let metadata_path = mission_dir.join("metadata.json");
+    let metadata: serde_json::Value = if metadata_path.exists() {
+        serde_json::from_str(&fs::read_to_string(&metadata_path)?)?
+    } else {
+        serde_json::json!({})
+    };
+
+    // Print mission info
+    println!("Mission: {}", mission_id);
+    if let Some(mission_type) = metadata.get("mission_type").and_then(|v| v.as_str()) {
+        println!("Type: {}", mission_type);
+    }
+    if let Some(target) = metadata.get("target").and_then(|v| v.as_str()) {
+        println!("Target: {}", target);
+    }
+    println!();
+
+    // Print selection reason from INPUTS.json
+    let inputs_path = mission_dir.join("INPUTS.json");
+    if inputs_path.exists() {
+        let inputs: serde_json::Value = serde_json::from_str(&fs::read_to_string(&inputs_path)?)?;
+        println!("Selection Reason:");
+        if let Some(evidence) = inputs.get("selection_evidence") {
+            println!("  {}", serde_json::to_string_pretty(evidence)?);
+        }
+    }
+    println!();
+
+    // Print gate result from GATE_RESULT.json
+    let gate_path = mission_dir.join("GATE_RESULT.json");
+    if gate_path.exists() {
+        let gate: serde_json::Value = serde_json::from_str(&fs::read_to_string(&gate_path)?)?;
+        let outcome = gate.get("outcome").and_then(|v| v.as_str()).unwrap_or("unknown");
+        println!("Gate Result: {}", outcome);
+        if let Some(errors) = gate.get("errors").and_then(|v| v.as_array()) {
+            for err in errors.iter().take(5) {
+                println!("  - {}", err.as_str().unwrap_or(""));
+            }
+        }
+    }
+    println!();
+
+    // Print suggested fix based on mission type
+    println!("Suggested Fix:");
+    if let Some(mission_type) = metadata.get("mission_type").and_then(|v| v.as_str()) {
+        match mission_type {
+            "CreateMissingBindings" => {
+                println!("  - Add step bindings in test harness for the missing steps");
+                println!("  - Or mark scenario @Deferred if bindings cannot be added yet");
+            }
+            "AddOrClarifyScenario" => {
+                println!("  - Add a scenario that covers the rule's core guarantee");
+                println!("  - Use domain-specific language from the rule header");
+            }
+            "FixRegressionFromGateFailure" => {
+                println!("  - Fix the failing assertion in the SUT code");
+                println!("  - Or update the scenario if the expected behavior changed");
+            }
+            _ => {
+                println!("  - Review the mission brief for specific guidance");
+            }
+        }
+    } else {
+        println!("  - Review the mission brief for specific guidance");
+    }
+
+    Ok(())
+}
+
+fn find_mission_by_id(missions_dir: &Path, mission_id: &str) -> Result<PathBuf> {
+    // Mission directories are named like "M-{timestamp}-{hash}"
+    // The mission_id could be the full name or just the hash suffix
+    for entry in fs::read_dir(missions_dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == mission_id || name.ends_with(mission_id) || name.contains(mission_id) {
+            return Ok(entry.path());
+        }
+    }
+    bail!("Mission not found: {}", mission_id)
+}
+
 fn main() -> Result<()> {
     // Initialize logging - configure via RUST_LOG env var
     logging::init();
 
     let cli = Cli::parse();
+
+    // Handle diagnose command
+    match cli.command {
+        Some(Commands::Diagnose { mission_id }) => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let discovery = config::discover_config(&cwd)?;
+            match discovery {
+                config::ConfigDiscoveryResult::Found(config) => {
+                    return cmd_diagnose(&mission_id, &config.specs_dir);
+                }
+                config::ConfigDiscoveryResult::NotFound { .. } => {
+                    config::print_config_error();
+                    bail!("No .tesaki/config.toml found");
+                }
+            }
+        }
+        None => {}
+    }
+
     let log_path = std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from);
     // Use Off mode for cleaner REPL output - state is shown in summary
     let logger = logging::JsonlLogger::new_with_console(
         log_path,
         logging::ConsoleMode::Off,
     );
-    
+
     if let Some(iterations) = cli.r#loop {
         // Autonomous mode: run loop directly without REPL
         repl::run_loop_headless(
@@ -1739,6 +1858,38 @@ fn run_run(
             return Ok(());
         }
 
+        // Check surface policy violations
+        let violations = crate::base_runner::check_surface_violations(
+            &changes.changed_files,
+            &surface_definitions.spec.patterns,
+            &surface_definitions.tests_bindings.patterns,
+            &surface_definitions.sut.patterns,
+            surface_policy.spec == crate::surface_policy::SurfaceLock::Unlocked,
+            surface_policy.tests_bindings == crate::surface_policy::SurfaceLock::Unlocked,
+            surface_policy.sut == crate::surface_policy::SurfaceLock::Unlocked,
+        );
+
+        if !violations.is_empty() {
+            eprintln!("  ⚠️  Surface policy violations detected:");
+            for v in &violations {
+                eprintln!("      - {}", v);
+            }
+            // Roll back changes
+            let _ = Command::new("git")
+                .args(["checkout", "--", "."])
+                .current_dir(&spec_root)
+                .output();
+
+            let details = format!("Surface policy violation: {}", violations.join(", "));
+            let failed_path = mission.preserve_failed()?;
+            let result = RunResult::error(StopReason::PolicyViolation, details.clone())
+                .with_mission_path(failed_path.display().to_string())
+                .with_missions(attempts_made);
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::PolicyViolation, Some(details));
+            return Ok(());
+        }
+
         // Step 6: Validate via namako gate --json
         eprintln!("[6/6] Validating (namako gate --json)...");
 
@@ -2823,6 +2974,7 @@ fn stop_reason_label(reason: stop_reason::StopReason) -> &'static str {
         stop_reason::StopReason::NoProgress => "NO_PROGRESS",
         stop_reason::StopReason::GateFailed => "GATE_FAILED",
         stop_reason::StopReason::RateLimited => "RATE_LIMITED",
+        stop_reason::StopReason::PolicyViolation => "POLICY_VIOLATION",
     }
 }
 
@@ -3173,5 +3325,30 @@ mod tests {
                 },
             }),
         }
+    }
+
+    /// Test surface violation detection
+    #[test]
+    fn test_surface_violation_triggers_rollback() {
+        use crate::base_runner::check_surface_violations;
+
+        let changed = vec!["features/test.feature".to_string()];
+        let spec_patterns = vec!["features/**/*.feature".to_string()];
+        let tests_patterns = vec!["tests/**/*.rs".to_string()];
+        let sut_patterns = vec!["src/**/*.rs".to_string()];
+
+        // Spec is LOCKED, but a feature file changed
+        let violations = check_surface_violations(
+            &changed,
+            &spec_patterns,
+            &tests_patterns,
+            &sut_patterns,
+            false, // spec locked
+            true,  // tests unlocked
+            true,  // sut unlocked
+        );
+
+        assert!(!violations.is_empty());
+        assert!(violations[0].contains("spec surface LOCKED"));
     }
 }

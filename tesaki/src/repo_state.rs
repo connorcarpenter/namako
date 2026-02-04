@@ -377,6 +377,10 @@ pub struct RepoState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub promotion_candidates: Vec<PromotionCandidateSummary>,
 
+    /// Full review packet for deferred scenario lookup.
+    #[serde(skip)]
+    pub review: Option<ReviewPacket>,
+
     // -------------------------------------------------------------------------
     // Candidate tasks (derived)
     // -------------------------------------------------------------------------
@@ -499,6 +503,7 @@ impl RepoState {
             coverage_ambiguity,
             coverage_assessment,
             promotion_candidates,
+            review: Some(review.clone()),
             candidate_tasks,
             current_identity,
             baseline_identity,
@@ -585,6 +590,28 @@ impl RepoState {
 
     pub fn coverage_is_ambiguous(&self) -> bool {
         !self.coverage_ambiguity.is_empty()
+    }
+
+    /// Returns deferred scenario names that could be promoted for a given feature/rule.
+    pub fn deferred_scenarios_for_rule(&self, feature_path: &str, rule_name: &str) -> Vec<String> {
+        self.review
+            .as_ref()
+            .map(|r| {
+                r.deferred_items
+                    .iter()
+                    .filter(|d| d.feature_path == feature_path && d.rule_name == rule_name)
+                    .map(|d| d.scenario_name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Returns true if there are any deferred scenarios in the repo.
+    pub fn has_deferred_scenarios(&self) -> bool {
+        self.review
+            .as_ref()
+            .map(|r| !r.deferred_items.is_empty())
+            .unwrap_or(false)
     }
 }
 

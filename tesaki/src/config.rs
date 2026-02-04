@@ -110,6 +110,15 @@ pub struct Config {
     /// Pre-gate build mode: auto (skip for spec-only), always, or never.
     #[serde(default)]
     pub pre_gate_build_mode: PreGateBuildMode,
+
+    /// Enable spec quality gates (placeholder step detection, domain noun check, etc.)
+    /// Default: true
+    #[serde(default = "default_quality_gates_enabled")]
+    pub quality_gates_enabled: bool,
+}
+
+fn default_quality_gates_enabled() -> bool {
+    true
 }
 
 /// Pre-gate build mode selection.
@@ -222,6 +231,9 @@ pub struct ResolvedConfig {
 
     /// Pre-gate build mode
     pub pre_gate_build_mode: PreGateBuildMode,
+
+    /// Enable spec quality gates
+    pub quality_gates_enabled: bool,
 }
 
 impl ResolvedConfig {
@@ -335,6 +347,7 @@ fn resolve_config(config: Config, config_root: &Path, config_path: &Path) -> Res
         model_overrides: config.model_overrides,
         pre_gate_build: config.pre_gate_build,
         pre_gate_build_mode: config.pre_gate_build_mode,
+        quality_gates_enabled: config.quality_gates_enabled,
     })
 }
 
@@ -631,5 +644,28 @@ patterns = ["tests/**"]
             }
             ConfigDiscoveryResult::NotFound { .. } => panic!("Expected to find config"),
         }
+    }
+
+    #[test]
+    fn test_quality_gates_disabled_skips_check() {
+        // Parse config with quality_gates_enabled = false
+        let toml = r#"
+            specs_dir = "test/specs"
+            adapter_cmd = "cargo run --"
+            quality_gates_enabled = false
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(!config.quality_gates_enabled);
+    }
+
+    #[test]
+    fn test_quality_gates_default_true() {
+        // Parse config without quality_gates_enabled field
+        let toml = r#"
+            specs_dir = "test/specs"
+            adapter_cmd = "cargo run --"
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.quality_gates_enabled);
     }
 }
