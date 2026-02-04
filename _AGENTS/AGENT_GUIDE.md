@@ -253,3 +253,112 @@ All implementation gaps from IMPL_PLAN.md are now closed:
 - Run `cargo test -p tesaki` to verify changes
 - Check `tesaki/src/*/tests` modules for patterns
 - Historical design context: `_WORKSPACE/ARCHIVE/GOLD_PLAN.md`
+
+---
+
+## Autonomous Flywheel Features (v2.0)
+
+**New in v2.0:** Tesaki now has self-improving autonomous capabilities that learn from failures and provide actionable guidance when stuck.
+
+### 1. Constraint-First Prompt Architecture
+
+**What it does:** Surfaces constraints are now displayed FIRST in every mission prompt, before the objective, making policy violations harder to trigger.
+
+**How it works:**
+- Every MISSION.md starts with a prominent `⚠️ CRITICAL CONSTRAINTS` block
+- Clear ✅ ALLOWED vs ❌ FORBIDDEN file lists
+- Explicit STOP directive if locked files are needed
+
+**For agents:** You'll see constraints at the top of every mission. Read them carefully before planning changes.
+
+### 2. Failure Memory
+
+**What it does:** When a mission fails due to policy violation, the NEXT mission sees what went wrong and what NOT to try again.
+
+**How it works:**
+- Surface violations are captured with violated files and surface names
+- Next mission gets a `⚠️ Previous Mission Failed` section
+- Explicitly lists which files are LOCKED and caused the failure
+- Provides guidance on alternative approaches
+
+**For agents:** If you see a "Previous Mission Failed" section, pay close attention. It tells you exactly what NOT to do.
+
+### 3. Persistent Lessons Database
+
+**What it does:** Learns from failures across SESSIONS. If an issue has been attempted before (even weeks ago), you'll see what was tried and what blocked progress.
+
+**How it works:**
+- Lessons stored in `.tesaki/lessons.json`
+- Each lesson tracks: failure mode, approaches tried, what blocked progress
+- Lessons are injected into mission context if targeting the same issue
+- Marked as resolved when issue is finally fixed
+
+**For agents:** You may see a `📚 Previous Attempts on This Issue` section. These are from PAST sessions, not just the current one. Avoid repeating these approaches.
+
+### 4. Intelligent Escalation
+
+**What it does:** When the loop stalls, provides clear options instead of just stopping.
+
+**How it works:**
+- Detects escalation types: policy blocking, repeated failure, no progress
+- Generates actionable options: unlock surface, skip issue, provide hint
+- Displays human-readable message with numbered choices
+
+**For agents:** N/A - this is for human operators when the loop gets stuck.
+
+### 5. Cost Tracking & Efficiency Alerts
+
+**What it does:** Tracks estimated cost in USD and calculates efficiency metrics (cost per issue resolved).
+
+**How it works:**
+- Estimates cost based on token usage and model pricing
+- Calculates cost per issue resolved
+- Rates efficiency: Excellent (<$5), Good ($5-15), Poor ($15-30), Critical (>$30)
+- Displays warnings if efficiency is poor
+
+**For agents:** N/A - this is session-level reporting visible in summaries.
+
+### 6. Stall Diagnosis Reports
+
+**What it does:** When stopping, explains exactly WHY and WHAT to try next.
+
+**How it works:**
+- Analyzes session state, failure history, and stop reason
+- Generates detailed report: "What Happened", "Why It Stalled", "What To Try"
+- Saves to `.tesaki/last_stall_diagnosis.md`
+
+**For agents:** If you're asked to resume after a stall, check `.tesaki/last_stall_diagnosis.md` for context.
+
+### Configuration
+
+All flywheel features can be configured in `.tesaki/config.toml`:
+
+```toml
+# Enable/disable features
+enable_failure_memory = true       # Default: true
+enable_lessons = true               # Default: true
+enable_cost_tracking = true         # Default: true
+
+# Tuning parameters
+cost_alert_threshold_usd = 20.0    # Default: 20.0
+max_consecutive_failures = 2       # Default: 2
+```
+
+---
+
+## For Human Operators: Responding to Escalations
+
+When Tesaki escalates (e.g., "Surface policy blocking progress"), you have options:
+
+1. **Unlock a surface:** If the fix genuinely requires editing locked files
+   - Example: `tesaki --unlock-spec` or modify `config.toml`
+
+2. **Skip the issue:** If it's a known-hard problem
+   - Add to skip list or mark as requiring manual intervention
+
+3. **Provide a hint:** If the agent is missing context
+   - Add notes to `.tesaki/hints.md` or session context
+
+4. **Review lessons:** Check `.tesaki/lessons.json` to see what's been tried before
+
+**Pro tip:** Most escalations are due to surface policy being too strict. If the loop stalls repeatedly on the same issue with policy violations, consider unlocking the necessary surface temporarily.

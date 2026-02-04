@@ -113,6 +113,8 @@ pub struct FailureRecord {
     pub target: Option<String>,
     pub stop_reason: String,
     pub violated_files: Vec<String>,
+    pub violated_surface: Option<String>,
+    pub attempted_approach: Option<String>,
     pub timestamp: String,
 }
 
@@ -146,6 +148,9 @@ pub struct SessionState {
     /// How many times current target has failed.
     #[serde(default)]
     pub current_target_failures: u32,
+    /// Number of issues resolved this session.
+    #[serde(default)]
+    pub issues_resolved: u32,
 }
 
 fn extract_scenario_tag(message: &str) -> Option<String> {

@@ -238,6 +238,26 @@ pub struct SessionTokenStats {
     /// Stats per mission type
     #[serde(default)]
     pub by_mission_type: HashMap<String, MissionTypeStats>,
+    /// Estimated cost in USD
+    #[serde(default)]
+    pub estimated_cost_usd: f64,
+}
+
+// Pricing constants (per 1M tokens as of 2026)
+const OPUS_INPUT_COST_PER_1M: f64 = 15.0;
+const OPUS_OUTPUT_COST_PER_1M: f64 = 75.0;
+const SONNET_INPUT_COST_PER_1M: f64 = 3.0;
+const SONNET_OUTPUT_COST_PER_1M: f64 = 15.0;
+const HAIKU_INPUT_COST_PER_1M: f64 = 0.25;
+const HAIKU_OUTPUT_COST_PER_1M: f64 = 1.25;
+
+/// Efficiency rating based on cost per issue resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EfficiencyRating {
+    Excellent,
+    Good,
+    Poor,
+    Critical,
 }
 
 impl SessionTokenStats {
@@ -254,6 +274,15 @@ impl SessionTokenStats {
         self.total_premium_requests += stats.premium_requests;
         self.total_elapsed_seconds += stats.elapsed_seconds;
 
+        // Update cost estimate
+        if let Some(model) = &stats.model {
+            self.estimated_cost_usd += self.estimate_mission_cost(
+                stats.tokens_in,
+                stats.tokens_out,
+                model
+            );
+        }
+
         let entry = self.by_mission_type
             .entry(stats.mission_type.clone())
             .or_default();
@@ -261,6 +290,52 @@ impl SessionTokenStats {
         entry.tokens_in += stats.tokens_in;
         entry.tokens_out += stats.tokens_out;
         entry.premium_requests += stats.premium_requests;
+    }
+
+    /// Estimate cost for a single mission based on model and token counts.
+    fn estimate_mission_cost(&self, tokens_in: u64, tokens_out: u64, model: &str) -> f64 {
+        let model_lower = model.to_lowercase();
+        let (input_cost, output_cost) = if model_lower.contains("opus") {
+            (OPUS_INPUT_COST_PER_1M, OPUS_OUTPUT_COST_PER_1M)
+        } else if model_lower.contains("sonnet") {
+            (SONNET_INPUT_COST_PER_1M, SONNET_OUTPUT_COST_PER_1M)
+        } else if model_lower.contains("haiku") {
+            (HAIKU_INPUT_COST_PER_1M, HAIKU_OUTPUT_COST_PER_1M)
+        } else {
+            // Default to Sonnet pricing for unknown models
+            (SONNET_INPUT_COST_PER_1M, SONNET_OUTPUT_COST_PER_1M)
+        };
+
+        let cost = (tokens_in as f64 / 1_000_000.0) * input_cost
+                 + (tokens_out as f64 / 1_000_000.0) * output_cost;
+        cost
+    }
+
+    /// Calculate cost per issue resolved.
+    pub fn cost_per_issue(&self, issues_resolved: u32) -> Option<f64> {
+        if issues_resolved == 0 {
+            None
+        } else {
+            Some(self.estimated_cost_usd / issues_resolved as f64)
+        }
+    }
+
+    /// Get efficiency rating based on cost per issue.
+    pub fn efficiency_rating(&self, issues_resolved: u32) -> EfficiencyRating {
+        match self.cost_per_issue(issues_resolved) {
+            None => EfficiencyRating::Good, // No issues resolved yet, neutral rating
+            Some(cost) => {
+                if cost < 5.0 {
+                    EfficiencyRating::Excellent
+                } else if cost < 15.0 {
+                    EfficiencyRating::Good
+                } else if cost < 30.0 {
+                    EfficiencyRating::Poor
+                } else {
+                    EfficiencyRating::Critical
+                }
+            }
+        }
     }
 
     /// Check if any missions were recorded.
@@ -312,11 +387,39 @@ impl SessionTokenStats {
             format_tokens(self.total_tokens_out)
         ).unwrap();
         writeln!(out, "Premium requests: {}", self.total_premium_requests).unwrap();
+        
+        // Cost tracking
+        if self.estimated_cost_usd > 0.0 {
+            writeln!(out, "Estimated cost: ${:.2}", self.estimated_cost_usd).unwrap();
+        }
 
         if self.missions_completed > 0 && initial_issues > final_issues {
             let issues_resolved = initial_issues - final_issues;
             let premium_per_issue = self.total_premium_requests as f64 / issues_resolved as f64;
             writeln!(out, "Avg premium requests per issue resolved: {:.2}", premium_per_issue).unwrap();
+            
+            // Cost per issue and efficiency rating
+            if let Some(cost_per_issue) = self.cost_per_issue(issues_resolved as u32) {
+                writeln!(out, "Cost per issue: ${:.2}", cost_per_issue).unwrap();
+                
+                let rating = self.efficiency_rating(issues_resolved as u32);
+                let rating_str = match rating {
+                    EfficiencyRating::Excellent => "Excellent ✨",
+                    EfficiencyRating::Good => "Good ✓",
+                    EfficiencyRating::Poor => "Poor ⚠️",
+                    EfficiencyRating::Critical => "Critical ❌",
+                };
+                writeln!(out, "Efficiency: {}", rating_str).unwrap();
+                
+                // Warning for poor efficiency
+                if matches!(rating, EfficiencyRating::Poor | EfficiencyRating::Critical) {
+                    writeln!(out).unwrap();
+                    writeln!(out, "⚠️  WARNING: Cost efficiency is {}.", 
+                        if matches!(rating, EfficiencyRating::Critical) { "critically low" } else { "below target" }
+                    ).unwrap();
+                    writeln!(out, "   Consider reviewing mission selection or surface policy.").unwrap();
+                }
+            }
         }
 
         out
@@ -599,5 +702,71 @@ Total code changes: +10 -9 Breakdown by AI model:
         assert_eq!(extract_model_tier("claude-haiku-3"), "haiku");
         assert_eq!(extract_model_tier("gpt-4-turbo"), "gpt-4");
         assert_eq!(extract_model_tier("unknown-model"), "model");
+    }
+
+    #[test]
+    fn test_cost_estimation_opus() {
+        let mut stats = SessionTokenStats::default();
+        let mission = MissionTokenStats {
+            mission_type: "Test".to_string(),
+            tokens_in: 1_000_000,
+            tokens_out: 100_000,
+            tokens_cached: 0,
+            premium_requests: 1,
+            model: Some("claude-opus-4.5".to_string()),
+            elapsed_seconds: 60.0,
+        };
+        stats.record_mission(&mission, true);
+        
+        // Expected: (1M / 1M) * $15 + (100k / 1M) * $75 = $15 + $7.5 = $22.5
+        assert!((stats.estimated_cost_usd - 22.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_cost_estimation_sonnet() {
+        let mut stats = SessionTokenStats::default();
+        let mission = MissionTokenStats {
+            mission_type: "Test".to_string(),
+            tokens_in: 1_000_000,
+            tokens_out: 100_000,
+            tokens_cached: 0,
+            premium_requests: 1,
+            model: Some("claude-sonnet-4".to_string()),
+            elapsed_seconds: 60.0,
+        };
+        stats.record_mission(&mission, true);
+        
+        // Expected: (1M / 1M) * $3 + (100k / 1M) * $15 = $3 + $1.5 = $4.5
+        assert!((stats.estimated_cost_usd - 4.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_cost_per_issue() {
+        let mut stats = SessionTokenStats::default();
+        stats.estimated_cost_usd = 45.0;
+        
+        assert_eq!(stats.cost_per_issue(0), None);
+        assert_eq!(stats.cost_per_issue(3).unwrap(), 15.0);
+        assert_eq!(stats.cost_per_issue(9).unwrap(), 5.0);
+    }
+
+    #[test]
+    fn test_efficiency_rating() {
+        let mut stats = SessionTokenStats::default();
+        
+        stats.estimated_cost_usd = 4.0;
+        assert_eq!(stats.efficiency_rating(1), EfficiencyRating::Excellent);
+        
+        stats.estimated_cost_usd = 10.0;
+        assert_eq!(stats.efficiency_rating(1), EfficiencyRating::Good);
+        
+        stats.estimated_cost_usd = 25.0;
+        assert_eq!(stats.efficiency_rating(1), EfficiencyRating::Poor);
+        
+        stats.estimated_cost_usd = 40.0;
+        assert_eq!(stats.efficiency_rating(1), EfficiencyRating::Critical);
+        
+        // No issues resolved - neutral rating
+        assert_eq!(stats.efficiency_rating(0), EfficiencyRating::Good);
     }
 }

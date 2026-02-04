@@ -31,6 +31,7 @@ env_logger = "0.11"
 
 # File system operations
 chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
 
 # Hashing for mission IDs
 blake3 = "1.5"

@@ -18,12 +18,14 @@
 
 mod binding_extractor;
 mod config;
+mod diagnosis;
 mod error_parser;
 mod escalation;
 mod gate;
 mod issue_classifier;
 mod chat_plan;
 mod chat_planner;
+mod lessons;
 mod logging;
 mod mission;
 mod mission_selector;

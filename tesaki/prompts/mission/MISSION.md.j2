@@ -89,6 +89,24 @@ Required context:
 {% endif %}
 {% endif %}
 
+{% if previous_lessons %}
+---
+
+## 📚 Previous Attempts on This Issue
+
+This issue has been attempted before in previous sessions. Learn from these past attempts:
+
+{% for lesson in previous_lessons %}
+### Attempt {{ loop.index }}
+- **Failure Mode:** {{ lesson.failure_mode }}
+- **Approaches Tried:** {{ lesson.approaches_tried | join(", ") }}
+{% if lesson.blocked_by %}- **Blocked By:** {{ lesson.blocked_by }}{% endif %}
+
+{% endfor %}
+
+**⚠️ DO NOT repeat these approaches.** Try something fundamentally different.
+{% endif %}
+
 {% if previous_mission %}
 ---
 

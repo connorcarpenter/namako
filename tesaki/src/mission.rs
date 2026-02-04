@@ -346,6 +346,7 @@ impl MissionBundle {
             budgets: BudgetsContext::from(budgets),
             version: TESAKI_VERSION.to_string(),
             previous_failure,
+            previous_lessons: None, // Will be populated by run_run
         };
 
         render_mission_md(&ctx).unwrap_or_else(|e| {

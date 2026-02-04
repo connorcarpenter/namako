@@ -102,11 +102,117 @@ Missions require concrete evidence:
 
 ---
 
+## Flywheel Features (v2.0)
+
+### Failure Memory
+
+When a mission fails due to policy violation:
+- Violated files and surfaces are captured
+- Next mission sees `⚠️ Previous Mission Failed` section
+- Clear guidance on what NOT to repeat
+
+**No configuration needed** - works automatically.
+
+### Persistent Lessons
+
+Cross-session learning via `.tesaki/lessons.json`:
+- Tracks: failure modes, approaches tried, what blocked progress
+- Auto-injected into missions targeting same issues
+- Marked resolved when issue is fixed
+
+**Configuration:**
+```toml
+enable_lessons = true  # Default: true
+```
+
+### Cost Tracking
+
+Session summaries now include:
+- Estimated cost in USD
+- Cost per issue resolved
+- Efficiency rating (Excellent/Good/Poor/Critical)
+- Warnings for poor efficiency
+
+**Configuration:**
+```toml
+enable_cost_tracking = true          # Default: true
+cost_alert_threshold_usd = 20.0      # Default: 20.0
+```
+
+### Intelligent Escalation
+
+When the loop stalls, Tesaki provides actionable options:
+- Detect why: policy blocking, repeated failure, no progress
+- Suggest actions: unlock surface, skip issue, provide hint
+- Display numbered choices
+
+**Configuration:**
+```toml
+max_consecutive_failures = 2  # Default: 2
+```
+
+### Stall Diagnosis Reports
+
+On stop, generates `.tesaki/last_stall_diagnosis.md` with:
+- What Happened (attempts, approaches tried)
+- Why It Stalled (blocking factors)
+- What To Try (actionable recommendations)
+
+**Always enabled** - saved automatically on non-success exits.
+
+---
+
+## Interpreting Escalation Prompts
+
+If you see an escalation message like:
+```
+🚧 HUMAN INTERVENTION REQUIRED
+
+Situation: Agent blocked by surface policy
+Blocker: spec surface is locked
+
+Options:
+1. Unlock spec surface
+2. Skip this issue
+```
+
+**How to respond:**
+
+1. **Option 1: Unlock surface**
+   - Edit `.tesaki/config.toml`, add/modify surfaces config
+   - Or run with flag: `tesaki --loop 5 --unlock-spec`
+
+2. **Option 2: Skip issue**
+   - Note the issue key (e.g., `feature:auth:login`)
+   - Add to skip list or mark as manual-only
+
+3. **Option 3: Provide hint** (if applicable)
+   - Create `.tesaki/hints.md` with context
+   - Or modify spec to be clearer
+
+**When to unlock a surface:**
+- The fix genuinely requires editing that surface
+- You're confident the change is safe
+- Temporary unlock for specific issue is acceptable
+
+**When to skip:**
+- Known-hard problem requiring human expertise
+- Requires external system changes
+- Out of scope for current work
+
+---
+
 ## Debugging
 
 ```bash
 # Check mission details
 tesaki diagnose M-abc123
+
+# Review lessons database
+cat .tesaki/lessons.json | jq
+
+# Read last stall diagnosis
+cat .tesaki/last_stall_diagnosis.md
 
 # Validate tooling
 cd namako/
@@ -122,6 +228,19 @@ cargo test -p tesaki
 | `auto` | Skip for spec-only missions (Tests/SUT locked) |
 | `always` | Run build check every mission |
 | `never` | Skip build check entirely |
+
+---
+
+## New Configuration Options (v2.0)
+
+```toml
+# Flywheel features
+enable_failure_memory = true         # Default: true
+enable_lessons = true                 # Default: true
+enable_cost_tracking = true           # Default: true
+cost_alert_threshold_usd = 20.0      # Alert if >$20 with no progress
+max_consecutive_failures = 2         # Escalate after N failures
+```
 
 ---
 

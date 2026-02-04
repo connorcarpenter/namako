@@ -219,6 +219,8 @@ pub struct MissionContext {
     pub version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_failure: Option<PreviousFailureContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_lessons: Option<Vec<LessonContext>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -238,6 +240,15 @@ pub struct PreviousFailureContext {
     /// Brief description of what was attempted
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attempted_approach: Option<String>,
+}
+
+/// Context for a lesson to be displayed in mission prompts.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LessonContext {
+    pub failure_mode: String,
+    pub approaches_tried: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<String>,
 }
 
 /// Context for rendering POLICY.md.
@@ -961,6 +972,7 @@ mod tests {
             },
             version: TESAKI_VERSION.to_string(),
             previous_failure: None,
+            previous_lessons: None,
         };
 
         let result = render_mission_md(&ctx).unwrap();
@@ -1115,6 +1127,7 @@ mod tests {
             },
             version: TESAKI_VERSION.to_string(),
             previous_failure: None,
+            previous_lessons: None,
         };
 
         let result = render_mission_md(&ctx).unwrap();
@@ -1169,6 +1182,7 @@ mod tests {
             },
             version: TESAKI_VERSION.to_string(),
             previous_failure: None,
+            previous_lessons: None,
         };
 
         let result = render_mission_md(&ctx).unwrap();
@@ -1218,6 +1232,7 @@ mod tests {
             },
             version: TESAKI_VERSION.to_string(),
             previous_failure: None,
+            previous_lessons: None,
         };
 
         let result = render_mission_md(&ctx).unwrap();

@@ -115,10 +115,47 @@ pub struct Config {
     /// Default: true
     #[serde(default = "default_quality_gates_enabled")]
     pub quality_gates_enabled: bool,
+    
+    /// Enable failure memory across missions (Phase 2)
+    /// Default: true
+    #[serde(default = "default_true")]
+    pub enable_failure_memory: bool,
+    
+    /// Enable persistent lessons database (Phase 6)
+    /// Default: true
+    #[serde(default = "default_true")]
+    pub enable_lessons: bool,
+    
+    /// Enable cost tracking and efficiency alerts (Phase 5)
+    /// Default: true
+    #[serde(default = "default_true")]
+    pub enable_cost_tracking: bool,
+    
+    /// Cost alert threshold in USD (Phase 5)
+    /// Default: 20.0
+    #[serde(default = "default_cost_alert_threshold")]
+    pub cost_alert_threshold_usd: f64,
+    
+    /// Maximum consecutive failures before escalation (Phase 4)
+    /// Default: 2
+    #[serde(default = "default_max_consecutive_failures")]
+    pub max_consecutive_failures: u32,
 }
 
 fn default_quality_gates_enabled() -> bool {
     true
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_cost_alert_threshold() -> f64 {
+    20.0
+}
+
+fn default_max_consecutive_failures() -> u32 {
+    2
 }
 
 /// Pre-gate build mode selection.
@@ -667,5 +704,38 @@ patterns = ["tests/**"]
         "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.quality_gates_enabled);
+    }
+    
+    #[test]
+    fn test_new_config_defaults() {
+        let toml = r#"
+            specs_dir = "test/specs"
+            adapter_cmd = "cargo run --"
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.enable_failure_memory);
+        assert!(config.enable_lessons);
+        assert!(config.enable_cost_tracking);
+        assert_eq!(config.cost_alert_threshold_usd, 20.0);
+        assert_eq!(config.max_consecutive_failures, 2);
+    }
+    
+    #[test]
+    fn test_new_config_overrides() {
+        let toml = r#"
+            specs_dir = "test/specs"
+            adapter_cmd = "cargo run --"
+            enable_failure_memory = false
+            enable_lessons = false
+            enable_cost_tracking = false
+            cost_alert_threshold_usd = 50.0
+            max_consecutive_failures = 5
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(!config.enable_failure_memory);
+        assert!(!config.enable_lessons);
+        assert!(!config.enable_cost_tracking);
+        assert_eq!(config.cost_alert_threshold_usd, 50.0);
+        assert_eq!(config.max_consecutive_failures, 5);
     }
 }
