@@ -35,7 +35,7 @@ use crate::writer::Coloring;
 /// ```rust
 /// # use std::time::Duration;
 /// #
-/// # use namako::{cli, World};
+/// # use namako_engine::{cli, World};
 /// # use futures::FutureExt as _;
 /// # use tokio::time;
 /// #
@@ -165,7 +165,7 @@ impl Colored for Empty {}
 /// This struct is especially useful, when implementing custom [`Writer`]
 /// wrapping another one:
 /// ```rust
-/// # use namako::{cli, event, parser, writer, Event, World, Writer};
+/// # use namako_engine::{cli, event, parser, writer, Event, World, Writer};
 /// #
 /// struct CustomWriter<Wr>(Wr);
 ///

@@ -73,8 +73,7 @@ Target repos need `.tesaki/config.toml`:
 ```toml
 specs_dir = "test/specs"
 adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
-runner = "copilot"       # or: claude, codex, mock, cmd
-planner = "copilot"      # or: claude, codex, mock
+agent = "copilot"        # primary agent for runner + planner
 max_retries = 0          # Recommended: don't retry
 max_cert_updates = 3
 max_runtime_seconds = 600
@@ -135,8 +134,8 @@ cargo run -p namako-cli -- --help
 
 ## Files to Read First
 
-1. `_WORKSPACE/PATH_FORWARD.md` - Canonical vision and next steps
+1. `_WORKSPACE/CURRENT_STATUS.md` - Current reality snapshot
 2. `_WORKSPACE/TODO.md` - Step-by-step implementation plan
-3. `_WORKSPACE/CURRENT_STATUS.md` - Current reality snapshot
+3. `_WORKSPACE/GOLD_PLAN.md` - Canonical architecture + constraints
 4. `tesaki/src/main.rs` - CLI entrypoint
 5. `tesaki/src/repl.rs` - Interactive session logic

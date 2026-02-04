@@ -105,7 +105,7 @@ async fn output_report_time() {
     );
 }
 
-#[derive(Clone, Default, namako::World)]
+#[derive(Clone, Default, namako_engine::World)]
 #[world(mut_ctx = WorldMut<'a>, ref_ctx = WorldRef<'a>)]
 struct World(Cell<usize>);
 

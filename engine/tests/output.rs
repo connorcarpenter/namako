@@ -15,7 +15,7 @@ struct WorldRef<'a>(&'a World);
 impl<'a> WorldMut<'a> { fn new(world: &'a mut World) -> Self { Self(world) } }
 impl<'a> WorldRef<'a> { fn new(world: &'a World) -> Self { Self(world) } }
 
-#[derive(Debug, Default, namako::World)]
+#[derive(Debug, Default, namako_engine::World)]
 #[world(mut_ctx = WorldMut<'a>, ref_ctx = WorldRef<'a>)]
 struct World(RefCell<usize>);
 

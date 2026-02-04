@@ -303,7 +303,7 @@ impl<T> Ext for T {
 /// [`Writer`]s, the code won't compile because of the wrong pipelining order.
 ///
 /// ```rust,compile_fail
-/// # use namako::{writer, World, WriterExt as _};
+/// # use namako_engine::{writer, World, WriterExt as _};
 /// #
 /// # #[derive(Debug, Default, World)]
 /// # struct MyWorld;
@@ -324,7 +324,7 @@ impl<T> Ext for T {
 /// ```
 ///
 /// ```rust,compile_fail
-/// # use namako::{writer, World, WriterExt as _};
+/// # use namako_engine::{writer, World, WriterExt as _};
 /// #
 /// # #[derive(Debug, Default, World)]
 /// # struct MyWorld;
@@ -347,7 +347,7 @@ impl<T> Ext for T {
 /// ```rust
 /// # use std::panic::AssertUnwindSafe;
 /// #
-/// # use namako::{writer, World, WriterExt as _};
+/// # use namako_engine::{writer, World, WriterExt as _};
 /// # use futures::FutureExt as _;
 /// #
 /// # #[derive(Debug, Default, World)]

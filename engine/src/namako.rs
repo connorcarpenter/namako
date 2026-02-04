@@ -166,7 +166,7 @@ where
     ///
     /// Adjust [`Namako`] to re-output all the [`Skipped`] steps at the end:
     /// ```rust
-    /// # use namako::World;
+    /// # use namako_engine::World;
     /// #
     /// # #[derive(Debug, Default, World)]
     /// # struct MyWorld;
@@ -210,7 +210,7 @@ where
     ///
     /// Output with a regular [`Namako::fail_on_skipped()`]:
     /// ```rust,should_panic
-    /// # use namako::World;
+    /// # use namako_engine::World;
     /// #
     /// # #[derive(Debug, Default, World)]
     /// # struct MyWorld;
@@ -231,7 +231,7 @@ where
     ///
     /// Adjust [`Namako`] to re-output all the [`Failed`] steps at the end:
     /// ```rust,should_panic
-    /// # use namako::World;
+    /// # use namako_engine::World;
     /// #
     /// # #[derive(Debug, Default, World)]
     /// # struct MyWorld;
@@ -275,7 +275,7 @@ where
     ///
     /// Output with a regular [`Namako::fail_on_skipped()`]:
     /// ```rust,should_panic
-    /// # use namako::World;
+    /// # use namako_engine::World;
     /// # use futures::FutureExt as _;
     /// #
     /// # #[derive(Debug, Default, World)]
@@ -298,7 +298,7 @@ where
     /// Adjust [`Namako`] to re-output all the [`Failed`] steps ta the end by
     /// providing a custom `filter` predicate:
     /// ```rust,should_panic
-    /// # use namako::World;
+    /// # use namako_engine::World;
     /// #
     /// # #[derive(Debug, Default, World)]
     /// # struct MyWorld;
@@ -307,7 +307,7 @@ where
     /// # async fn main() {
     /// MyWorld::namako()
     ///     .repeat_if(|ev| {
-    ///         use namako::event::{
+    ///         use namako_engine::event::{
     ///             Namako, Feature, Rule, Scenario, Step,
     ///         };
     ///
@@ -380,7 +380,7 @@ where
     ///
     /// To fail all the [`Skipped`] steps setup [`Namako`] like this:
     /// ```rust,should_panic
-    /// # use namako::World;
+    /// # use namako_engine::World;
     /// #
     /// # #[derive(Debug, Default, World)]
     /// # struct MyWorld;
@@ -450,7 +450,7 @@ where
     /// Adjust [`Namako`] to fail on all [`Skipped`] steps, but the ones
     /// marked with a `@dog` tag:
     /// ```rust,should_panic
-    /// # use namako::World;
+    /// # use namako_engine::World;
     /// #
     /// # #[derive(Debug, Default, World)]
     /// # struct MyWorld;
@@ -562,7 +562,7 @@ where
     /// ```rust
     /// # use std::time::Duration;
     /// #
-    /// # use namako::{cli, World};
+    /// # use namako_engine::{cli, World};
     /// # use futures::FutureExt as _;
     /// # use tokio::time;
     /// #
@@ -644,7 +644,7 @@ where
     ///
     /// Adjust [`Namako`] to run only [`Scenario`]s marked with `@cat` tag:
     /// ```rust
-    /// # use namako::World;
+    /// # use namako_engine::World;
     /// #
     /// # #[derive(Debug, Default, World)]
     /// # struct MyWorld;
@@ -993,7 +993,7 @@ where
     ///
     /// Adjust [`Namako`] to run only [`Scenario`]s marked with `@cat` tag:
     /// ```rust
-    /// # use namako::World;
+    /// # use namako_engine::World;
     /// #
     /// # #[derive(Debug, Default, World)]
     /// # struct MyWorld;

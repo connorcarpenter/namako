@@ -42,7 +42,7 @@ pub const IMPL_HASH_SCHEME: &str = "token-fingerprint-v1|blake3-256-lowerhex";
 /// # Examples
 ///
 /// ```
-/// use namako::npap::normalize_string;
+/// use namako_engine::npap::normalize_string;
 ///
 /// assert_eq!(normalize_string("hello\r\nworld"), "hello\nworld");
 /// assert_eq!(normalize_string("café"), "café"); // NFC normalized
@@ -94,7 +94,7 @@ fn normalize_newlines(s: &str) -> String {
 /// # Examples
 ///
 /// ```
-/// use namako::npap::canonical_json_encode;
+/// use namako_engine::npap::canonical_json_encode;
 /// use serde_json::json;
 ///
 /// let value = json!({"z": 1, "a": 2, "m": null});
@@ -181,7 +181,7 @@ fn canonicalize_value(value: Value) -> Result<Value, CanonicalJsonError> {
 /// # Examples
 ///
 /// ```
-/// use namako::npap::blake3_256_lowerhex;
+/// use namako_engine::npap::blake3_256_lowerhex;
 ///
 /// let hash = blake3_256_lowerhex(b"hello");
 /// assert_eq!(hash.len(), 64);
@@ -218,7 +218,7 @@ pub fn blake3_256_lowerhex_normalized(s: &str) -> String {
 /// # Examples
 ///
 /// ```
-/// use namako::npap::generate_binding_id;
+/// use namako_engine::npap::generate_binding_id;
 ///
 /// let id = generate_binding_id("Given", "a server is running");
 /// assert_eq!(id.len(), 64);
@@ -248,7 +248,7 @@ pub fn generate_binding_id(kind: &str, expression: &str) -> String {
 /// # Examples
 ///
 /// ```
-/// use namako::npap::compute_feature_fingerprint;
+/// use namako_engine::npap::compute_feature_fingerprint;
 ///
 /// let files = vec![
 ///     ("specs/features/a.feature", "Feature: A\n"),
@@ -308,7 +308,7 @@ struct FileFingerprint {
 /// # Examples
 ///
 /// ```
-/// use namako::npap::derive_scenario_key;
+/// use namako_engine::npap::derive_scenario_key;
 ///
 /// let key = derive_scenario_key("specs/features/smoke/test.feature", 10);
 /// assert_eq!(key, "specs/features/smoke/test.feature:L10");
@@ -1006,12 +1006,14 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
+    #[allow(deprecated)]
     fn test_derive_scenario_key() {
         let key = derive_scenario_key("specs/features/smoke/test.feature", 42);
         assert_eq!(key, "specs/features/smoke/test.feature:L42");
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_derive_scenario_key_path_normalization() {
         // Backslashes should be converted
         let key = derive_scenario_key("specs\\features\\test.feature", 10);
@@ -1023,6 +1025,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_derive_scenario_outline_key() {
         let key = derive_scenario_outline_key("specs/auth/login.feature", 15, 0, 2);
         assert_eq!(key, "specs/auth/login.feature:L15:E0:R2");

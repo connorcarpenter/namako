@@ -86,6 +86,7 @@ pub struct ExpectedIssueFlow {
     /// If true, SUT issues may increase (e.g., new bindings make tests run and fail)
     pub sut_increase_ok: bool,
     /// If true, spec issues may increase (e.g., normalization reveals gaps)
+    #[allow(dead_code)]
     pub spec_increase_ok: bool,
 }
 
@@ -99,6 +100,7 @@ pub struct MissionBrief {
 }
 
 /// Format binding exemplars as a markdown section for mission context.
+#[allow(dead_code)]
 fn format_binding_exemplars(exemplars: &[crate::prompts::BindingExemplar]) -> String {
     if exemplars.is_empty() {
         return String::new();
@@ -269,7 +271,7 @@ impl MissionType {
 
     pub fn generate_brief(&self, state: &RepoState) -> MissionBrief {
         match self {
-            Self::CreateMissingBindings { scenario_key, missing_steps: _ } => {
+            Self::CreateMissingBindings { .. } => {
                 // Collect ALL missing steps for comprehensive context (batching)
                 let all_missing: Vec<String> = state.binding_issues
                     .iter()
@@ -601,6 +603,7 @@ impl MissionType {
     /// The `steps_dir` parameter should point to the test steps directory
     /// (e.g., `test/tests/src/steps`), and `specs_dir` should point to the
     /// specs features directory (e.g., `test/specs/features`).
+    #[allow(dead_code)]
     pub fn generate_brief_with_exemplars(
         &self, 
         state: &RepoState, 

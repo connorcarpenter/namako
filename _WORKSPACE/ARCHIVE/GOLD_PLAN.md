@@ -1,5 +1,8 @@
 # GOLD_PLAN.md
 
+**Status (2026-02-04):** Implemented. This document is retained for historical/design reference.
+For day-to-day use, prefer `namako/_WORKSPACE/RUNBOOK.md` and `namako/_WORKSPACE/TODO.md`.
+
 ## The Authoritative Specification System for Naia
 
 ---

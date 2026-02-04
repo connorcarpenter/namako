@@ -29,6 +29,6 @@ impl<'a> WorldRef<'a> {
 }
 
 /// A simple, stateless World for basic tests.
-#[derive(Clone, Copy, Debug, Default, namako::World)]
+#[derive(Clone, Copy, Debug, Default, namako_engine::World)]
 #[world(mut_ctx = WorldMut<'a>, ref_ctx = WorldRef<'a>)]
 pub struct World;

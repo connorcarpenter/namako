@@ -63,7 +63,7 @@ where
     /// # Example
     ///
     /// ```rust
-    /// # use namako::{Namako, World as _};
+    /// # use namako_engine::{Namako, World as _};
     /// # use tracing_subscriber::{
     /// #     filter::LevelFilter,
     /// #     fmt::format::{self, Format},
@@ -71,7 +71,7 @@ where
     /// #     Layer,
     /// # };
     /// #
-    /// # #[derive(Debug, Default, namako::World)]
+    /// # #[derive(Debug, Default, namako_engine::World)]
     /// # struct World;
     /// #
     /// # let _ = async {

@@ -228,7 +228,7 @@ pub const fn str_eq(l: &str, r: &str) -> bool {
 /// # #[derive(Default)]
 /// # struct World;
 /// #
-/// impl namako::World for World {
+/// impl namako_engine::World for World {
 ///     type Error = anyhow::Error;
 ///     type MutCtx<'a> = &'a mut Self;
 ///     type RefCtx<'a> = &'a Self;
@@ -237,7 +237,7 @@ pub const fn str_eq(l: &str, r: &str) -> bool {
 ///     fn ctx_ref(&mut self) -> Self::RefCtx<'_> { self }
 ///
 ///     async fn new() -> Result<Self, Self::Error> {
-///         use namako::codegen::{
+///         use namako_engine::codegen::{
 ///             IntoWorldResult as _, ToWorldFuture as _,
 ///         };
 ///
@@ -298,7 +298,7 @@ where
 /// # #[derive(Default)]
 /// # struct World;
 /// #
-/// impl namako::World for World {
+/// impl namako_engine::World for World {
 ///     type Error = anyhow::Error;
 ///     type MutCtx<'a> = &'a mut Self;
 ///     type RefCtx<'a> = &'a Self;
@@ -307,7 +307,7 @@ where
 ///     fn ctx_ref(&mut self) -> Self::RefCtx<'_> { self }
 ///
 ///     async fn new() -> Result<Self, Self::Error> {
-///         use namako::codegen::{
+///         use namako_engine::codegen::{
 ///             IntoWorldResult as _, ToWorldFuture as _,
 ///         };
 ///

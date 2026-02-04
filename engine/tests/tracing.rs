@@ -86,6 +86,6 @@ async fn step(_: WorldMut, n: usize) {
     tracing::info!("in span: {n:?}");
 }
 
-#[derive(Clone, Debug, Default, Display, namako::World)]
+#[derive(Clone, Debug, Default, Display, namako_engine::World)]
 #[world(mut_ctx = WorldMut<'a>, ref_ctx = WorldRef<'a>)]
 struct World;

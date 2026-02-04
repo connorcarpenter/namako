@@ -940,7 +940,6 @@ fn run_autonomous_loop(
             println!("Outcome: DONE");
             // Clear skipped types on success (system recovered)
             skipped_types.clear();
-            consecutive_failures = 0;
             break;
         } else if made_progress {
             // Show mission-specific success message

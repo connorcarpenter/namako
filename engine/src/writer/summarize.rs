@@ -400,7 +400,7 @@ impl<Writer> Summarize<Writer> {
 /// # Example
 ///
 /// ```rust,compile_fail
-/// # use namako::{writer, World, WriterExt as _};
+/// # use namako_engine::{writer, World, WriterExt as _};
 /// #
 /// # #[derive(Debug, Default, World)]
 /// # struct MyWorld;
@@ -422,7 +422,7 @@ impl<Writer> Summarize<Writer> {
 /// ```rust
 /// # use std::panic::AssertUnwindSafe;
 /// #
-/// # use namako::{writer, World, WriterExt as _};
+/// # use namako_engine::{writer, World, WriterExt as _};
 /// # use futures::FutureExt as _;
 /// #
 /// # #[derive(Debug, Default, World)]

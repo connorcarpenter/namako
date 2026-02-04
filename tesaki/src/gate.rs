@@ -155,6 +155,7 @@ impl GateOutcome {
 }
 
 /// Detailed gate failure information for mission context.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateFailureDetails {
     /// The outcome classification
@@ -167,6 +168,7 @@ pub struct GateFailureDetails {
     pub errors: Vec<GateError>,
 }
 
+#[allow(dead_code)]
 impl GateFailureDetails {
     /// Extract failure details from a GateJson.
     pub fn from_gate(gate: &GateJson) -> Option<Self> {

@@ -17,6 +17,7 @@ use crate::prompts::BindingExemplar;
 /// Scans Rust files for step bindings (Given/When/Then macros) and extracts
 /// the step text and binding code. Returns exemplars sorted by relevance to
 /// the missing steps.
+#[allow(dead_code)]
 pub fn extract_binding_exemplars(
     steps_dir: &Path,
     missing_steps: &[String],
@@ -65,6 +66,7 @@ pub fn extract_binding_exemplars(
 }
 
 /// Parse binding functions from a Rust source file.
+#[allow(dead_code)]
 fn parse_bindings_from_file(path: &Path) -> Result<Vec<BindingExemplar>> {
     let content = fs::read_to_string(path)?;
     let file_path = path.file_name()
@@ -89,8 +91,6 @@ fn parse_bindings_from_content(content: &str, file_path: &str) -> Result<Vec<Bin
     for cap in binding_re.captures_iter(content) {
         let macro_type = &cap[1];
         let step_text = &cap[2];
-        let fn_name = &cap[3];
-
         // Find the function body (simplified: take up to closing brace at same indentation)
         if let Some(start) = cap.get(0) {
             if let Some(body) = extract_function_body(&content[start.start()..]) {
@@ -143,6 +143,7 @@ fn extract_function_body(content: &str) -> Option<String> {
 }
 
 /// Calculate best similarity score between a binding's step text and any missing step.
+#[allow(dead_code)]
 fn best_similarity_score(binding_step: &str, missing_steps: &[String]) -> f32 {
     missing_steps
         .iter()

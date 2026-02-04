@@ -29,7 +29,7 @@ specs_dir = "test/specs"
 adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
 
 # Optional
-runner = "mock"
+agent = "copilot" # primary agent for runner + planner
 max_retries = 2
 max_cert_updates = 3
 max_runtime_seconds = 600
@@ -63,13 +63,14 @@ specs_dir = "test/specs"           # Path to specs directory
 adapter_cmd = "cargo run -p npa --" # Adapter command
 
 # Optional
-runner = "mock"                     # mock, cmd, or claude
-runner_cmd = "my-agent {mission_dir}" # For cmd runner
+agent = "copilot"                   # mock, claude, codex, or copilot
 max_retries = 2                     # Retry attempts
 max_cert_updates = 3                # Update-cert limit
 max_runtime_seconds = 600           # Runtime budget
 max_files_changed = 10              # File change limit
 ```
+
+Advanced overrides (runner/planner split, cmd runner, surface patterns) are supported but optional.
 
 ## Alternative: Direct Cargo Run
 
