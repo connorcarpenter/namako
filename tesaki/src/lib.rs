@@ -27,5 +27,6 @@ pub mod session;
 pub mod stage;
 pub mod stop_reason;
 pub mod surface_policy;
+pub mod spec_quality;
 pub mod token_usage;
 pub mod workspace;

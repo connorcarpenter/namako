@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use minijinja::{context, Environment, Value};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::mission::{MissionBudgets, SurfaceDefinitions};
 use crate::mission_type::MissionType;
@@ -215,7 +215,7 @@ pub struct MissionContext {
     pub previous_failure: Option<PreviousFailureContext>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PreviousFailureContext {
     pub mission_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -513,6 +513,17 @@ impl BriefContext {
                 failure_count: Some(state.last_run_failures.len()),
                 ..Default::default()
             },
+            MissionType::DraftSpecScenarios { feature_path, rule_name } => Self {
+                feature_path: Some(feature_path.clone()),
+                rule_name: rule_name.clone(),
+                ..Default::default()
+            },
+            MissionType::PromoteScenariosToExecutable { feature_path, scenario_name, rule_name } => Self {
+                feature_path: Some(feature_path.clone()),
+                rule_name: Some(rule_name.clone()),
+                scenario_name: Some(scenario_name.clone()),
+                ..Default::default()
+            },
         }
     }
 }
@@ -561,6 +572,8 @@ pub fn brief_template_name(mission_type: &MissionType) -> &'static str {
         MissionType::AssessSpecCoverage => "mission/briefs/assess_spec_coverage.md.j2",
         MissionType::ExplainState => "mission/briefs/explain_state.md.j2",
         MissionType::TriageFailures => "mission/briefs/triage_failures.md.j2",
+        MissionType::DraftSpecScenarios { .. } => "mission/briefs/add_clarify_scenario.md.j2",
+        MissionType::PromoteScenariosToExecutable { .. } => "mission/briefs/add_clarify_scenario.md.j2",
     }
 }
 

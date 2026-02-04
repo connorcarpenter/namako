@@ -66,6 +66,19 @@ pub enum MissionType {
     // Meta (no runner)
     ExplainState,
     TriageFailures,
+
+    // Draft / Promote (Phase 8)
+    /// Write @Deferred scenarios only — focus on coverage and clarity, not executability.
+    DraftSpecScenarios {
+        feature_path: String,
+        rule_name: Option<String>,
+    },
+    /// Take a @Deferred scenario and promote it to executable.
+    PromoteScenariosToExecutable {
+        feature_path: String,
+        scenario_name: String,
+        rule_name: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,6 +149,8 @@ impl MissionType {
             Self::AssessSpecCoverage => "AssessSpecCoverage",
             Self::ExplainState => "ExplainState",
             Self::TriageFailures => "TriageFailures",
+            Self::DraftSpecScenarios { .. } => "DraftSpecScenarios",
+            Self::PromoteScenariosToExecutable { .. } => "PromoteScenariosToExecutable",
         }
     }
 
@@ -146,7 +161,8 @@ impl MissionType {
             | Self::RefactorBindingsForClarity { .. } => MissionTypeCategory::Tests,
             Self::ImplementBehaviorForScenario { .. }
             | Self::FixRegressionFromGateFailure { .. } => MissionTypeCategory::Sut,
-            Self::RefineFeatureIntent { .. } | Self::AddOrClarifyScenario { .. } => MissionTypeCategory::Spec,
+            Self::RefineFeatureIntent { .. } | Self::AddOrClarifyScenario { .. }
+            | Self::DraftSpecScenarios { .. } | Self::PromoteScenariosToExecutable { .. } => MissionTypeCategory::Spec,
             Self::NormalizeIdentityTags { .. } => MissionTypeCategory::Structure,
             Self::SummarizeAndClose | Self::CleanupAfterSuccess | Self::AssessSpecCoverage => {
                 MissionTypeCategory::Finalize
@@ -162,7 +178,8 @@ impl MissionType {
             | Self::RefactorBindingsForClarity { .. } => SurfacePolicy::for_implement_tests(),
             Self::ImplementBehaviorForScenario { .. }
             | Self::FixRegressionFromGateFailure { .. } => SurfacePolicy::for_implement_sut(),
-            Self::RefineFeatureIntent { .. } | Self::AddOrClarifyScenario { .. } => SurfacePolicy::for_refine_spec(),
+            Self::RefineFeatureIntent { .. } | Self::AddOrClarifyScenario { .. }
+            | Self::DraftSpecScenarios { .. } | Self::PromoteScenariosToExecutable { .. } => SurfacePolicy::for_refine_spec(),
             Self::NormalizeIdentityTags { .. } => SurfacePolicy::for_structure_spec(),
             Self::SummarizeAndClose | Self::CleanupAfterSuccess | Self::AssessSpecCoverage => {
                 SurfacePolicy::for_finalize()
@@ -183,7 +200,8 @@ impl MissionType {
             Self::ImplementBehaviorForScenario { .. } | Self::FixRegressionFromGateFailure { .. } => {
                 vec![EvidenceChange::FailingScenarioDecreases]
             }
-            Self::RefineFeatureIntent { .. } | Self::AddOrClarifyScenario { .. } => {
+            Self::RefineFeatureIntent { .. } | Self::AddOrClarifyScenario { .. }
+            | Self::DraftSpecScenarios { .. } | Self::PromoteScenariosToExecutable { .. } => {
                 vec![EvidenceChange::CoverageIncreases]
             }
             Self::NormalizeIdentityTags { .. } => vec![EvidenceChange::CoverageIncreases],
@@ -202,6 +220,8 @@ impl MissionType {
             Self::FixRegressionFromGateFailure { failure } => Some(failure.scenario_key.clone()),
             Self::RefineFeatureIntent { feature_path } => Some(feature_path.clone()),
             Self::AddOrClarifyScenario { feature_path, .. } => Some(feature_path.clone()),
+            Self::DraftSpecScenarios { feature_path, .. } => Some(feature_path.clone()),
+            Self::PromoteScenariosToExecutable { scenario_name, .. } => Some(scenario_name.clone()),
             Self::NormalizeIdentityTags { feature_path, .. } => Some(feature_path.clone()),
             Self::StrengthenThenAssertions { scenario_key, .. } => Some(scenario_key.clone()),
             Self::RefactorBindingsForClarity { .. } => None,
@@ -223,6 +243,8 @@ impl MissionType {
             Self::RefineFeatureIntent { .. } => "opus",
             Self::FixRegressionFromGateFailure { .. } => "opus",
             Self::AssessSpecCoverage => "opus",
+            Self::DraftSpecScenarios { .. } => "sonnet",
+            Self::PromoteScenariosToExecutable { .. } => "sonnet",
 
             // Structured work with patterns
             Self::CreateMissingBindings { .. } => "sonnet",
@@ -249,7 +271,8 @@ impl MissionType {
     pub fn expected_issue_flow(&self) -> ExpectedIssueFlow {
         match self {
             // Spec missions: adding scenarios creates binding work
-            Self::AddOrClarifyScenario { .. } | Self::RefineFeatureIntent { .. } => {
+            Self::AddOrClarifyScenario { .. } | Self::RefineFeatureIntent { .. }
+            | Self::PromoteScenariosToExecutable { .. } => {
                 ExpectedIssueFlow {
                     binding_increase_ok: true,
                     sut_increase_ok: false,
@@ -591,6 +614,54 @@ impl MissionType {
                 context: format!("Failures: {}", state.last_run_failures.len()),
                 validation_criteria: vec![],
             },
+            Self::DraftSpecScenarios { feature_path, rule_name } => {
+                let target = if let Some(r) = rule_name {
+                    format!("{} ({})", feature_path, r)
+                } else {
+                    feature_path.clone()
+                };
+                MissionBrief {
+                    mission_type: self.clone(),
+                    title: format!("Draft deferred scenarios for {}", target),
+                    objective: "Write @Deferred scenarios that describe desired behaviour. \
+                        Focus on coverage and clarity — do NOT worry about step bindings or executability. \
+                        Tag every new scenario with @Deferred.".to_string(),
+                    context: format!(
+                        "Target: {}\n\n\
+                        Add @Deferred scenarios to rules that lack coverage. \
+                        Each scenario must have a clear Given/When/Then structure with domain-specific language. \
+                        Do NOT add new Rule blocks. Do NOT remove @Deferred from existing scenarios.",
+                        target
+                    ),
+                    validation_criteria: vec![
+                        "New @Deferred scenario(s) added".to_string(),
+                        "No new Rule blocks introduced".to_string(),
+                        "Each scenario uses domain language from the Rule header".to_string(),
+                    ],
+                }
+            }
+            Self::PromoteScenariosToExecutable { feature_path, scenario_name, rule_name } => {
+                MissionBrief {
+                    mission_type: self.clone(),
+                    title: format!("Promote '{}' to executable", scenario_name),
+                    objective: format!(
+                        "Promote the @Deferred scenario '{}' in rule '{}' to executable by either: \
+                        (a) rewording steps to match existing step bindings, or \
+                        (b) adding the required step bindings.",
+                        scenario_name, rule_name
+                    ),
+                    context: format!(
+                        "Feature: {}\nRule: {}\nScenario: {}\n\n\
+                        Remove the @Deferred tag. If steps don't match existing bindings, \
+                        reword them to match OR note which bindings are needed (Tesaki will follow up).",
+                        feature_path, rule_name, scenario_name
+                    ),
+                    validation_criteria: vec![
+                        format!("@Deferred removed from '{}'", scenario_name),
+                        "Steps match existing bindings OR missing bindings are clearly identified".to_string(),
+                    ],
+                }
+            }
         }
     }
 
@@ -746,5 +817,79 @@ mod tests {
         let mission = MissionType::SummarizeAndClose;
         let brief = mission.generate_brief(&state);
         assert!(brief.title.contains("Summarize"));
+    }
+
+    #[test]
+    fn draft_spec_scenarios_name_and_category() {
+        let m = MissionType::DraftSpecScenarios {
+            feature_path: "f.feature".into(),
+            rule_name: Some("R".into()),
+        };
+        assert_eq!(m.name(), "DraftSpecScenarios");
+        assert_eq!(m.category(), MissionTypeCategory::Spec);
+        assert_eq!(m.recommended_model(), "sonnet");
+        assert_eq!(m.target_label(), Some("f.feature".to_string()));
+    }
+
+    #[test]
+    fn promote_scenarios_name_and_category() {
+        let m = MissionType::PromoteScenariosToExecutable {
+            feature_path: "f.feature".into(),
+            scenario_name: "Promote me".into(),
+            rule_name: "R".into(),
+        };
+        assert_eq!(m.name(), "PromoteScenariosToExecutable");
+        assert_eq!(m.category(), MissionTypeCategory::Spec);
+        assert_eq!(m.recommended_model(), "sonnet");
+        assert_eq!(m.target_label(), Some("Promote me".to_string()));
+    }
+
+    #[test]
+    fn draft_spec_scenarios_issue_flow_no_binding_increase() {
+        let m = MissionType::DraftSpecScenarios {
+            feature_path: "f".into(),
+            rule_name: None,
+        };
+        let flow = m.expected_issue_flow();
+        assert!(!flow.binding_increase_ok);
+        assert!(!flow.sut_increase_ok);
+    }
+
+    #[test]
+    fn promote_scenarios_issue_flow_binding_increase_ok() {
+        let m = MissionType::PromoteScenariosToExecutable {
+            feature_path: "f".into(),
+            scenario_name: "s".into(),
+            rule_name: "r".into(),
+        };
+        let flow = m.expected_issue_flow();
+        assert!(flow.binding_increase_ok);
+    }
+
+    #[test]
+    fn draft_spec_scenarios_brief() {
+        let state = RepoState::default();
+        let m = MissionType::DraftSpecScenarios {
+            feature_path: "test.feature".into(),
+            rule_name: Some("Widget creation".into()),
+        };
+        let brief = m.generate_brief(&state);
+        assert!(brief.title.contains("Draft"));
+        assert!(brief.objective.contains("@Deferred"));
+        assert!(brief.context.contains("Widget creation"));
+    }
+
+    #[test]
+    fn promote_scenarios_brief() {
+        let state = RepoState::default();
+        let m = MissionType::PromoteScenariosToExecutable {
+            feature_path: "test.feature".into(),
+            scenario_name: "Create widget".into(),
+            rule_name: "Widget creation".into(),
+        };
+        let brief = m.generate_brief(&state);
+        assert!(brief.title.contains("Promote"));
+        assert!(brief.objective.contains("Create widget"));
+        assert!(brief.context.contains("@Deferred"));
     }
 }

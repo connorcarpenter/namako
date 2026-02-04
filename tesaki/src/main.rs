@@ -46,6 +46,7 @@ mod stage;
 mod stop_reason;
 mod surface_policy;
 mod token_usage;
+mod spec_quality;
 mod workspace;
 
 use anyhow::{Context, Result};
@@ -1420,16 +1421,22 @@ fn run_run(
         }
     }
 
-    let previous_failure = load_failure_record(&spec_root).and_then(|record| {
-        if record.matches(&mission_type) {
-            Some(crate::prompts::PreviousFailureContext {
-                mission_type: record.mission_type,
-                target: record.target,
-                stop_reason: record.stop_reason,
-                details: record.details,
-            })
-        } else {
-            None
+    let previous_failure = load_failure_record(&spec_root).map(|record| {
+        let mut details = record.details.clone();
+        // Append gate errors to details for concrete feedback
+        if let Some(ref errors) = record.gate_errors {
+            let errors_text = errors.join("\n");
+            details = Some(format!(
+                "{}\n\n**Gate errors:**\n{}",
+                details.unwrap_or_default(),
+                errors_text
+            ));
+        }
+        crate::prompts::PreviousFailureContext {
+            mission_type: record.mission_type,
+            target: record.target,
+            stop_reason: record.stop_reason,
+            details,
         }
     });
 
@@ -1989,7 +1996,8 @@ fn run_run(
                     .with_mission_path(failed_path.display().to_string())
                     .with_missions(attempts_made)
                     .with_cert_updates(cert_updates_made);
-                let _ = save_failure_record(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone());
+                let gate_errors = extract_gate_errors(&post_gate_json);
+                let _ = save_failure_record_with_errors(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone(), Some(gate_errors));
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Verify still failing after update-cert");
@@ -2013,7 +2021,8 @@ fn run_run(
                 let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed (lint or run)")
                     .with_mission_path(failed_path.display().to_string())
                     .with_missions(attempts_made);
-                let _ = save_failure_record(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone());
+                let gate_errors = extract_gate_errors(&post_gate_json);
+                let _ = save_failure_record_with_errors(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone(), Some(gate_errors));
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Post-run validation failed");
@@ -2387,11 +2396,14 @@ fn save_no_progress_record(
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
 struct FailureRecord {
     mission_type: String,
     target: Option<String>,
     stop_reason: String,
     details: Option<String>,
+    /// Top gate errors formatted for injection into next mission.
+    gate_errors: Option<Vec<String>>,
     timestamp_utc: String,
 }
 
@@ -2424,11 +2436,22 @@ fn save_failure_record(
     stop_reason: stop_reason::StopReason,
     details: Option<String>,
 ) -> Result<()> {
+    save_failure_record_with_errors(spec_root, mission_type, stop_reason, details, None)
+}
+
+fn save_failure_record_with_errors(
+    spec_root: &PathBuf,
+    mission_type: &crate::mission_type::MissionType,
+    stop_reason: stop_reason::StopReason,
+    details: Option<String>,
+    gate_errors: Option<Vec<String>>,
+) -> Result<()> {
     let record = FailureRecord {
         mission_type: mission_type.name().to_string(),
         target: mission_type.target_label(),
         stop_reason: stop_reason.to_string(),
         details,
+        gate_errors,
         timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
     };
     let path = last_failure_path(spec_root);
@@ -2438,6 +2461,44 @@ fn save_failure_record(
     let json = serde_json::to_string_pretty(&record)?;
     fs::write(path, json)?;
     Ok(())
+}
+
+/// Extract top gate errors from gate JSON for injection into failure feedback.
+/// Returns up to 5 concise error descriptions.
+fn extract_gate_errors(gate_json: &str) -> Vec<String> {
+    let gate: crate::gate::GateJson = match serde_json::from_str(gate_json) {
+        Ok(g) => g,
+        Err(_) => return vec!["Gate JSON parse error".to_string()],
+    };
+
+    let mut errors = Vec::new();
+    for phase in &[("lint", &gate.lint), ("run", &gate.run), ("verify", &gate.verify)] {
+        let (name, result) = phase;
+        if result.status == crate::gate::PhaseStatus::Fail {
+            if let Some(ref errs) = result.errors {
+                for err in errs.iter().take(3) {
+                    let loc = match (&err.file, err.line) {
+                        (Some(f), Some(l)) => format!("{}:{}: ", f, l),
+                        _ => String::new(),
+                    };
+                    if let Some(ref step) = err.step_text {
+                        errors.push(format!("[{}] {}Missing binding: `{}`", name, loc, step));
+                    } else {
+                        errors.push(format!("[{}] {}{}", name, loc, err.message));
+                    }
+                }
+            } else if let Some(ref reason) = result.reason {
+                errors.push(format!("[{}] {}", name, reason));
+            }
+        }
+        if errors.len() >= 5 {
+            break;
+        }
+    }
+    if errors.is_empty() {
+        errors.push("Gate failed (no details available)".to_string());
+    }
+    errors
 }
 
 fn clear_failure_record(spec_root: &PathBuf) {
@@ -2672,7 +2733,9 @@ fn has_progress(
                 || gate_improved
         }
         crate::mission_type::MissionType::NormalizeIdentityTags { .. }
-        | crate::mission_type::MissionType::RefineFeatureIntent { .. } => {
+        | crate::mission_type::MissionType::RefineFeatureIntent { .. }
+        | crate::mission_type::MissionType::DraftSpecScenarios { .. }
+        | crate::mission_type::MissionType::PromoteScenariosToExecutable { .. } => {
             post.spec_issues.len() < pre.spec_issues.len()
                 || post.structure_issues.len() < pre.structure_issues.len()
                 || gate_improved

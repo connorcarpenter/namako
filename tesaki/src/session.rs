@@ -121,6 +121,16 @@ pub struct SessionState {
     /// Initial issue count at session start (for summary calculation).
     #[serde(default)]
     pub initial_issue_count: usize,
+    /// Captured gate-failure details from the last mission (injected into next mission context).
+    /// Written by the headless loop; consumed by run_run via .tesaki/last_failure.json.
+    #[serde(default)]
+    pub last_gate_failure: Option<crate::prompts::PreviousFailureContext>,
+    /// Number of regressions detected this session.
+    #[serde(default)]
+    pub regression_count: u32,
+    /// Number of policy violations detected this session.
+    #[serde(default)]
+    pub policy_violation_count: u32,
 }
 
 fn extract_scenario_tag(message: &str) -> Option<String> {

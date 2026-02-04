@@ -977,6 +977,30 @@ fn run_autonomous_loop(
                 println!("   (Unblocking previously skipped mission types)");
                 skipped_types.clear();
             }
+            // Phase 6: Spec quality gate — check feature file after scenario addition
+            if let MissionType::AddOrClarifyScenario { ref feature_path, .. } = mission_type {
+                let feature_file = spec_root.join(feature_path);
+                if let Ok(content) = std::fs::read_to_string(&feature_file) {
+                    let quality = crate::spec_quality::check_feature_quality(feature_path, &content);
+                    if !quality.passed {
+                        println!("⚠️  Spec quality violations detected:");
+                        println!("{}", quality.to_markdown());
+                        // Roll back the bad scenarios
+                        if let Some(snapshot) = before_feature_snapshot.as_ref() {
+                            if let Err(err) = restore_feature_snapshot(spec_root, feature_path, snapshot) {
+                                println!("⚠️  Failed to restore feature after quality violation: {}", err);
+                            } else {
+                                println!("↩️  Restored feature file after spec quality violation");
+                            }
+                        }
+                        stall_count += 1;
+                        println!("Outcome: QUALITY_VIOLATION");
+                        last_mission_type = Some(type_name.clone());
+                        println!();
+                        continue;
+                    }
+                }
+            }
             if matches!(mission_type, MissionType::AddOrClarifyScenario { .. }) && scenarios_added {
                 if after_binding > 0 {
                     chained_stage = Some(Stage::ImplementTests);
@@ -1005,6 +1029,15 @@ fn run_autonomous_loop(
             }
         } else if adjusted_delta > 0 {
             // Regression: adjusted delta is positive (accounting for expected SDD flow)
+            // Roll back changes in spec repo
+            let rollback_ok = rollback_spec_changes(spec_root);
+            if rollback_ok {
+                println!("↩️  Rolled back spec changes (regression of +{} adjusted issues)", adjusted_delta);
+            } else {
+                println!("⚠️  Rollback skipped (workspace dirty or git unavailable)");
+            }
+            session.regression_count += 1;
+
             // Track consecutive failures for regression too
             if last_mission_type.as_ref() == Some(&type_name) {
                 consecutive_failures += 1;
@@ -1069,12 +1102,25 @@ fn run_autonomous_loop(
             final_issues,
             session_duration
         ));
+        if session.regression_count > 0 || session.policy_violation_count > 0 || !skipped_types.is_empty() {
+            println!("Regressions: {} | Policy violations: {} | Skipped types: [{}]",
+                session.regression_count,
+                session.policy_violation_count,
+                skipped_types.join(", "));
+        }
     } else {
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!("AUTONOMOUS LOOP FINISHED");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         if let Some(summary) = &session.last_repo_state_summary {
             println!("Final state: {}", summary);
+        }
+        // Session-level quality metrics
+        if session.regression_count > 0 || session.policy_violation_count > 0 || !skipped_types.is_empty() {
+            println!("Regressions: {} | Policy violations: {} | Skipped types: [{}]",
+                session.regression_count,
+                session.policy_violation_count,
+                skipped_types.join(", "));
         }
     }
     
@@ -1186,4 +1232,36 @@ fn read_latest_token_usage(spec_root: &Path) -> Option<TokenUsage> {
     
     let content = std::fs::read_to_string(&token_path).ok()?;
     serde_json::from_str(&content).ok()
+}
+
+/// Roll back uncommitted changes in the spec repo using git.
+/// Returns false if the workspace is dirty with user changes before the mission
+/// (i.e., we don't have a clean baseline to roll back to) or if git fails.
+fn rollback_spec_changes(spec_root: &Path) -> bool {
+    // Only roll back if git is available and there are changes
+    let status = std::process::Command::new("git")
+        .arg("status")
+        .arg("--porcelain")
+        .current_dir(spec_root)
+        .output();
+
+    match status {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.trim().is_empty() {
+                // Nothing to roll back
+                return true;
+            }
+            // Perform rollback
+            let checkout = std::process::Command::new("git")
+                .arg("checkout")
+                .arg("--")
+                .arg(".")
+                .current_dir(spec_root)
+                .output();
+
+            matches!(checkout, Ok(o) if o.status.success())
+        }
+        _ => false, // git not available
+    }
 }

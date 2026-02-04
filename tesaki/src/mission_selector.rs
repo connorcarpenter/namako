@@ -1,7 +1,7 @@
 //! Mission type selection logic for Tesaki v1.8.
 
 use crate::mission_type::{MissionType, MissionTypeCategory};
-use crate::repo_state::{BindingIssueKind, RepoState, SpecIssueKind};
+use crate::repo_state::{BindingIssueKind, RepoState, SpecIssueKind, StructureIssueKind};
 use crate::stage::{detect_stage, Stage, StageConstraint};
 use crate::surface_policy::SurfacePolicy;
 
@@ -13,20 +13,23 @@ pub fn select_mission_type(state: &RepoState) -> Option<MissionType> {
         });
     }
 
-    if let Some(issue) = state.binding_issues.first() {
-        if let BindingIssueKind::MissingBinding = issue.kind {
-            return Some(MissionType::CreateMissingBindings {
-                scenario_key: issue.scenario_key.clone().unwrap_or_else(|| "unknown".to_string()),
-                missing_steps: issue.step_text.clone().into_iter().collect(),
-            });
-        }
+    if let Some(issue) = state.binding_issues.iter().find(|i| {
+        matches!(i.kind, BindingIssueKind::MissingBinding) && i.scenario_key.is_some()
+    }) {
+        return Some(MissionType::CreateMissingBindings {
+            scenario_key: issue.scenario_key.clone().unwrap(),
+            missing_steps: issue.step_text.clone().into_iter().collect(),
+        });
     }
 
     if let Some(issue) = state.structure_issues.first() {
-        return Some(MissionType::NormalizeIdentityTags {
-            feature_path: issue.location.clone(),
-            missing_tags: vec![],
-        });
+        if matches!(issue.kind, StructureIssueKind::MissingIdentityTag) {
+            let missing_tags = extract_tags_from_description(&issue.description);
+            return Some(MissionType::NormalizeIdentityTags {
+                feature_path: issue.location.clone(),
+                missing_tags,
+            });
+        }
     }
 
     let has_missing = state
@@ -81,21 +84,24 @@ fn select_alternative_for_stage(state: &RepoState, stage: Stage) -> Option<Missi
     }
 
     if category.contains(&MissionTypeCategory::Tests) {
-        if let Some(issue) = state.binding_issues.first() {
-            if let BindingIssueKind::MissingBinding = issue.kind {
-                return Some(MissionType::CreateMissingBindings {
-                    scenario_key: issue.scenario_key.clone().unwrap_or_else(|| "unknown".to_string()),
-                    missing_steps: issue.step_text.clone().into_iter().collect(),
-                });
-            }
+        if let Some(issue) = state.binding_issues.iter().find(|i| {
+            matches!(i.kind, BindingIssueKind::MissingBinding) && i.scenario_key.is_some()
+        }) {
+            return Some(MissionType::CreateMissingBindings {
+                scenario_key: issue.scenario_key.clone().unwrap(),
+                missing_steps: issue.step_text.clone().into_iter().collect(),
+            });
         }
     }
 
     if category.contains(&MissionTypeCategory::Structure) {
-        if let Some(issue) = state.structure_issues.first() {
+        if let Some(issue) = state.structure_issues.iter().find(|i| {
+            matches!(i.kind, StructureIssueKind::MissingIdentityTag)
+        }) {
+            let missing_tags = extract_tags_from_description(&issue.description);
             return Some(MissionType::NormalizeIdentityTags {
                 feature_path: issue.location.clone(),
-                missing_tags: vec![],
+                missing_tags,
             });
         }
     }
@@ -181,10 +187,23 @@ pub fn select_with_constraints(
     Some((mission_type, active_stage, surface_policy))
 }
 
+/// Extract @Tag names from a description string.
+/// Handles formats like "Missing @Feature tag", "Missing tags: @Feature, @Rule"
+fn extract_tags_from_description(description: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    for word in description.split(|c: char| c.is_whitespace() || c == ',') {
+        let trimmed = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '@');
+        if trimmed.starts_with('@') && trimmed.len() > 1 {
+            tags.push(trimmed.to_string());
+        }
+    }
+    tags
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repo_state::{BindingIssue, BindingIssueKind, CoverageAmbiguity, RuleCoverageInfo, SpecIssue, SpecIssueKind};
+    use crate::repo_state::{BindingIssue, BindingIssueKind, CoverageAmbiguity, RuleCoverageInfo, SpecIssue, SpecIssueKind, StructureIssue, StructureIssueKind};
 
     #[test]
     fn selects_binding_issue_before_spec_issue() {
@@ -309,5 +328,84 @@ mod tests {
         let (mission, stage, _) = select_with_constraints(&state, &constraint).unwrap();
         assert_eq!(stage, Stage::Finalize);
         assert!(matches!(mission, MissionType::AssessSpecCoverage));
+    }
+
+    #[test]
+    fn skips_binding_issue_without_scenario_key() {
+        let state = RepoState {
+            binding_issues: vec![crate::repo_state::BindingIssue {
+                kind: BindingIssueKind::MissingBinding,
+                scenario_key: None, // no concrete target
+                step_text: Some("Given a user".to_string()),
+                description: "Missing binding".to_string(),
+            }],
+            spec_issues: vec![SpecIssue {
+                kind: SpecIssueKind::MissingCoverage,
+                feature_path: "features/a.feature".to_string(),
+                description: "Missing coverage".to_string(),
+                rule_name: None,
+            }],
+            ..Default::default()
+        };
+
+        let mission = select_mission_type(&state).unwrap();
+        // Should fall through to AddOrClarifyScenario because the binding issue has no target
+        assert!(matches!(mission, MissionType::AddOrClarifyScenario { .. }));
+    }
+
+    #[test]
+    fn extracts_missing_tags_from_description() {
+        assert_eq!(
+            extract_tags_from_description("Missing @Feature tag"),
+            vec!["@Feature"]
+        );
+        assert_eq!(
+            extract_tags_from_description("Missing tags: @Feature, @Rule"),
+            vec!["@Feature", "@Rule"]
+        );
+        assert!(extract_tags_from_description("No tags here").is_empty());
+    }
+
+    #[test]
+    fn normalize_identity_tags_extracts_evidence() {
+        let state = RepoState {
+            structure_issues: vec![crate::repo_state::StructureIssue {
+                kind: StructureIssueKind::MissingIdentityTag,
+                location: "features/x.feature".to_string(),
+                description: "Missing @Feature tag".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let mission = select_mission_type(&state).unwrap();
+        match mission {
+            MissionType::NormalizeIdentityTags { missing_tags, .. } => {
+                assert_eq!(missing_tags, vec!["@Feature"]);
+            }
+            _ => panic!("expected NormalizeIdentityTags"),
+        }
+    }
+
+    #[test]
+    fn skips_non_identity_structure_issues() {
+        // ParseError is not MissingIdentityTag, so should not select NormalizeIdentityTags
+        let state = RepoState {
+            structure_issues: vec![crate::repo_state::StructureIssue {
+                kind: StructureIssueKind::ParseError,
+                location: "features/x.feature".to_string(),
+                description: "Syntax error at line 5".to_string(),
+            }],
+            spec_issues: vec![SpecIssue {
+                kind: SpecIssueKind::MissingCoverage,
+                feature_path: "features/a.feature".to_string(),
+                description: "Missing coverage".to_string(),
+                rule_name: None,
+            }],
+            ..Default::default()
+        };
+
+        let mission = select_mission_type(&state).unwrap();
+        // Falls through structure_issues (ParseError doesn't match) to spec issues
+        assert!(matches!(mission, MissionType::AddOrClarifyScenario { .. }));
     }
 }
