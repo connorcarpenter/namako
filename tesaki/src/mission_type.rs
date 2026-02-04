@@ -386,8 +386,8 @@ impl MissionType {
                     .filter(|i| i.feature_path == *feature_path)
                     .filter_map(|i| i.rule_name.clone())
                     .collect();
-                
-                let context = if rules_needing_coverage.is_empty() {
+
+                let mut context = if rules_needing_coverage.is_empty() {
                     format!(
                         "Coverage gaps detected in {}{}.\n\n\
                         **IMPORTANT:** Add scenarios to existing rules that need coverage. \
@@ -411,6 +411,63 @@ impl MissionType {
                             .join("\n")
                     )
                 };
+
+                let mut candidates: Vec<&crate::repo_state::PromotionCandidateSummary> = state
+                    .promotion_candidates
+                    .iter()
+                    .filter(|c| c.feature_path == *feature_path && !c.is_stub)
+                    .collect();
+
+                if !candidates.is_empty() {
+                    let mut preferred: Vec<&crate::repo_state::PromotionCandidateSummary> = candidates
+                        .iter()
+                        .copied()
+                        .filter(|c| c.new_step_texts_estimate == 0)
+                        .collect();
+
+                    if !preferred.is_empty() {
+                        preferred.sort_by(|a, b| b.reuse_score.cmp(&a.reuse_score));
+                        let list = preferred
+                            .into_iter()
+                            .take(5)
+                            .map(|c| {
+                                format!(
+                                    "- {} (Rule: {}, new steps: 0, reuse: {})",
+                                    c.scenario_name, c.rule_name, c.reuse_score
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        context.push_str(&format!(
+                            "\n\n**Preferred promotions (0 new steps):**\n{}",
+                            list
+                        ));
+                    } else {
+                        candidates.sort_by(|a, b| {
+                            a.new_step_texts_estimate
+                                .cmp(&b.new_step_texts_estimate)
+                                .then_with(|| b.reuse_score.cmp(&a.reuse_score))
+                        });
+                        let list = candidates
+                            .into_iter()
+                            .take(5)
+                            .map(|c| {
+                                format!(
+                                    "- {} (Rule: {}, new steps: {}, reuse: {})",
+                                    c.scenario_name,
+                                    c.rule_name,
+                                    c.new_step_texts_estimate,
+                                    c.reuse_score
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        context.push_str(&format!(
+                            "\n\n**Low-cost promotion candidates (fewest new steps):**\n{}",
+                            list
+                        ));
+                    }
+                }
                 
                 MissionBrief {
                     mission_type: self.clone(),

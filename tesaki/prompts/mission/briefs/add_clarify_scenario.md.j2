@@ -25,6 +25,7 @@ Prefer existing step phrases where possible to minimize new bindings.
 - It is OK if lint fails due to missing bindings; that is expected and will be handled next.
 - New scenarios must add a distinct "Then" outcome (not just repeating the same Then set or only adding "no panic occurs").
 - If a rule has only `@Deferred` scenarios, promote at least one by removing `@Deferred` (preferred to adding new scenarios).
+- If any promotion candidate requires zero new step texts, prefer promoting one of those and avoid introducing new step phrases.
 
 {% if rules_without_scenarios and rules_without_scenarios | length > 0 %}
 ## Rules Needing Scenarios

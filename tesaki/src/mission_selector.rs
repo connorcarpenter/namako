@@ -41,7 +41,7 @@ pub fn select_mission_type(state: &RepoState) -> Option<MissionType> {
         return Some(MissionType::AssessSpecCoverage);
     }
 
-    if let Some(issue) = state.spec_issues.first() {
+    if let Some(issue) = select_spec_issue_for_add_scenario(state) {
         return Some(MissionType::AddOrClarifyScenario {
             feature_path: issue.feature_path.clone(),
             rule_name: issue.rule_name.clone(),
@@ -113,7 +113,7 @@ fn select_alternative_for_stage(state: &RepoState, stage: Stage) -> Option<Missi
             return Some(MissionType::AssessSpecCoverage);
         }
 
-        if let Some(issue) = state.spec_issues.first() {
+        if let Some(issue) = select_spec_issue_for_add_scenario(state) {
             return Some(MissionType::AddOrClarifyScenario {
                 feature_path: issue.feature_path.clone(),
                 rule_name: issue.rule_name.clone(),
@@ -129,6 +129,35 @@ fn select_alternative_for_stage(state: &RepoState, stage: Stage) -> Option<Missi
     }
 
     None
+}
+
+fn select_spec_issue_for_add_scenario(state: &RepoState) -> Option<&crate::repo_state::SpecIssue> {
+    let mut missing: Vec<&crate::repo_state::SpecIssue> = state
+        .spec_issues
+        .iter()
+        .filter(|issue| issue.kind == SpecIssueKind::MissingCoverage)
+        .collect();
+
+    if missing.is_empty() {
+        return None;
+    }
+
+    if let Some(issue) = missing.iter().find(|issue| issue.rule_name.is_none()) {
+        return Some(issue);
+    }
+
+    if let Some(issue) = missing.iter().find(|issue| {
+        issue
+            .rule_name
+            .as_ref()
+            .map(|rule| state.scenario_count_for_rule(&issue.feature_path, rule) == Some(0))
+            .unwrap_or(false)
+    }) {
+        return Some(issue);
+    }
+
+    missing.sort_by_key(|issue| issue.feature_path.clone());
+    missing.first().copied()
 }
 
 /// Select mission type and surface policy given a StageConstraint.
@@ -218,6 +247,41 @@ mod tests {
 
         let mission = select_mission_type(&state).unwrap();
         assert!(matches!(mission, MissionType::AssessSpecCoverage));
+    }
+
+    #[test]
+    fn selects_zero_coverage_before_partial_coverage() {
+        let state = RepoState {
+            spec_issues: vec![
+                SpecIssue {
+                    kind: SpecIssueKind::MissingCoverage,
+                    feature_path: "features/partial.feature".to_string(),
+                    description: "Rule has 1 scenario".to_string(),
+                    rule_name: Some("Partial Rule".to_string()),
+                },
+                SpecIssue {
+                    kind: SpecIssueKind::MissingCoverage,
+                    feature_path: "features/zero.feature".to_string(),
+                    description: "Rule has 0 scenarios".to_string(),
+                    rule_name: Some("Zero Rule".to_string()),
+                },
+            ],
+            scenarios_per_rule: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("features/partial.feature::Partial Rule".to_string(), 1);
+                map.insert("features/zero.feature::Zero Rule".to_string(), 0);
+                map
+            },
+            ..Default::default()
+        };
+
+        let mission = select_mission_type(&state).unwrap();
+        match mission {
+            MissionType::AddOrClarifyScenario { feature_path, .. } => {
+                assert_eq!(feature_path, "features/zero.feature");
+            }
+            _ => panic!("expected AddOrClarifyScenario"),
+        }
     }
 
     #[test]

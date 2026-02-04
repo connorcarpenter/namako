@@ -455,7 +455,7 @@ impl BriefContext {
                 feature_path,
                 rule_name,
             } => {
-                // Count scenarios for this feature from feature files (not just executable scenarios)
+                // Count executable scenarios from feature files (excluding @Deferred) so promotions count as progress.
                 let scenario_count = state
                     .scenario_count_for_feature(feature_path)
                     .unwrap_or(0);
