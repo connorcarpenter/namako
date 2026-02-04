@@ -15,6 +15,8 @@ Required context:
 - previous_mission: Option<{type, outcome, notes}> (optional)
 - expected_cascade: Option<String> (optional)
 #}
+{% include "components/critical_constraints.md.j2" %}
+
 # Mission {{ mission_id }}
 
 **Type:** {{ mission_type }}
@@ -31,23 +33,15 @@ Required context:
 
 ---
 
-## Edit Surface Policy
+## Surface Policy Summary
 
-**You may ONLY edit files matching these patterns:**
+| Surface | Policy |
+|---------|--------|
+| Spec | {{ surface_policy.spec | upper }} |
+| Tests/Bindings | {{ surface_policy.tests_bindings | upper }} |
+| SUT | {{ surface_policy.sut | upper }} |
 
-| Surface | Policy | Allowed Paths |
-|---------|--------|---------------|
-| Spec | {{ surface_policy.spec | upper }} | `{{ surface_definitions.spec.patterns | join("`, `") }}` |
-| Tests/Bindings | {{ surface_policy.tests_bindings | upper }} | `{{ surface_definitions.tests_bindings.patterns | join("`, `") }}` |
-| SUT | {{ surface_policy.sut | upper }} | `{{ surface_definitions.sut.patterns | join("`, `") }}` |
-
-{% if surface_policy.spec == "locked" and surface_policy.tests_bindings == "unlocked" %}
-⚠️ **Spec is LOCKED** — Do not modify `.feature` files. Only edit test/binding code.
-{% elif surface_policy.tests_bindings == "locked" and surface_policy.spec == "unlocked" %}
-⚠️ **Tests are LOCKED** — Do not modify bindings. Only edit `.feature` files.
-{% elif surface_policy.sut == "locked" %}
-⚠️ **SUT is LOCKED** — Do not modify implementation code.
-{% endif %}
+*(See constraints at top for allowed file patterns)*
 
 ---
 
@@ -67,12 +61,32 @@ Required context:
 {% if previous_failure %}
 ---
 
-## Previous Failure (for context)
+## ⚠️ Previous Mission Failed - Learn From This
 
-- Mission: {{ previous_failure.mission_type }}
-{% if previous_failure.target %}- Target: {{ previous_failure.target }}{% endif %}
-- Reason: {{ previous_failure.stop_reason }}
-{% if previous_failure.details %}- Details: {{ previous_failure.details }}{% endif %}
+**Previous Mission:** {{ previous_failure.mission_type }}
+{% if previous_failure.target %}**Target:** {{ previous_failure.target }}{% endif %}
+**Failure Reason:** {{ previous_failure.stop_reason }}
+
+{% if previous_failure.violated_files %}
+### 🚫 These Files Were LOCKED and Caused Failure:
+
+{% for file in previous_failure.violated_files %}
+- `{{ file }}`
+{% endfor %}
+
+**DO NOT modify these files again.** They are in a **{{ previous_failure.violated_surface }}** surface that is LOCKED.
+
+{% if previous_failure.details %}**Additional Context:** {{ previous_failure.details }}{% endif %}
+
+**What to do instead:**
+1. Work only within the ALLOWED surfaces (see constraints at top)
+2. If this fix genuinely requires editing locked files, STOP and report that constraint
+3. Consider alternative approaches that don't require locked files
+{% else %}
+{% if previous_failure.details %}- **Details:** {{ previous_failure.details }}{% endif %}
+
+**Learn from this failure and try a different approach.**
+{% endif %}
 {% endif %}
 
 {% if previous_mission %}

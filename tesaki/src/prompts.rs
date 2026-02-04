@@ -117,6 +117,12 @@ pub fn create_environment() -> Environment<'static> {
 
     // Component templates
     env.add_template(
+        "components/critical_constraints.md.j2",
+        include_str!("../prompts/components/critical_constraints.md.j2"),
+    )
+    .expect("Failed to load critical_constraints.md.j2");
+
+    env.add_template(
         "components/surfaces_table.md.j2",
         include_str!("../prompts/components/surfaces_table.md.j2"),
     )
@@ -223,6 +229,15 @@ pub struct PreviousFailureContext {
     pub stop_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
+    /// List of files that violated surface policy
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub violated_files: Option<Vec<String>>,
+    /// Which surface was violated (spec/tests/sut)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub violated_surface: Option<String>,
+    /// Brief description of what was attempted
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempted_approach: Option<String>,
 }
 
 /// Context for rendering POLICY.md.
@@ -888,6 +903,7 @@ mod tests {
             "mission/briefs/cleanup_after_success.md.j2",
             "mission/briefs/explain_state.md.j2",
             "mission/briefs/triage_failures.md.j2",
+            "components/critical_constraints.md.j2",
             "components/surfaces_table.md.j2",
             "components/budgets_table.md.j2",
             "components/budgets_full_table.md.j2",
@@ -953,7 +969,8 @@ mod tests {
         assert!(result.contains("**Type:** CreateMissingBindings"));
         assert!(result.contains("**Target:** feature:Rule(01):Scenario(01)"));
         assert!(result.contains("## 🎯 Objective"));
-        assert!(result.contains("| Surface | Policy | Allowed Paths |"));
+        assert!(result.contains("## Surface Policy Summary"));
+        assert!(result.contains("| Surface | Policy |"));
         assert!(result.contains("| Spec | LOCKED |"));
         assert!(result.contains(&format!("Tesaki v{}", TESAKI_VERSION)));
     }
@@ -1062,5 +1079,152 @@ mod tests {
 
         assert_eq!(ctx.max_files_changed, 10);
         assert_eq!(ctx.max_retries, 2);
+    }
+
+    #[test]
+    fn test_constraint_block_with_locked_spec() {
+        let ctx = MissionContext {
+            mission_id: "001-test-abc12345".to_string(),
+            mission_type: "CreateMissingBindings".to_string(),
+            stage: "ImplementTests".to_string(),
+            target: Some("feature:Rule(01):Scenario(01)".to_string()),
+            objective: "Create step bindings".to_string(),
+            context: "Missing bindings detected".to_string(),
+            validation_criteria: vec!["Scenario is executable".to_string()],
+            surface_policy: SurfacePolicyContext {
+                spec: "LOCKED".to_string(),
+                tests_bindings: "UNLOCKED".to_string(),
+                sut: "LOCKED".to_string(),
+            },
+            surface_definitions: SurfaceDefinitionsContext {
+                spec: SurfaceDefContext {
+                    patterns: vec!["test/specs/**/*.feature".to_string()],
+                },
+                tests_bindings: SurfaceDefContext {
+                    patterns: vec!["test/**".to_string()],
+                },
+                sut: SurfaceDefContext {
+                    patterns: vec!["src/**".to_string()],
+                },
+            },
+            budgets: BudgetsContext {
+                max_files_changed: 10,
+                max_scenarios_promoted: 3,
+                max_runtime_seconds: 600,
+                max_retries: 2,
+            },
+            version: TESAKI_VERSION.to_string(),
+            previous_failure: None,
+        };
+
+        let result = render_mission_md(&ctx).unwrap();
+
+        // Constraint block appears BEFORE the mission ID header
+        let constraint_pos = result.find("⚠️ CRITICAL FILE EDITING CONSTRAINTS ⚠️").expect("Constraints should be present");
+        let mission_header_pos = result.find("# Mission 001-test-abc12345").expect("Mission header should be present");
+        assert!(constraint_pos < mission_header_pos, "Constraints should appear before mission header");
+
+        // Spec patterns should be in FORBIDDEN section when spec is LOCKED
+        assert!(result.contains("❌ FORBIDDEN"));
+        assert!(result.contains("Spec files (LOCKED)"));
+        assert!(result.contains("test/specs/**/*.feature"));
+
+        // Tests should be in ALLOWED section when UNLOCKED
+        assert!(result.contains("✅ ALLOWED"));
+        assert!(result.contains("Test/Binding files:"));
+        assert!(result.contains("test/**"));
+    }
+
+    #[test]
+    fn test_constraint_block_with_locked_tests() {
+        let ctx = MissionContext {
+            mission_id: "002-test-xyz".to_string(),
+            mission_type: "RefineFeatureIntent".to_string(),
+            stage: "RefineSpec".to_string(),
+            target: None,
+            objective: "Improve spec clarity".to_string(),
+            context: "Feature needs refinement".to_string(),
+            validation_criteria: vec!["Spec is clearer".to_string()],
+            surface_policy: SurfacePolicyContext {
+                spec: "UNLOCKED".to_string(),
+                tests_bindings: "LOCKED".to_string(),
+                sut: "LOCKED".to_string(),
+            },
+            surface_definitions: SurfaceDefinitionsContext {
+                spec: SurfaceDefContext {
+                    patterns: vec!["test/specs/**/*.feature".to_string()],
+                },
+                tests_bindings: SurfaceDefContext {
+                    patterns: vec!["test/**".to_string()],
+                },
+                sut: SurfaceDefContext {
+                    patterns: vec!["src/**".to_string()],
+                },
+            },
+            budgets: BudgetsContext {
+                max_files_changed: 10,
+                max_scenarios_promoted: 3,
+                max_runtime_seconds: 600,
+                max_retries: 2,
+            },
+            version: TESAKI_VERSION.to_string(),
+            previous_failure: None,
+        };
+
+        let result = render_mission_md(&ctx).unwrap();
+
+        // Tests should be in FORBIDDEN section when LOCKED
+        assert!(result.contains("❌ FORBIDDEN"));
+        assert!(result.contains("Test/Binding files (LOCKED)"));
+        assert!(result.contains("test/**"));
+
+        // Spec should be in ALLOWED section when UNLOCKED
+        assert!(result.contains("✅ ALLOWED"));
+        assert!(result.contains("Spec files:"));
+        assert!(result.contains("test/specs/**/*.feature"));
+    }
+
+    #[test]
+    fn test_constraint_block_includes_stop_directive() {
+        let ctx = MissionContext {
+            mission_id: "003-test".to_string(),
+            mission_type: "ImplementBehavior".to_string(),
+            stage: "ImplementTests".to_string(),
+            target: None,
+            objective: "Test".to_string(),
+            context: "Test".to_string(),
+            validation_criteria: vec!["Test".to_string()],
+            surface_policy: SurfacePolicyContext {
+                spec: "LOCKED".to_string(),
+                tests_bindings: "UNLOCKED".to_string(),
+                sut: "LOCKED".to_string(),
+            },
+            surface_definitions: SurfaceDefinitionsContext {
+                spec: SurfaceDefContext {
+                    patterns: vec!["test/specs/**/*.feature".to_string()],
+                },
+                tests_bindings: SurfaceDefContext {
+                    patterns: vec!["test/**".to_string()],
+                },
+                sut: SurfaceDefContext {
+                    patterns: vec!["src/**".to_string()],
+                },
+            },
+            budgets: BudgetsContext {
+                max_files_changed: 10,
+                max_scenarios_promoted: 3,
+                max_runtime_seconds: 600,
+                max_retries: 2,
+            },
+            version: TESAKI_VERSION.to_string(),
+            previous_failure: None,
+        };
+
+        let result = render_mission_md(&ctx).unwrap();
+
+        // Should contain directive to STOP if locked files need editing
+        assert!(result.contains("🛑 If the fix requires editing FORBIDDEN files"));
+        assert!(result.contains("STOP immediately and report"));
+        assert!(result.contains("DO NOT attempt to work around these constraints"));
     }
 }

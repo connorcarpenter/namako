@@ -107,6 +107,15 @@ pub struct PendingMission {
     pub approved: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailureRecord {
+    pub mission_type: String,
+    pub target: Option<String>,
+    pub stop_reason: String,
+    pub violated_files: Vec<String>,
+    pub timestamp: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionState {
     pub intent: SessionIntent,
@@ -131,6 +140,12 @@ pub struct SessionState {
     /// Number of policy violations detected this session.
     #[serde(default)]
     pub policy_violation_count: u32,
+    /// History of failures this session.
+    #[serde(default)]
+    pub failure_history: Vec<FailureRecord>,
+    /// How many times current target has failed.
+    #[serde(default)]
+    pub current_target_failures: u32,
 }
 
 fn extract_scenario_tag(message: &str) -> Option<String> {

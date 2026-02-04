@@ -1,0 +1,44 @@
+{# Critical constraints component - displayed prominently at the top of MISSION.md #}
+{#
+Required context:
+- surface_policy: {spec, tests_bindings, sut}
+- surface_definitions: {spec: {patterns}, tests_bindings: {patterns}, sut: {patterns}}
+#}
+# ⚠️ CRITICAL FILE EDITING CONSTRAINTS ⚠️
+
+**Before making ANY changes, read this carefully:**
+
+## ✅ ALLOWED: You MAY edit these files
+
+{% if surface_policy.spec != "LOCKED" %}
+- **Spec files:** `{{ surface_definitions.spec.patterns | join("`, `") }}`
+{% endif %}
+{% if surface_policy.tests_bindings != "LOCKED" %}
+- **Test/Binding files:** `{{ surface_definitions.tests_bindings.patterns | join("`, `") }}`
+{% endif %}
+{% if surface_policy.sut != "LOCKED" %}
+- **SUT (System Under Test) files:** `{{ surface_definitions.sut.patterns | join("`, `") }}`
+{% endif %}
+
+## ❌ FORBIDDEN: You MUST NOT edit these files
+
+{% if surface_policy.spec == "LOCKED" %}
+- **Spec files (LOCKED):** `{{ surface_definitions.spec.patterns | join("`, `") }}`
+{% endif %}
+{% if surface_policy.tests_bindings == "LOCKED" %}
+- **Test/Binding files (LOCKED):** `{{ surface_definitions.tests_bindings.patterns | join("`, `") }}`
+{% endif %}
+{% if surface_policy.sut == "LOCKED" %}
+- **SUT files (LOCKED):** `{{ surface_definitions.sut.patterns | join("`, `") }}`
+{% endif %}
+
+## 🛑 If the fix requires editing FORBIDDEN files:
+
+**STOP immediately and report:**
+1. Which locked surface prevents the fix
+2. Why that surface needs to be edited
+3. Request human intervention to unlock the surface
+
+**DO NOT attempt to work around these constraints. DO NOT modify locked files.**
+
+---

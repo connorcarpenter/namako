@@ -19,6 +19,7 @@
 mod binding_extractor;
 mod config;
 mod error_parser;
+mod escalation;
 mod gate;
 mod issue_classifier;
 mod chat_plan;
@@ -29,6 +30,7 @@ mod mission_selector;
 mod mission_type;
 mod model_tier;
 mod packet_parser;
+mod plan_validator;
 mod policy_violation;
 mod prompts;
 mod repl;
@@ -1556,6 +1558,9 @@ fn run_run(
             target: record.target,
             stop_reason: record.stop_reason,
             details,
+            violated_files: record.violated_files,
+            violated_surface: record.violated_surface,
+            attempted_approach: None, // Not captured yet
         }
     });
 
@@ -1874,6 +1879,29 @@ fn run_run(
             for v in &violations {
                 eprintln!("      - {}", v);
             }
+
+            // Extract violated files and surfaces for failure context
+            let mut violated_files = Vec::new();
+            let mut violated_surfaces = Vec::new();
+            for violation in &violations {
+                // Parse violation format: "file/path (surface LOCKED)"
+                if let Some(idx) = violation.find(" (") {
+                    let file = violation[..idx].to_string();
+                    violated_files.push(file);
+
+                    if violation.contains("spec surface LOCKED") {
+                        violated_surfaces.push("spec");
+                    } else if violation.contains("tests surface LOCKED") {
+                        violated_surfaces.push("tests");
+                    } else if violation.contains("sut surface LOCKED") {
+                        violated_surfaces.push("sut");
+                    }
+                }
+            }
+            violated_surfaces.sort();
+            violated_surfaces.dedup();
+            let violated_surface = violated_surfaces.join(", ");
+
             // Roll back changes
             let _ = Command::new("git")
                 .args(["checkout", "--", "."])
@@ -1882,6 +1910,18 @@ fn run_run(
 
             let details = format!("Surface policy violation: {}", violations.join(", "));
             let failed_path = mission.preserve_failed()?;
+
+            // Save failure record with violation details for next mission
+            let _ = save_failure_record_full(
+                &spec_root,
+                &mission_type,
+                StopReason::PolicyViolation,
+                Some(details.clone()),
+                None, // gate_errors
+                Some(violated_files),
+                Some(violated_surface),
+            );
+
             let result = RunResult::error(StopReason::PolicyViolation, details.clone())
                 .with_mission_path(failed_path.display().to_string())
                 .with_missions(attempts_made);
@@ -2556,6 +2596,10 @@ struct FailureRecord {
     /// Top gate errors formatted for injection into next mission.
     gate_errors: Option<Vec<String>>,
     timestamp_utc: String,
+    /// List of files that violated surface policy
+    violated_files: Option<Vec<String>>,
+    /// Which surface was violated (spec/tests/sut)
+    violated_surface: Option<String>,
 }
 
 impl FailureRecord {
@@ -2597,6 +2641,18 @@ fn save_failure_record_with_errors(
     details: Option<String>,
     gate_errors: Option<Vec<String>>,
 ) -> Result<()> {
+    save_failure_record_full(spec_root, mission_type, stop_reason, details, gate_errors, None, None)
+}
+
+fn save_failure_record_full(
+    spec_root: &PathBuf,
+    mission_type: &crate::mission_type::MissionType,
+    stop_reason: stop_reason::StopReason,
+    details: Option<String>,
+    gate_errors: Option<Vec<String>>,
+    violated_files: Option<Vec<String>>,
+    violated_surface: Option<String>,
+) -> Result<()> {
     let record = FailureRecord {
         mission_type: mission_type.name().to_string(),
         target: mission_type.target_label(),
@@ -2604,6 +2660,8 @@ fn save_failure_record_with_errors(
         details,
         gate_errors,
         timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        violated_files,
+        violated_surface,
     };
     let path = last_failure_path(spec_root);
     if let Some(parent) = path.parent() {
