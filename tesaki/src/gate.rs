@@ -84,6 +84,7 @@ pub enum GateOutcome {
 ///
 /// This is used to allow AddOrClarifyScenario to succeed when it introduces new steps
 /// that require follow-up bindings (spec -> bindings chaining).
+#[allow(dead_code)]
 pub fn is_missing_bindings_only(json: &str) -> bool {
     let gate: GateJson = match serde_json::from_str(json) {
         Ok(val) => val,

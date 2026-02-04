@@ -182,7 +182,7 @@ macro_rules! step_attribute {
         /// ```
         /// # use std::{convert::Infallible};
         /// #
-        /// use namako::{World, given, when};
+        /// use namako_engine::{World, given, when};
         ///
         /// #[derive(Debug, Default, World)]
         /// #[world(mut_ctx = Ctx<'a>, ref_ctx = Ctx<'a>)]
@@ -224,7 +224,7 @@ macro_rules! step_attribute {
         /// ```rust
         /// # use std::convert::Infallible;
         /// #
-        /// # use namako::{gherkin::Step, given, World};
+        /// # use namako_engine::{gherkin::Step, given, World};
         /// #
         /// # #[derive(Debug, Default, World)]
         /// # #[world(mut_ctx = Ctx<'a>, ref_ctx = Ctx<'a>)]
@@ -285,7 +285,7 @@ steps!(given, when, then);
 /// # Example
 ///
 /// ```rust
-/// #[derive(namako::World)]
+/// #[derive(namako_engine::World)]
 /// #[world(init = Self::new)] // optional, uses `Default::default()` if omitted
 /// struct World(usize);
 ///
@@ -320,7 +320,7 @@ pub fn world(input: TokenStream) -> TokenStream {
 /// ```rust
 /// # use std::{convert::Infallible};
 /// #
-/// use namako::{Parameter, World, given, when};
+/// use namako_engine::{Parameter, World, given, when};
 /// use derive_more::{Deref, FromStr};
 ///
 /// #[derive(Debug, Default, World)]

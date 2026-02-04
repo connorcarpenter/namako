@@ -41,6 +41,8 @@ pub fn run_loop_headless(start_dir: PathBuf, max_iterations: u32, logger: &crate
     let max_cert_updates = config.max_cert_updates.unwrap_or(0);
     let max_runtime_seconds = config.max_runtime_seconds.unwrap_or(600) as u32;
     let max_files_changed = config.max_files_changed.unwrap_or(10) as u32;
+    let pre_gate_build_cmd = config.pre_gate_build.clone();
+    let pre_gate_build_mode = config.pre_gate_build_mode;
     let namako_resolution = crate::resolve_namako_cli(None, config.namako_cli.clone(), &spec_root);
     let namako_cmd = namako_resolution.command.clone();
 
@@ -74,6 +76,8 @@ pub fn run_loop_headless(start_dir: PathBuf, max_iterations: u32, logger: &crate
         max_cert_updates,
         max_runtime_seconds,
         max_files_changed,
+        pre_gate_build_cmd,
+        pre_gate_build_mode,
         &mut session,
         logger,
     )
@@ -96,6 +100,8 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
     let max_cert_updates = config.max_cert_updates.unwrap_or(0);
     let max_runtime_seconds = config.max_runtime_seconds.unwrap_or(600) as u32;
     let max_files_changed = config.max_files_changed.unwrap_or(10) as u32;
+    let pre_gate_build_cmd = config.pre_gate_build.clone();
+    let pre_gate_build_mode = config.pre_gate_build_mode;
     let namako_resolution = crate::resolve_namako_cli(None, config.namako_cli.clone(), &spec_root);
     let namako_cmd = namako_resolution.command.clone();
 
@@ -190,6 +196,8 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
                 max_cert_updates,
                 max_runtime_seconds,
                 max_files_changed,
+                pre_gate_build_cmd.clone(),
+                pre_gate_build_mode,
                 &mut session,
                 logger,
             )?;
@@ -207,6 +215,8 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
             max_cert_updates,
             max_runtime_seconds,
             max_files_changed,
+            pre_gate_build_cmd.clone(),
+            pre_gate_build_mode,
             &mut session,
             logger,
         )? {
@@ -346,6 +356,8 @@ fn handle_mission_approval(
     max_cert_updates: u32,
     max_runtime_seconds: u32,
     max_files_changed: u32,
+    pre_gate_build_cmd: Option<String>,
+    pre_gate_build_mode: crate::config::PreGateBuildMode,
     session: &mut SessionState,
     logger: &crate::logging::JsonlLogger,
 ) -> Result<bool> {
@@ -380,6 +392,8 @@ fn handle_mission_approval(
         max_cert_updates,
         max_runtime_seconds,
         max_files_changed,
+        pre_gate_build_cmd,
+        pre_gate_build_mode,
         &pending.proposal,
         session,
         logger,
@@ -397,6 +411,8 @@ fn execute_proposed_mission(
     max_cert_updates: u32,
     max_runtime_seconds: u32,
     max_files_changed: u32,
+    pre_gate_build_cmd: Option<String>,
+    pre_gate_build_mode: crate::config::PreGateBuildMode,
     proposal: &MissionProposal,
     session: &mut SessionState,
     logger: &crate::logging::JsonlLogger,
@@ -429,6 +445,8 @@ fn execute_proposed_mission(
         constraint.surface_overrides,
         true,  // allow_dirty - REPL missions don't require clean workspace
         None,  // model_overrides - use mission type defaults
+        pre_gate_build_cmd,
+        pre_gate_build_mode,
         logger,
     )?;
 
@@ -596,6 +614,8 @@ fn run_autonomous_loop(
     max_cert_updates: u32,
     max_runtime_seconds: u32,
     max_files_changed: u32,
+    pre_gate_build_cmd: Option<String>,
+    pre_gate_build_mode: crate::config::PreGateBuildMode,
     session: &mut SessionState,
     logger: &crate::logging::JsonlLogger,
 ) -> Result<()> {
@@ -725,6 +745,8 @@ fn run_autonomous_loop(
             Some(surface_policy),
             true,  // allow_dirty
             None,  // model_overrides - use mission type defaults
+            pre_gate_build_cmd.clone(),
+            pre_gate_build_mode,
             logger,
         );
         
@@ -890,6 +912,7 @@ fn run_autonomous_loop(
             }
             last_mission_type = Some(type_name.clone());
             stall_count += 1;
+            println!("Outcome: INVARIANT_VIOLATION");
         } else if gates_now_pass && !after_state.has_work() {
             let assessment_needed = after_state.coverage_is_ambiguous() && after_state.coverage_assessment.is_none();
             if assessment_needed {
@@ -914,6 +937,7 @@ fn run_autonomous_loop(
                 println!("{}", msg);
             }
             println!("🎉 All gates pass, no issues remaining. DONE!");
+            println!("Outcome: DONE");
             // Clear skipped types on success (system recovered)
             skipped_types.clear();
             consecutive_failures = 0;
@@ -945,6 +969,7 @@ fn run_autonomous_loop(
                 }
             }
             println!("✅ Progress made - continuing");
+            println!("Outcome: PROGRESS");
             stall_count = 0;
             // Clear consecutive failure counter on progress
             consecutive_failures = 0;
@@ -974,7 +999,7 @@ fn run_autonomous_loop(
                 consecutive_failures = 1;
             }
             last_mission_type = Some(type_name.clone());
-            println!("⚠️  No net progress (stall {}/{})", stall_count, MAX_STALLS);
+            println!("Outcome: NO_PROGRESS (stall {}/{})", stall_count, MAX_STALLS);
             if stall_count >= MAX_STALLS {
                 println!("🛑 Too many stalls - stopping to avoid infinite loop");
                 break;
@@ -1000,13 +1025,15 @@ fn run_autonomous_loop(
                 println!("🛑 EMERGENCY STOP: Regression of +{} issues exceeds threshold of {}", 
                     adjusted_delta, MAX_REGRESSION_TOLERATED);
                 println!("   Last mission made things significantly worse. Human review required.");
+                println!("Outcome: REGRESSION_STOP");
                 break;
             }
-            println!("⚠️  Regression detected (+{} adjusted issues) - continuing cautiously", adjusted_delta);
+            println!("Outcome: REGRESSION (+{} adjusted issues)", adjusted_delta);
             stall_count += 1;
         } else if total_delta > 0 && adjusted_delta <= 0 {
             // Total increased but adjusted is fine = expected SDD flow (e.g., scenarios added, bindings needed)
             println!("✅ Expected SDD flow: {} issues added (bindings/SUT work created)", total_delta);
+            println!("Outcome: EXPECTED_FLOW");
             stall_count = 0;
             consecutive_failures = 0;
             if !skipped_types.is_empty() {
@@ -1094,7 +1121,7 @@ fn format_mission_success(
             if let Some(delta) = scenario_delta {
                 if delta > 0 {
                     let cascade_msg = if after_binding > before_binding {
-                        format!(" → {} binding(s) now needed (expected cascade)", after_binding - before_binding)
+                        " → Expected cascade: missing bindings created.".to_string()
                     } else {
                         String::new()
                     };
@@ -1105,7 +1132,7 @@ fn format_mission_success(
             let specs_improved = before_spec.saturating_sub(after_spec);
             if specs_improved > 0 {
                 let cascade_msg = if after_binding > before_binding {
-                    format!(" → {} binding(s) now needed (expected cascade)", after_binding - before_binding)
+                    " → Expected cascade: missing bindings created.".to_string()
                 } else {
                     String::new()
                 };

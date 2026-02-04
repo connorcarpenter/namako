@@ -29,6 +29,7 @@ mod mission_selector;
 mod mission_type;
 mod model_tier;
 mod packet_parser;
+mod policy_violation;
 mod prompts;
 mod repl;
 mod repo_state;
@@ -1153,6 +1154,8 @@ fn run_run(
     surface_overrides: Option<crate::surface_policy::SurfacePolicy>,
     allow_dirty: bool,
     model_overrides: Option<config::ModelOverrides>,
+    pre_gate_build_cmd: Option<String>,
+    pre_gate_build_mode: config::PreGateBuildMode,
     logger: &logging::JsonlLogger,
 ) -> Result<()> {
     use crate::mission::{MissionBundle, MissionBudgets, MissionInputs};
@@ -1179,7 +1182,7 @@ fn run_run(
     use crate::stage::{Stage, StageConstraint, detect_stage};
     use crate::stop_reason::{StopReason, RunResult};
     use crate::workspace::Workspace;
-    use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker, is_missing_bindings_only};
+    use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker};
     use crate::surface_policy::SurfaceDefinition;
     use crate::error_parser::run_pre_gate_build;
 
@@ -1227,6 +1230,7 @@ fn run_run(
         emit_run_result(&result, &spec_root)?;
         log_session_end(logger, StopReason::HumanRequired, result.details.clone());
         eprintln!("STOP: {}", result.reason);
+        eprintln!("Outcome: {}", stop_reason_label(result.reason));
         eprintln!("Details: {}", result.details.as_deref().unwrap_or(""));
         return Ok(());
     }
@@ -1270,6 +1274,7 @@ fn run_run(
             emit_run_result(&result, &spec_root)?;
             log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
             eprintln!("STOP: {}", result.reason);
+            eprintln!("Outcome: {}", stop_reason_label(result.reason));
             return Ok(());
         }
     };
@@ -1287,45 +1292,6 @@ fn run_run(
     eprintln!("Spec root: {}", spec_root.display());
     eprintln!("Runner: {}", runner.name());
     eprintln!();
-
-    // Pre-gate build check (Sprint 4.1)
-    // Run cargo build before gate to catch compile errors early
-    eprintln!("[0/6] Pre-gate build check...");
-    let build_result = run_pre_gate_build(workspace.working_dir(), None);
-    if !build_result.success {
-        let error_summary = if build_result.errors.is_empty() {
-            build_result.stderr_excerpt.lines().take(10).collect::<Vec<_>>().join("\n")
-        } else {
-            build_result.errors.iter()
-                .take(5)
-                .map(|e| e.to_oneliner())
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        eprintln!("  ❌ Build failed ({} errors)", build_result.total_errors);
-        eprintln!("  Top errors:\n{}", error_summary);
-        
-        // Store build result for potential retry context
-        let build_result_path = spec_root.join(".tesaki/last_build_result.json");
-        if let Ok(json) = serde_json::to_string_pretty(&build_result) {
-            let _ = fs::write(&build_result_path, json);
-        }
-        
-        let result = RunResult::error(
-            StopReason::GateFailed,
-            format!("Pre-gate build failed with {} compile errors. Fix compilation before running missions.\n\nTop errors:\n{}", 
-                build_result.total_errors, error_summary),
-        );
-        emit_run_result(&result, &spec_root)?;
-        log_session_end(logger, StopReason::GateFailed, result.details.clone());
-        eprintln!("STOP: BUILD_FAILED - Code does not compile");
-        return Ok(());
-    }
-    // Show warning if present (e.g., workspace-wide check failed but we're proceeding)
-    if let Some(ref warning) = build_result.warning {
-        eprintln!("  ⚠️  {}", warning);
-    }
-    eprintln!("  ✅ Build passed ({:.1}s)", build_result.elapsed_seconds);
 
     // Step 1: Measure via Namako packets
     eprintln!("[1/6] Running namako gate --json (pre-mission state)...");
@@ -1399,21 +1365,39 @@ fn run_run(
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::Blocked, result.details.clone());
                 eprintln!("STOP: BLOCKED - No eligible mission for stage");
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::Blocked));
                 return Ok(());
             }
             let result = RunResult::done(0, 0);
             emit_run_result(&result, &spec_root)?;
             log_session_end(logger, StopReason::Done, None);
             eprintln!("STOP: DONE - No work remaining");
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::Done));
             return Ok(());
         }
     };
 
+    let mut scenario_budget: Option<ScenarioAddBudget> = None;
+    let mut pre_feature_scenario_count: Option<usize> = None;
+    let mut pre_rule_scenario_count: Option<usize> = None;
     let (pre_rule_count, feature_snapshot) = match &mission_type {
-        crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } => (
-            repo_state.rule_count_for_feature(feature_path),
-            read_feature_snapshot(&spec_root, feature_path),
-        ),
+        crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, rule_name } => {
+            pre_feature_scenario_count = repo_state.scenario_count_for_feature(feature_path);
+            if let Some(rule) = rule_name.as_ref() {
+                pre_rule_scenario_count =
+                    repo_state.scenario_count_for_rule(feature_path, rule);
+            }
+            scenario_budget = Some(scenario_add_budget(
+                feature_path,
+                rule_name.as_deref(),
+                &repo_state,
+                &review_packet,
+            ));
+            (
+                repo_state.rule_count_for_feature(feature_path),
+                read_feature_snapshot(&spec_root, feature_path),
+            )
+        }
         _ => (None, None),
     };
 
@@ -1431,6 +1415,7 @@ fn run_run(
             emit_run_result(&result, &spec_root)?;
             log_session_end(logger, StopReason::NoProgress, Some(details));
             eprintln!("STOP: NO_PROGRESS - cooldown in effect");
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
             return Ok(());
         }
     }
@@ -1461,6 +1446,65 @@ fn run_run(
         lock_label(surface_policy.sut)
     );
     log_mission_proposed(logger, &mission_type, &active_stage, &surface_policy);
+
+    // Pre-gate build check (optional; skip for spec-only unless forced)
+    let should_build = should_run_pre_gate_build_for_policy(pre_gate_build_mode, &surface_policy)
+        && crate::error_parser::should_run_pre_gate_build(workspace.working_dir());
+    if should_build {
+        eprintln!("Pre-gate build check...");
+        let build_result = run_pre_gate_build(workspace.working_dir(), pre_gate_build_cmd.as_deref());
+        if !build_result.success {
+            let error_summary = if build_result.errors.is_empty() {
+                build_result
+                    .stderr_excerpt
+                    .lines()
+                    .take(10)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                build_result
+                    .errors
+                    .iter()
+                    .take(5)
+                    .map(|e| e.to_oneliner())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            eprintln!("  ❌ Build failed ({} errors)", build_result.total_errors);
+            eprintln!("  Top errors:\n{}", error_summary);
+
+            // Store build result for potential retry context
+            let build_result_path = spec_root.join(".tesaki/last_build_result.json");
+            if let Ok(json) = serde_json::to_string_pretty(&build_result) {
+                let _ = fs::write(&build_result_path, json);
+            }
+
+            let result = RunResult::error(
+                StopReason::GateFailed,
+                format!(
+                    "Pre-gate build failed with {} compile errors. Fix compilation before running missions.\n\nTop errors:\n{}",
+                    build_result.total_errors, error_summary
+                ),
+            );
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::GateFailed, result.details.clone());
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::GateFailed));
+            eprintln!("Details: {}", result.details.as_deref().unwrap_or(""));
+            return Ok(());
+        }
+        // Show warning if present (e.g., workspace-wide check failed but we're proceeding)
+        if let Some(ref warning) = build_result.warning {
+            eprintln!("  ⚠️  {}", warning);
+        }
+        eprintln!("  ✅ Build passed ({:.1}s)", build_result.elapsed_seconds);
+    } else {
+        let reason = match pre_gate_build_mode {
+            config::PreGateBuildMode::Never => "disabled by config",
+            config::PreGateBuildMode::Auto => "spec-only mission",
+            config::PreGateBuildMode::Always => "disabled by cache",
+        };
+        eprintln!("Pre-gate build check: skipped ({})", reason);
+    }
 
     let mut surface_definitions = SurfaceDefinitions {
         spec: SurfaceDefinition::spec(),
@@ -1579,7 +1623,7 @@ fn run_run(
             Ok(outcome) => outcome,
             Err(err) => outcome_from_error(err),
         };
-        eprintln!("  Outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
+        eprintln!("  Runner outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
             outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
         
         // Display token usage immediately after runner completes (before any move to failed/)
@@ -1590,6 +1634,14 @@ fn run_run(
         log_mission_executed(logger, mission.id.as_str(), runner.name(), &outcome);
         if let Some(invocation) = &planned_invocation {
             log_runner_command_result(logger, invocation, &outcome);
+        }
+
+        // Detect policy violations in runner output (non-fatal, informational).
+        if let Some(report) = scan_runner_policy_violations(&outcome) {
+            eprintln!("  ⚠️  {}", report.summary_line());
+            if let Err(err) = write_policy_violation_artifacts(&mission.path, &report) {
+                eprintln!("  ⚠️  Failed to record policy violations: {}", err);
+            }
         }
 
         let stop_reason_path = mission.path.join("RUNNER_OUTPUT").join("stop_reason.json");
@@ -1652,6 +1704,7 @@ fn run_run(
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, stop.clone(), result.details.clone());
                 eprintln!("STOP: {} - After {} attempt(s)", stop, attempts_made);
+                eprintln!("Outcome: {}", stop_reason_label(stop));
                 eprintln!("Failed mission preserved at: {}", failed_path.display());
                 return Ok(());
             }
@@ -1674,6 +1727,7 @@ fn run_run(
             save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
             log_session_end(logger, StopReason::NoProgress, Some(details));
             eprintln!("STOP: NO_PROGRESS - Runner made no changes");
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
             eprintln!("Failed mission preserved at: {}", failed_path.display());
             return Ok(());
         }
@@ -1685,7 +1739,6 @@ fn run_run(
         mission.write_gate_result(&post_gate_json)?;
 
         let gate_outcome = GateOutcome::from_json_str(&post_gate_json);
-        let missing_bindings_only = is_missing_bindings_only(&post_gate_json);
         eprintln!("  Gate outcome: {:?}", gate_outcome);
         log_post_gate(logger, gate_outcome, mission.path.join("POST_GATE.json"));
 
@@ -1701,6 +1754,29 @@ fn run_run(
         let post_review_packet = parse_review_json(&post_review_json)?;
         let post_gate_packet = parse_gate_json(&post_gate_json)?;
         let post_state = RepoState::compute(&post_status_packet, &post_review_packet, &post_gate_packet, None)?;
+
+        let mut scenario_delta_feature: Option<i32> = None;
+        let mut scenario_delta_rule: Option<i32> = None;
+        if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, rule_name } = &mission_type {
+            let post_feature_scenarios = post_state.scenario_count_for_feature(feature_path);
+            scenario_delta_feature = match (pre_feature_scenario_count, post_feature_scenarios) {
+                (Some(pre), Some(post)) => Some(post as i32 - pre as i32),
+                _ => None,
+            };
+            if let Some(rule) = rule_name.as_ref() {
+                let post_rule_scenarios = post_state.scenario_count_for_rule(feature_path, rule);
+                scenario_delta_rule = match (pre_rule_scenario_count, post_rule_scenarios) {
+                    (Some(pre), Some(post)) => Some(post as i32 - pre as i32),
+                    _ => None,
+                };
+            }
+        }
+
+        let scenario_delta_for_budget = if matches!(mission_type, crate::mission_type::MissionType::AddOrClarifyScenario { rule_name: Some(_), .. }) {
+            scenario_delta_rule
+        } else {
+            scenario_delta_feature
+        };
 
         if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } = &mission_type {
             let post_rule_count = post_state.rule_count_for_feature(feature_path);
@@ -1722,8 +1798,37 @@ fn run_run(
                 save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
                 log_session_end(logger, StopReason::NoProgress, Some(details));
                 eprintln!("STOP: RULE_COUNT_INCREASE - Mission rejected");
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
                 eprintln!("Failed mission preserved at: {}", failed_path.display());
                 return Ok(());
+            }
+        }
+
+        if matches!(mission_type, crate::mission_type::MissionType::AddOrClarifyScenario { .. }) {
+            if let (Some(delta), Some(budget)) = (scenario_delta_for_budget, scenario_budget) {
+                if delta > budget.max_additional {
+                    if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } = &mission_type {
+                        if let Some(snapshot) = feature_snapshot.as_ref() {
+                            let _ = restore_feature_snapshot(&spec_root, feature_path, snapshot);
+                        }
+                    }
+                    let details = format!(
+                        "Scenario budget exceeded (added {}, max {}). Tighten to the allowed budget before retrying.",
+                        delta, budget.max_additional
+                    );
+                    let failed_path = mission.preserve_failed()?;
+                    let result = RunResult::error(StopReason::NoProgress, details.clone())
+                        .with_mission_path(failed_path.display().to_string())
+                        .with_missions(attempts_made);
+                    let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+                    emit_run_result(&result, &spec_root)?;
+                    save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
+                    log_session_end(logger, StopReason::NoProgress, Some(details));
+                    eprintln!("STOP: SCENARIO_BUDGET_EXCEEDED - Mission rejected");
+                    eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
+                    eprintln!("Failed mission preserved at: {}", failed_path.display());
+                    return Ok(());
+                }
             }
         }
 
@@ -1738,22 +1843,28 @@ fn run_run(
             save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
             log_session_end(logger, StopReason::NoProgress, Some(details));
             eprintln!("STOP: NO_PROGRESS - No improvement detected");
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
             eprintln!("Failed mission preserved at: {}", failed_path.display());
             return Ok(());
         }
 
-        if missing_bindings_only {
-            if matches!(mission_type, crate::mission_type::MissionType::AddOrClarifyScenario { .. }) {
-                eprintln!("  Gate failed due to missing bindings only; accepting scenario additions and chaining to bindings.");
-                let mut result = RunResult::done(attempts_made, cert_updates_made)
-                    .with_mission_path(mission.path.display().to_string());
-                result.details = Some("Missing bindings detected after adding scenarios; follow-up CreateMissingBindings is required.".to_string());
-                clear_failure_record(&spec_root);
-                emit_run_result(&result, &spec_root)?;
-                log_session_end(logger, StopReason::Done, result.details.clone());
-                eprintln!("\nSUCCESS: Scenarios added (bindings pending)");
-                return Ok(());
-            }
+        let expected_cascade = matches!(
+            mission_type,
+            crate::mission_type::MissionType::AddOrClarifyScenario { .. }
+        ) && status_has_missing_steps_only(&post_status_packet)
+            && !post_state.binding_issues.is_empty();
+
+        if expected_cascade {
+            eprintln!("  Expected cascade: missing bindings created.");
+            let mut result = RunResult::done(attempts_made, cert_updates_made)
+                .with_mission_path(mission.path.display().to_string());
+            result.details = Some("Expected cascade: missing bindings created.".to_string());
+            clear_failure_record(&spec_root);
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::Done, result.details.clone());
+            eprintln!("\nSUCCESS: Scenarios added (bindings pending)");
+            eprintln!("Outcome: EXPECTED_CASCADE");
+            return Ok(());
         }
 
         match gate_outcome {
@@ -1766,6 +1877,7 @@ fn run_run(
                 log_session_end(logger, StopReason::Done, None);
                 eprintln!("\nSUCCESS: Mission completed after {} attempt(s)", attempts_made);
                 eprintln!("Mission bundle: {}", mission.path.display());
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::Done));
                 return Ok(());
             }
 
@@ -1852,6 +1964,7 @@ fn run_run(
                             log_session_end(logger, StopReason::Done, None);
                             eprintln!("\nSUCCESS: Mission completed after {} attempt(s), {} cert update(s)",
                                 attempts_made, cert_updates_made);
+                            eprintln!("Outcome: {}", stop_reason_label(StopReason::Done));
                             return Ok(());
                         } else {
                             eprintln!("  ✗ Gate still failing after update-cert: {:?}", recheck_outcome);
@@ -1880,6 +1993,7 @@ fn run_run(
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Verify still failing after update-cert");
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::GateFailed));
                 eprintln!("Failed mission preserved at: {}", failed_path.display());
                 return Ok(());
             }
@@ -1903,6 +2017,7 @@ fn run_run(
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Post-run validation failed");
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::GateFailed));
                 eprintln!("Failed mission preserved at: {}", failed_path.display());
                 return Ok(());
             }
@@ -2339,6 +2454,166 @@ fn fingerprint_packets(status: &str, review: &str, gate: &str) -> String {
     hash.to_hex().to_string()
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ScenarioAddBudget {
+    max_additional: i32,
+}
+
+fn scenario_add_budget(
+    feature_path: &str,
+    rule_name: Option<&str>,
+    repo_state: &crate::repo_state::RepoState,
+    review: &crate::packet_parser::ReviewPacket,
+) -> ScenarioAddBudget {
+    let mut max_additional = 1;
+    if let Some(rule) = rule_name {
+        let rule_scenarios = repo_state.scenario_count_for_rule(feature_path, rule);
+        let deferred = deferred_count_for_rule(review, feature_path, rule).unwrap_or(0);
+        if rule_scenarios == Some(0) && deferred == 0 {
+            max_additional = 2;
+        }
+    }
+    ScenarioAddBudget { max_additional }
+}
+
+fn deferred_count_for_rule(
+    review: &crate::packet_parser::ReviewPacket,
+    feature_path: &str,
+    rule_name: &str,
+) -> Option<usize> {
+    review
+        .features
+        .iter()
+        .find(|feature| feature.feature_path == feature_path)
+        .and_then(|feature| {
+            feature
+                .rules
+                .iter()
+                .find(|rule| rule.rule_name == rule_name)
+                .map(|rule| rule.deferred_items.len())
+        })
+}
+
+fn lint_summary_missing_steps_only(summary: &str) -> bool {
+    if !summary.contains("MissingStep {") {
+        return false;
+    }
+
+    let other_errors = [
+        "AmbiguousStep",
+        "SignatureMismatch",
+        "ParseError",
+        "InvalidExpression",
+        "MissingFeatureId",
+        "MissingRuleSection",
+        "ScenarioOutsideRule",
+        "MissingRuleId",
+        "MissingScenarioId",
+        "DuplicateScenarioKey",
+        "DuplicateRuleId",
+        "DuplicateScenarioId",
+    ];
+
+    !other_errors.iter().any(|name| summary.contains(name))
+}
+
+fn status_has_missing_steps_only(status: &crate::packet_parser::StatusPacket) -> bool {
+    if status.lint_status != crate::packet_parser::StatusValue::Fail {
+        return false;
+    }
+    status
+        .gates
+        .as_ref()
+        .and_then(|gates| gates.lint.summary.as_deref())
+        .map(lint_summary_missing_steps_only)
+        .unwrap_or(false)
+}
+
+fn should_run_pre_gate_build_for_policy(
+    mode: config::PreGateBuildMode,
+    policy: &crate::surface_policy::SurfacePolicy,
+) -> bool {
+    match mode {
+        config::PreGateBuildMode::Never => false,
+        config::PreGateBuildMode::Always => true,
+        config::PreGateBuildMode::Auto => {
+            !(policy.spec == crate::surface_policy::SurfaceLock::Unlocked
+                && policy.tests_bindings == crate::surface_policy::SurfaceLock::Locked
+                && policy.sut == crate::surface_policy::SurfaceLock::Locked)
+        }
+    }
+}
+
+fn scan_runner_policy_violations(
+    outcome: &crate::runner::RunnerOutcome,
+) -> Option<policy_violation::PolicyViolationsReport> {
+    let mut combined = String::new();
+    let mut has_output = false;
+
+    if let Some(path) = outcome.stdout_path.as_ref() {
+        if let Ok(text) = fs::read_to_string(path) {
+            combined.push_str(&text);
+            combined.push('\n');
+            has_output = true;
+        }
+    }
+    if let Some(path) = outcome.stderr_path.as_ref() {
+        if let Ok(text) = fs::read_to_string(path) {
+            combined.push_str(&text);
+            combined.push('\n');
+            has_output = true;
+        }
+    }
+
+    if !has_output {
+        return None;
+    }
+
+    let report = policy_violation::scan_policy_violations(&combined);
+    if report.is_empty() { None } else { Some(report) }
+}
+
+fn write_policy_violation_artifacts(
+    mission_dir: &Path,
+    report: &policy_violation::PolicyViolationsReport,
+) -> Result<()> {
+    let output_dir = mission_dir.join("RUNNER_OUTPUT");
+    fs::create_dir_all(&output_dir)?;
+
+    let report_path = output_dir.join("policy_violations.json");
+    let json = serde_json::to_string_pretty(report)?;
+    fs::write(&report_path, json)?;
+
+    append_policy_violations_to_attempt_report(&output_dir, report)?;
+
+    Ok(())
+}
+
+fn append_policy_violations_to_attempt_report(
+    output_dir: &Path,
+    report: &policy_violation::PolicyViolationsReport,
+) -> Result<()> {
+    let report_md = report.to_markdown();
+    let attempt_report_path = output_dir.join("attempt_report.md");
+
+    if attempt_report_path.is_file() {
+        let mut content = fs::read_to_string(&attempt_report_path).unwrap_or_default();
+        if !content.contains("## Policy Violations") {
+            if !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push('\n');
+            content.push_str(&report_md);
+            fs::write(&attempt_report_path, content)?;
+        }
+        return Ok(());
+    }
+
+    let fallback_path = output_dir.join("policy_violations.md");
+    fs::write(&fallback_path, report_md)?;
+    Ok(())
+}
+
 fn has_progress(
     pre: &crate::repo_state::RepoState,
     post: &crate::repo_state::RepoState,
@@ -2511,6 +2786,11 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+    use crate::packet_parser::{
+        BlockerType as ReviewBlockerType, CoverageSummary, DeferredItem, FeatureReview,
+        IdentityFields, IdentitySection, LegacyGateResult, LegacyGateStatus, ReviewPacket,
+        RuleReview, ScenarioReview, SourceSpan, StatusPacket, StatusValue, StepInfo,
+    };
 
     /// Test log entry serialization
     #[test]
@@ -2624,6 +2904,78 @@ mod tests {
         assert!(read_certification_identity(&cert_path).is_none());
     }
 
+    #[test]
+    fn test_lint_summary_missing_steps_only() {
+        let summary = r#"Resolution errors: [MissingStep { step_text: "Given a", step_kind: "given", feature_path: "f.feature", line: 1 }]"#;
+        assert!(lint_summary_missing_steps_only(summary));
+
+        let summary = r#"Resolution errors: [MissingStep { step_text: "Given a", step_kind: "given", feature_path: "f.feature", line: 1 }, AmbiguousStep { step_text: "Given b", step_kind: "given", feature_path: "f.feature", line: 2, matching_bindings: ["x"] }]"#;
+        assert!(!lint_summary_missing_steps_only(summary));
+    }
+
+    #[test]
+    fn test_status_has_missing_steps_only() {
+        let status = status_with_lint_summary(
+            r#"Resolution errors: [MissingStep { step_text: "Given a", step_kind: "given", feature_path: "f.feature", line: 1 }]"#,
+        );
+        assert!(status_has_missing_steps_only(&status));
+
+        let status = status_with_lint_summary(
+            r#"Resolution errors: [MissingStep { step_text: "Given a", step_kind: "given", feature_path: "f.feature", line: 1 }, AmbiguousStep { step_text: "Given b", step_kind: "given", feature_path: "f.feature", line: 2, matching_bindings: ["x"] }]"#,
+        );
+        assert!(!status_has_missing_steps_only(&status));
+    }
+
+    #[test]
+    fn test_scenario_add_budget_allows_two_for_empty_rule() {
+        let feature_path = "features/a.feature";
+        let rule_name = "Rule A";
+        let review = review_for_rule(feature_path, rule_name, 0);
+        let mut state = crate::repo_state::RepoState::default();
+        state
+            .scenarios_per_rule
+            .insert(format!("{}::{}", feature_path, rule_name), 0);
+
+        let budget = scenario_add_budget(feature_path, Some(rule_name), &state, &review);
+        assert_eq!(budget.max_additional, 2);
+    }
+
+    #[test]
+    fn test_scenario_add_budget_limits_to_one_with_deferred() {
+        let feature_path = "features/a.feature";
+        let rule_name = "Rule A";
+        let review = review_for_rule(feature_path, rule_name, 1);
+        let mut state = crate::repo_state::RepoState::default();
+        state
+            .scenarios_per_rule
+            .insert(format!("{}::{}", feature_path, rule_name), 0);
+
+        let budget = scenario_add_budget(feature_path, Some(rule_name), &state, &review);
+        assert_eq!(budget.max_additional, 1);
+    }
+
+    #[test]
+    fn test_pre_gate_build_policy() {
+        let spec_only = crate::surface_policy::SurfacePolicy::for_refine_spec();
+        let tests_unlocked = crate::surface_policy::SurfacePolicy::for_implement_tests();
+        assert!(!should_run_pre_gate_build_for_policy(
+            config::PreGateBuildMode::Auto,
+            &spec_only
+        ));
+        assert!(should_run_pre_gate_build_for_policy(
+            config::PreGateBuildMode::Auto,
+            &tests_unlocked
+        ));
+        assert!(should_run_pre_gate_build_for_policy(
+            config::PreGateBuildMode::Always,
+            &spec_only
+        ));
+        assert!(!should_run_pre_gate_build_for_policy(
+            config::PreGateBuildMode::Never,
+            &tests_unlocked
+        ));
+    }
+
     /// Test that stub scenarios are filtered from eligible candidates (defense-in-depth).
     /// Per TODO.md §2: Tesaki must NEVER select @Stub scenarios as tasks.
     #[test]
@@ -2672,5 +3024,91 @@ mod tests {
         // Verify stub was excluded
         let has_stub = eligible.iter().any(|c| c.scenario_name == "Stub scenario");
         assert!(!has_stub, "Stub scenario should be excluded from eligible list");
+    }
+
+    fn review_for_rule(feature_path: &str, rule_name: &str, deferred_count: usize) -> ReviewPacket {
+        let deferred_items = (0..deferred_count)
+            .map(|i| DeferredItem {
+                text: format!("Deferred {}", i),
+                source_span: SourceSpan { start_line: 1, end_line: 1 },
+                blocker: ReviewBlockerType::Unknown,
+            })
+            .collect::<Vec<_>>();
+
+        ReviewPacket {
+            version: 1,
+            spec_root: "/repo".to_string(),
+            identity_current: IdentityFields {
+                hash_contract_version: "namako-v1-json+blake3-256".to_string(),
+                feature_fingerprint_hash: "a".to_string(),
+                step_registry_hash: "b".to_string(),
+                resolved_plan_hash: "c".to_string(),
+            },
+            features: vec![FeatureReview {
+                feature_path: feature_path.to_string(),
+                feature_name: "Feature".to_string(),
+                rules: vec![RuleReview {
+                    rule_name: rule_name.to_string(),
+                    source_span: SourceSpan { start_line: 1, end_line: 1 },
+                    executable_scenarios: vec![ScenarioReview {
+                        name: "Scenario".to_string(),
+                        source_span: SourceSpan { start_line: 1, end_line: 1 },
+                        steps: vec![StepInfo { kind: "given".to_string(), text: "x".to_string() }],
+                    }],
+                    deferred_items,
+                }],
+            }],
+            coverage_summary: CoverageSummary {
+                rules_total: 1,
+                rules_with_zero_executable: 0,
+                executable_scenarios_total: 1,
+                deferred_items_total: deferred_count as u32,
+            },
+            deferred_items: vec![],
+            promotion_candidates: vec![],
+            missing_bindings_for_top_candidates: vec![],
+            harness_gaps: vec![],
+            suggested_binding_bundle: None,
+        }
+    }
+
+    fn status_with_lint_summary(summary: &str) -> StatusPacket {
+        StatusPacket {
+            version: 1,
+            spec_root: "/repo".to_string(),
+            recommended_next_action: "FIX_LINT".to_string(),
+            lint_status: StatusValue::Fail,
+            run_status: StatusValue::NotRun,
+            verify_status: StatusValue::NotRun,
+            drift: None,
+            last_run_failures: vec![],
+            identity: IdentitySection {
+                current: IdentityFields {
+                    hash_contract_version: "namako-v1-json+blake3-256".to_string(),
+                    feature_fingerprint_hash: "a".to_string(),
+                    step_registry_hash: "b".to_string(),
+                    resolved_plan_hash: "c".to_string(),
+                },
+                baseline: None,
+            },
+            metadata: None,
+            gates: Some(LegacyGateStatus {
+                lint: LegacyGateResult {
+                    ok: false,
+                    code: 1,
+                    summary: Some(summary.to_string()),
+                },
+                run: LegacyGateResult {
+                    ok: false,
+                    code: 1,
+                    summary: Some("Cannot run - lint failed".to_string()),
+                },
+                verify: LegacyGateResult {
+                    ok: false,
+                    code: 1,
+                    summary: Some("Cannot verify - lint failed".to_string()),
+                },
+            }),
+        }
     }
 }

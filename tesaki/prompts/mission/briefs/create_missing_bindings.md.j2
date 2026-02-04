@@ -21,5 +21,6 @@ Required context:
 ## Instructions
 
 Add bindings to files in `test/tests/src/steps/`. Look at existing bindings for patterns.
+Prefer concrete step strings over `{word}` parameters for polling `Then` steps. Non‑Copy parameters (like `String`) can cause macro capture issues; if you must parameterize, keep captures Copy (e.g., `{int}`) or create separate concrete steps (e.g., “client A/B”).
 
 **Note:** Create bindings only — don't implement SUT behavior. Do NOT run `namako gate`/`namako lint`/`namako steps`; Tesaki will validate.

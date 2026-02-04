@@ -2,6 +2,7 @@ use std::{fs, io};
 
 use namako_engine::{
     StatsWriter as _, World,
+    codegen::AssertOutcome,
     gherkin::Step, given, then, when,
 };
 
@@ -102,6 +103,15 @@ fn test_return_result_read_slice(
 
     let content = fs::read_to_string(path).expect("Failed to read file");
     assert_eq!(content, inputs[1]);
+}
+
+#[then("the word {word} is seen")]
+fn test_then_assert_outcome(_w: MyWorldRef, word: String) -> AssertOutcome<()> {
+    if word == "ok" {
+        AssertOutcome::Passed(())
+    } else {
+        AssertOutcome::failed(format!("unexpected word: {}", word))
+    }
 }
 
 #[tokio::main]

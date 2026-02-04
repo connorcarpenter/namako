@@ -21,6 +21,8 @@
 //! max_cert_updates = 3
 //! max_runtime_seconds = 600
 //! max_files_changed = 10
+//! pre_gate_build = "cargo check -p my-test-harness"
+//! pre_gate_build_mode = "auto" # auto | always | never
 //! ```
 //!
 //! # Path Resolution
@@ -104,6 +106,25 @@ pub struct Config {
     /// Example: "cargo build -p my-test-harness"
     #[serde(default)]
     pub pre_gate_build: Option<String>,
+
+    /// Pre-gate build mode: auto (skip for spec-only), always, or never.
+    #[serde(default)]
+    pub pre_gate_build_mode: PreGateBuildMode,
+}
+
+/// Pre-gate build mode selection.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PreGateBuildMode {
+    Auto,
+    Always,
+    Never,
+}
+
+impl Default for PreGateBuildMode {
+    fn default() -> Self {
+        PreGateBuildMode::Auto
+    }
 }
 
 /// Surface patterns override
@@ -195,6 +216,12 @@ pub struct ResolvedConfig {
 
     /// Model overrides for intelligent tiering
     pub model_overrides: Option<ModelOverrides>,
+
+    /// Pre-gate build command (optional)
+    pub pre_gate_build: Option<String>,
+
+    /// Pre-gate build mode
+    pub pre_gate_build_mode: PreGateBuildMode,
 }
 
 impl ResolvedConfig {
@@ -306,6 +333,8 @@ fn resolve_config(config: Config, config_root: &Path, config_path: &Path) -> Res
         max_files_changed: config.max_files_changed,
         surfaces: config.surfaces,
         model_overrides: config.model_overrides,
+        pre_gate_build: config.pre_gate_build,
+        pre_gate_build_mode: config.pre_gate_build_mode,
     })
 }
 
@@ -366,6 +395,10 @@ max_retries = 2
 max_cert_updates = 3
 max_runtime_seconds = 600
 max_files_changed = 10
+
+# Optional: Pre-gate build behavior
+# pre_gate_build = "cargo check -p my-test-harness"
+# pre_gate_build_mode = "auto"  # auto | always | never
 "#
 }
 

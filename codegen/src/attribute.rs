@@ -102,6 +102,12 @@ impl Step {
         let step_type = self.step_type();
         let (func_args, addon_parsing) =
             self.fn_arguments_and_additional_parsing()?;
+        let call_args = quote! { #( #func_args, )* };
+        let polling_args = func_args
+            .iter()
+            .map(|arg| quote! { (#arg).clone() })
+            .collect::<Vec<_>>();
+        let polling_args = quote! { #( #polling_args, )* };
 
         let regex = self.gen_regex()?;
         let allow_trivial_regex_attr = quote! {};
@@ -190,7 +196,7 @@ impl Step {
                                 __namako_world,
                                 |__namako_ctx_arg| {
                                     let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
-                                        #func_name(#ctx_arg, #func_args)
+                                        #func_name(#ctx_arg, #polling_args)
                                             #awaiting
                                     }));
 
@@ -223,7 +229,7 @@ impl Step {
                                 __namako_world,
                                 |__namako_ctx_arg| {
                                     let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
-                                        let _ = #func_name(#ctx_arg, #func_args)
+                                        let _ = #func_name(#ctx_arg, #polling_args)
                                             #awaiting
                                             #unwrapping;
                                     }));
@@ -254,7 +260,7 @@ impl Step {
                     let f = async move {
                         #addon_parsing
                         #ctx_construction
-                        let _ = #func_name(#ctx_arg, #func_args)
+                        let _ = #func_name(#ctx_arg, #call_args)
                             #awaiting
                             #unwrapping;
                     };
@@ -388,7 +394,7 @@ impl Step {
     /// [`AttributeArgument::Regex`].
     fn fn_arguments_and_additional_parsing(
         &self,
-    ) -> syn::Result<(TokenStream, Option<TokenStream>)> {
+    ) -> syn::Result<(Vec<TokenStream>, Option<TokenStream>)> {
         let is_regex_or_expr = matches!(
             self.attr_arg,
             AttributeArgument::Expression(_),
@@ -455,13 +461,13 @@ impl Step {
                         );
                     }
                 });
-                let func_args = func
+                let func_args: Vec<TokenStream> = func
                     .sig
                     .inputs
                     .iter()
                     .skip(1)
                     .map(|arg| self.borrow_step_or_slice(arg))
-                    .collect::<Result<TokenStream, _>>()?;
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 Ok((func_args, addon_parsing))
             } else {
@@ -481,19 +487,20 @@ impl Step {
                         .skip(1);
                     #( #parsings )*
                 });
-                let func_args = quote! {
-                    #( #idents, )*
-                };
+                let func_args = idents
+                    .into_iter()
+                    .map(|ident| quote! { #ident })
+                    .collect::<Vec<_>>();
 
                 Ok((func_args, addon_parsing))
             }
         } else if self.arg_name_of_step_context.is_some() {
             Ok((
-                quote! { ::std::borrow::Borrow::borrow(&__namako_ctx.step), },
+                vec![quote! { ::std::borrow::Borrow::borrow(&__namako_ctx.step) }],
                 None,
             ))
         } else {
-            Ok((TokenStream::default(), None))
+            Ok((Vec::new(), None))
         }
     }
 
@@ -602,13 +609,13 @@ impl Step {
             let (ident, _) = parse_fn_arg(arg)?;
             if name == ident {
                 return Ok(quote! {
-                    ::std::borrow::Borrow::borrow(&__namako_ctx.step),
+                    ::std::borrow::Borrow::borrow(&__namako_ctx.step)
                 });
             }
         }
 
         Ok(quote! {
-            __namako_matches.as_slice(),
+            __namako_matches.as_slice()
         })
     }
 

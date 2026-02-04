@@ -26,3 +26,6 @@ Feature: Example feature
   Scenario: Steps returning result and failing
     When I write "abc" to 'myfile.txt'
     Then the file 'not-here.txt' should contain "abc"
+
+  Scenario: Then AssertOutcome with word
+    Then the word ok is seen
