@@ -252,8 +252,6 @@ impl StallDiagnosis {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface_policy::SurfacePolicy;
-    
     #[test]
     fn test_diagnosis_policy_violation() {
         let mut session = SessionState::default();

@@ -145,17 +145,21 @@ pub fn detect_escalation(
             }
 
             // Generic no progress scenario
+            let mut approaches: Vec<String> = session
+                .failure_history
+                .iter()
+                .rev()
+                .take(5)
+                .map(|f| f.mission_type.clone())
+                .collect();
+            if !approaches.contains(&current_mission_type.to_string()) {
+                approaches.insert(0, current_mission_type.to_string());
+            }
             Some(EscalationContext {
                 escalation_type: EscalationType::NoProgressMultipleAttempts,
                 target: None,
                 attempts: session.failure_history.len() as u32,
-                tried_approaches: session
-                    .failure_history
-                    .iter()
-                    .rev()
-                    .take(5)
-                    .map(|f| f.mission_type.clone())
-                    .collect(),
+                tried_approaches: approaches,
                 blocked_by: None,
                 suggested_options: vec![
                     EscalationOption {

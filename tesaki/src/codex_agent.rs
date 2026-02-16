@@ -22,34 +22,6 @@ impl CodexAgent {
     ///
     /// If `runner_command` is None, uses a default `codex exec` command.
     /// If `planner_command` is None, uses a default `codex exec` command (stdin input).
-    pub fn new(
-        runner_command: Option<String>,
-        planner_command: Option<String>,
-        planner_working_dir: PathBuf,
-    ) -> Result<Self> {
-        Self::new_with_timeout(
-            runner_command,
-            planner_command,
-            planner_working_dir,
-            None,
-        )
-    }
-
-    pub fn new_with_timeout(
-        runner_command: Option<String>,
-        planner_command: Option<String>,
-        planner_working_dir: PathBuf,
-        planner_timeout: Option<Duration>,
-    ) -> Result<Self> {
-        Self::new_with_timeout_and_stream(
-            runner_command,
-            planner_command,
-            planner_working_dir,
-            planner_timeout,
-            false,
-        )
-    }
-
     pub fn new_with_timeout_and_stream(
         runner_command: Option<String>,
         planner_command: Option<String>,
@@ -167,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_codex_agent_expand_default() {
-        let agent = CodexAgent::new(None, None, PathBuf::from("/workspace")).unwrap();
+        let agent = CodexAgent::new_with_timeout_and_stream(None, None, PathBuf::from("/workspace"), None, false).unwrap();
         let expanded =
             agent.expand_runner_command(Path::new("/test/mission"), Path::new("/workspace"));
         assert_eq!(
@@ -178,10 +150,12 @@ mod tests {
 
     #[test]
     fn test_codex_agent_expand_custom() {
-        let agent = CodexAgent::new(
+        let agent = CodexAgent::new_with_timeout_and_stream(
             Some("codex exec -C {working_dir} --full-auto < {mission_dir}/MISSION.md".to_string()),
             None,
             PathBuf::from("/workspace"),
+            None,
+            false,
         )
         .unwrap();
         let expanded =
@@ -194,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_codex_agent_name() {
-        let agent = CodexAgent::new(None, None, PathBuf::from("/workspace")).unwrap();
+        let agent = CodexAgent::new_with_timeout_and_stream(None, None, PathBuf::from("/workspace"), None, false).unwrap();
         assert_eq!(crate::runner::Runner::name(&agent), "codex");
     }
 }

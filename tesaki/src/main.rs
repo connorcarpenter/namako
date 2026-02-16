@@ -1587,24 +1587,7 @@ fn run_run(
         eprintln!("Pre-gate build check...");
         let build_result = run_pre_gate_build(workspace.working_dir(), pre_gate_build_cmd.as_deref());
         if !build_result.success {
-            let error_summary = if build_result.errors.is_empty() {
-                build_result
-                    .stderr_excerpt
-                    .lines()
-                    .take(10)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            } else {
-                build_result
-                    .errors
-                    .iter()
-                    .take(5)
-                    .map(|e| e.to_oneliner())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
-            eprintln!("  ❌ Build failed ({} errors)", build_result.total_errors);
-            eprintln!("  Top errors:\n{}", error_summary);
+            eprintln!("{}", build_result.to_markdown(5));
 
             // Store build result for potential retry context
             let build_result_path = spec_root.join(".tesaki/last_build_result.json");
@@ -1615,8 +1598,8 @@ fn run_run(
             let result = RunResult::error(
                 StopReason::GateFailed,
                 format!(
-                    "Pre-gate build failed with {} compile errors. Fix compilation before running missions.\n\nTop errors:\n{}",
-                    build_result.total_errors, error_summary
+                    "Pre-gate build failed with {} compile errors. Fix compilation before running missions.\n\n{}",
+                    build_result.total_errors, build_result.to_markdown(5)
                 ),
             );
             emit_run_result(&result, &spec_root)?;
@@ -1877,9 +1860,25 @@ fn run_run(
         );
 
         if !violations.is_empty() {
-            eprintln!("  ⚠️  Surface policy violations detected:");
+            // Generate plan validation guidance for the violation
+            let proposed = crate::plan_validator::ProposedPlan {
+                files_to_modify: changes.changed_files.clone(),
+            };
+            let validation = crate::plan_validator::validate_plan(
+                &proposed,
+                &surface_definitions.spec.patterns,
+                &surface_definitions.tests_bindings.patterns,
+                &surface_definitions.sut.patterns,
+                surface_policy.spec == crate::surface_policy::SurfaceLock::Locked,
+                surface_policy.tests_bindings == crate::surface_policy::SurfaceLock::Locked,
+                surface_policy.sut == crate::surface_policy::SurfaceLock::Locked,
+            );
+            eprintln!("  ⚠️  Surface policy violations detected ({} file(s)):", validation.violations.len());
             for v in &violations {
                 eprintln!("      - {}", v);
+            }
+            if !validation.valid {
+                eprintln!("{}", validation.guidance);
             }
 
             // Extract violated files and surfaces for failure context
@@ -2604,18 +2603,6 @@ struct FailureRecord {
     violated_surface: Option<String>,
 }
 
-impl FailureRecord {
-    fn matches(&self, mission_type: &crate::mission_type::MissionType) -> bool {
-        if self.mission_type != mission_type.name() {
-            return false;
-        }
-        match (&self.target, mission_type.target_label()) {
-            (Some(expected), Some(actual)) => expected == &actual,
-            (None, _) => true,
-            _ => false,
-        }
-    }
-}
 
 fn last_failure_path(spec_root: &PathBuf) -> PathBuf {
     spec_root.join(".tesaki").join("last_failure.json")

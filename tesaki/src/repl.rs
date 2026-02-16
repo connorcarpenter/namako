@@ -12,11 +12,15 @@ use crate::chat_plan::{
 use crate::chat_planner::{ChatPlanner, MockChatPlanner};
 use crate::agent_fallback::{planner_candidates, describe_planner_candidates, FallbackChatPlanner};
 use crate::config::{self, ConfigDiscoveryResult};
+use crate::diagnosis::StallDiagnosis;
+use crate::escalation;
+use crate::lessons::{self, LessonsDatabase};
 use crate::mission_type::MissionType;
 use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
 use crate::repo_state::RepoState;
 use crate::session::{PendingMission, SessionState};
 use crate::stage::{detect_stage, Stage, StageConstraint};
+use crate::stop_reason::StopReason;
 use crate::surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy};
 use crate::token_usage::{MissionTokenStats, TokenUsage};
 
@@ -65,6 +69,9 @@ pub fn run_loop_headless(start_dir: PathBuf, max_iterations: u32, logger: &crate
     let mut session = SessionState::default();
     refresh_repo_state(&spec_root, &adapter, &namako_cmd, &mut session, logger)?;
 
+    // Load lessons database for cross-session learning
+    let mut lessons_db = LessonsDatabase::load(&spec_root).unwrap_or_default();
+
     // Run the autonomous loop
     run_autonomous_loop(
         max_iterations,
@@ -81,6 +88,7 @@ pub fn run_loop_headless(start_dir: PathBuf, max_iterations: u32, logger: &crate
         pre_gate_build_mode,
         quality_gates_enabled,
         &mut session,
+        &mut lessons_db,
         logger,
     )
 }
@@ -155,6 +163,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
     };
 
     let mut session = SessionState::default();
+    let mut lessons_db = LessonsDatabase::load(&spec_root).unwrap_or_default();
     refresh_repo_state(&spec_root, &adapter, &namako_cmd, &mut session, logger)?;
 
     println!("Tesaki v1.9 REPL");
@@ -203,6 +212,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
                 pre_gate_build_mode,
                 quality_gates_enabled,
                 &mut session,
+                &mut lessons_db,
                 logger,
             )?;
             continue;
@@ -622,6 +632,7 @@ fn run_autonomous_loop(
     pre_gate_build_mode: crate::config::PreGateBuildMode,
     quality_gates_enabled: bool,
     session: &mut SessionState,
+    lessons_db: &mut LessonsDatabase,
     logger: &crate::logging::JsonlLogger,
 ) -> Result<()> {
     use crate::mission_selector::select_with_constraints;
@@ -714,7 +725,14 @@ fn run_autonomous_loop(
             println!("⏭️  Skipping {} (failed {}× consecutively)", type_name, MAX_CONSECUTIVE_FAILURES);
             stall_count += 1;
             if stall_count >= MAX_STALLS {
-                println!("🛑 All available mission types stalled - stopping");
+                let diagnosis = StallDiagnosis::diagnose(
+                    session, &state, &StopReason::NoProgress,
+                    Some(&type_name), mission_type.target_label().as_deref(),
+                );
+                println!("{}", diagnosis.format_report());
+                if let Some(ctx) = escalation::detect_escalation(session, &type_name, &StopReason::NoProgress) {
+                    println!("{}", escalation::format_escalation_message(&ctx));
+                }
                 break;
             }
             continue;
@@ -909,6 +927,16 @@ fn run_autonomous_loop(
                 }
             }
             println!("❌ Mission invariant violated: {} made its primary metric worse", type_name);
+            // Record invariant violation lesson
+            {
+                let target_key = mission_type.target_label().unwrap_or_default();
+                let lesson = lessons::create_lesson(
+                    &target_key, "invariant_violation",
+                    Some(&format!("{} violated primary metric", type_name)), None,
+                );
+                lessons_db.add_lesson(lesson);
+                lessons_db.save(spec_root).ok();
+            }
             consecutive_failures += 1;
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES && !skipped_types.contains(&type_name) {
                 println!("⏭️  {} violated invariant {}× - skipping for this session", 
@@ -943,6 +971,16 @@ fn run_autonomous_loop(
             }
             println!("🎉 All gates pass, no issues remaining. DONE!");
             println!("Outcome: DONE");
+            // Mark all prior lessons for this target as resolved
+            {
+                let target_key = mission_type.target_label().unwrap_or_default();
+                let ids: Vec<_> = lessons_db.find_lessons_for_target(&target_key)
+                    .iter().map(|l| l.id.clone()).collect();
+                for id in ids {
+                    lessons_db.mark_resolved(&id, "All gates pass");
+                }
+                lessons_db.save(spec_root).ok();
+            }
             // Clear skipped types on success (system recovered)
             skipped_types.clear();
             break;
@@ -974,6 +1012,16 @@ fn run_autonomous_loop(
             }
             println!("✅ Progress made - continuing");
             println!("Outcome: PROGRESS");
+            // Mark lessons for this target as resolved on progress
+            {
+                let target_key = mission_type.target_label().unwrap_or_default();
+                let ids: Vec<_> = lessons_db.find_lessons_for_target(&target_key)
+                    .iter().map(|l| l.id.clone()).collect();
+                for id in ids {
+                    lessons_db.mark_resolved(&id, &format!("{} succeeded", type_name));
+                }
+                lessons_db.save(spec_root).ok();
+            }
             stall_count = 0;
             // Clear consecutive failure counter on progress
             consecutive_failures = 0;
@@ -1029,9 +1077,23 @@ fn run_autonomous_loop(
                 consecutive_failures = 1;
             }
             last_mission_type = Some(type_name.clone());
+            // Record failure lesson (or add approach to existing one)
+            let target_key = mission_type.target_label().unwrap_or_default();
+            if !lessons_db.add_attempted_approach(&target_key, &type_name) {
+                let lesson = lessons::create_lesson(&target_key, "no_progress", Some(&type_name), None);
+                lessons_db.add_lesson(lesson);
+            }
+            lessons_db.save(spec_root).ok();
             println!("Outcome: NO_PROGRESS (stall {}/{})", stall_count, MAX_STALLS);
             if stall_count >= MAX_STALLS {
-                println!("🛑 Too many stalls - stopping to avoid infinite loop");
+                let diagnosis = StallDiagnosis::diagnose(
+                    session, &after_state, &StopReason::NoProgress,
+                    Some(&type_name), mission_type.target_label().as_deref(),
+                );
+                println!("{}", diagnosis.format_report());
+                if let Some(ctx) = escalation::detect_escalation(session, &type_name, &StopReason::NoProgress) {
+                    println!("{}", escalation::format_escalation_message(&ctx));
+                }
                 break;
             }
         } else if adjusted_delta > 0 {
@@ -1058,12 +1120,24 @@ fn run_autonomous_loop(
             }
             last_mission_type = Some(type_name.clone());
             
+            // Record regression lesson
+            {
+                let target_key = mission_type.target_label().unwrap_or_default();
+                let lesson = lessons::create_lesson(
+                    &target_key, "regression",
+                    Some(&format!("adjusted delta +{}", adjusted_delta)), None,
+                );
+                lessons_db.add_lesson(lesson);
+                lessons_db.save(spec_root).ok();
+            }
             // Check for catastrophic regression (per OPTIMIZATION_ANALYSIS.md)
             const MAX_REGRESSION_TOLERATED: i32 = 5;
             if adjusted_delta > MAX_REGRESSION_TOLERATED {
-                println!("🛑 EMERGENCY STOP: Regression of +{} issues exceeds threshold of {}", 
-                    adjusted_delta, MAX_REGRESSION_TOLERATED);
-                println!("   Last mission made things significantly worse. Human review required.");
+                let diagnosis = StallDiagnosis::diagnose(
+                    session, &after_state, &StopReason::GateFailed,
+                    Some(&type_name), mission_type.target_label().as_deref(),
+                );
+                println!("{}", diagnosis.format_report());
                 println!("Outcome: REGRESSION_STOP");
                 break;
             }

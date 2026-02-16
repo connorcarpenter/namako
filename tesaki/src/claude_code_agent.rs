@@ -22,34 +22,6 @@ impl ClaudeCodeAgent {
     ///
     /// If `runner_command` is None, uses a default Claude CLI command.
     /// If `planner_command` is None, uses a default Claude CLI command (stdin input).
-    pub fn new(
-        runner_command: Option<String>,
-        planner_command: Option<String>,
-        planner_working_dir: PathBuf,
-    ) -> Result<Self> {
-        Self::new_with_timeout(
-            runner_command,
-            planner_command,
-            planner_working_dir,
-            None,
-        )
-    }
-
-    pub fn new_with_timeout(
-        runner_command: Option<String>,
-        planner_command: Option<String>,
-        planner_working_dir: PathBuf,
-        planner_timeout: Option<Duration>,
-    ) -> Result<Self> {
-        Self::new_with_timeout_and_stream(
-            runner_command,
-            planner_command,
-            planner_working_dir,
-            planner_timeout,
-            false,
-        )
-    }
-
     pub fn new_with_timeout_and_stream(
         runner_command: Option<String>,
         planner_command: Option<String>,
@@ -171,10 +143,12 @@ mod tests {
 
     #[test]
     fn test_claude_code_agent_expand() {
-        let agent = ClaudeCodeAgent::new(
+        let agent = ClaudeCodeAgent::new_with_timeout_and_stream(
             Some("echo {mission_dir}/MISSION.md".to_string()),
             None,
             PathBuf::from("/workspace"),
+            None,
+            false,
         )
         .unwrap();
         let expanded =

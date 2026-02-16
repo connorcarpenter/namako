@@ -544,7 +544,7 @@ fn truncate_line(input: &str, max_chars: usize) -> String {
 ///
 /// Returns a list of file paths that violate the policy.  An empty vec means clean.
 /// `working_dir` is the repo root; `changed_files` are the relative paths from git diff.
-pub(crate) fn check_surface_violations(
+pub fn check_surface_violations(
     changed_files: &[String],
     spec_patterns: &[String],
     tests_patterns: &[String],
@@ -573,7 +573,7 @@ pub(crate) fn check_surface_violations(
 
 /// Simple glob-style pattern matching.
 /// Supports `**` (any path segments) and `*` (any single segment).
-fn matches_any_pattern(path: &str, patterns: &[String]) -> bool {
+pub fn matches_any_pattern(path: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|pat| glob_match(pat, path))
 }
 

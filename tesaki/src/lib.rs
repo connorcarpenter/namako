@@ -17,7 +17,8 @@ pub mod packet_parser;
 pub mod prompts;
 pub mod repo_state;
 pub mod runner;
-pub(crate) mod base_runner;
+
+pub mod base_runner;
 pub mod claude_code_agent;
 pub mod codex_agent;
 pub mod copilot_agent;

@@ -606,13 +606,6 @@ impl RepoState {
             .unwrap_or_default()
     }
 
-    /// Returns true if there are any deferred scenarios in the repo.
-    pub fn has_deferred_scenarios(&self) -> bool {
-        self.review
-            .as_ref()
-            .map(|r| !r.deferred_items.is_empty())
-            .unwrap_or(false)
-    }
 }
 
 #[derive(Debug, Default)]

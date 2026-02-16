@@ -255,7 +255,7 @@ fn extract_tags_from_description(description: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repo_state::{BindingIssue, BindingIssueKind, CoverageAmbiguity, RuleCoverageInfo, SpecIssue, SpecIssueKind, StructureIssue, StructureIssueKind};
+    use crate::repo_state::{BindingIssue, BindingIssueKind, CoverageAmbiguity, RuleCoverageInfo, SpecIssue, SpecIssueKind, StructureIssueKind};
 
     #[test]
     fn selects_binding_issue_before_spec_issue() {
