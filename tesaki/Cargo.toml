@@ -12,6 +12,9 @@ name = "tesaki"
 path = "src/main.rs"
 
 [dependencies]
+# Agent abstraction crate
+tesaki_agent = { path = "agent" }
+
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive"] }
 

@@ -23,8 +23,6 @@ mod error_parser;
 mod escalation;
 mod gate;
 mod issue_classifier;
-mod chat_plan;
-mod chat_planner;
 mod lessons;
 mod logging;
 mod mission;
@@ -37,19 +35,11 @@ mod policy_violation;
 mod prompts;
 mod repl;
 mod repo_state;
-mod runner;
-mod base_runner;
-mod claude_code_agent;
-mod codex_agent;
-mod copilot_agent;
-mod agent_fallback;
-mod runner_test;
 mod scenario_extractor;
 mod session;
 mod stage;
 mod stop_reason;
 mod surface_policy;
-mod token_usage;
 mod spec_quality;
 mod workspace;
 
@@ -1293,8 +1283,8 @@ fn run_run(
         parse_run_report_json,
         parse_status_json,
     };
-    use crate::runner::{Runner, RunnerConfig, OutcomeClassification};
-    use crate::agent_fallback::{
+    use tesaki_agent::runner::{Runner, RunnerConfig, OutcomeClassification};
+    use tesaki_agent::agent_fallback::{
         runner_candidates,
         describe_candidates,
         build_runner,
@@ -1849,7 +1839,7 @@ fn run_run(
         }
 
         // Check surface policy violations
-        let violations = crate::base_runner::check_surface_violations(
+        let violations = tesaki_agent::base_runner::check_surface_violations(
             &changes.changed_files,
             &surface_definitions.spec.patterns,
             &surface_definitions.tests_bindings.patterns,
@@ -2498,7 +2488,7 @@ pub(crate) fn log_mission_executed(
     logger: &logging::JsonlLogger,
     mission_id: &str,
     runner: &str,
-    outcome: &crate::runner::RunnerOutcome,
+    outcome: &tesaki_agent::runner::RunnerOutcome,
 ) {
     logger.log_event(logging::LogEvent::MissionExecuted {
         mission_id: mission_id.to_string(),
@@ -2520,8 +2510,8 @@ pub(crate) fn log_post_gate(
 
 pub(crate) fn log_runner_command_result(
     logger: &logging::JsonlLogger,
-    invocation: &crate::runner::RunnerInvocation,
-    outcome: &crate::runner::RunnerOutcome,
+    invocation: &tesaki_agent::runner::RunnerInvocation,
+    outcome: &tesaki_agent::runner::RunnerOutcome,
 ) {
     let stdout = outcome
         .stdout_path
@@ -2804,7 +2794,7 @@ fn should_run_pre_gate_build_for_policy(
 }
 
 fn scan_runner_policy_violations(
-    outcome: &crate::runner::RunnerOutcome,
+    outcome: &tesaki_agent::runner::RunnerOutcome,
 ) -> Option<policy_violation::PolicyViolationsReport> {
     let mut combined = String::new();
     let mut has_output = false;
@@ -3377,7 +3367,7 @@ mod tests {
     /// Test surface violation detection
     #[test]
     fn test_surface_violation_triggers_rollback() {
-        use crate::base_runner::check_surface_violations;
+        use tesaki_agent::base_runner::check_surface_violations;
 
         let changed = vec!["features/test.feature".to_string()];
         let spec_patterns = vec!["features/**/*.feature".to_string()];

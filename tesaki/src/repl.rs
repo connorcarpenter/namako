@@ -5,12 +5,12 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::chat_plan::{
+use tesaki_agent::chat_plan::{
     ChatPlan, ChatTurnInput, MissionProposal,
     SurfaceLock as PlanSurfaceLock, SurfacePolicy as PlanSurfacePolicy,
 };
-use crate::chat_planner::{ChatPlanner, MockChatPlanner};
-use crate::agent_fallback::{planner_candidates, describe_planner_candidates, FallbackChatPlanner};
+use tesaki_agent::chat_planner::{ChatPlanner, MockChatPlanner};
+use tesaki_agent::agent_fallback::{planner_candidates, describe_planner_candidates, FallbackChatPlanner};
 use crate::config::{self, ConfigDiscoveryResult};
 use crate::diagnosis::StallDiagnosis;
 use crate::escalation;
@@ -22,7 +22,7 @@ use crate::session::{PendingMission, SessionState};
 use crate::stage::{detect_stage, Stage, StageConstraint};
 use crate::stop_reason::StopReason;
 use crate::surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy};
-use crate::token_usage::{MissionTokenStats, TokenUsage};
+use tesaki_agent::token_usage::{MissionTokenStats, TokenUsage};
 
 const DEFAULT_PLANNER_TIMEOUT_SECONDS: u64 = 60;
 
@@ -571,7 +571,7 @@ fn handle_mission_proposal(plan: &ChatPlan, session: &mut SessionState) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat_plan::{ChatPlan, MissionProposal, SurfaceLock, SurfacePolicy};
+    use tesaki_agent::chat_plan::{ChatPlan, MissionProposal, SurfaceLock, SurfacePolicy};
 
     #[test]
     fn repl_sets_pending_mission_from_plan() {

@@ -6,7 +6,7 @@ use crate::stage::Stage;
 use crate::surface_policy::{SurfaceLock, SurfacePolicy};
 
 // Re-export token stats types from token_usage module for backwards compatibility
-pub use crate::token_usage::SessionTokenStats;
+pub use tesaki_agent::token_usage::SessionTokenStats;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionIntent {
@@ -103,7 +103,7 @@ impl SessionIntent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingMission {
-    pub proposal: crate::chat_plan::MissionProposal,
+    pub proposal: tesaki_agent::chat_plan::MissionProposal,
     pub approved: bool,
 }
 
