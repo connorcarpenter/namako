@@ -48,7 +48,7 @@ pub enum OutcomeClassification {
     RateLimited,
 }
 
-/// Mission execution interface (unchanged in spirit).
+/// Mission execution interface.
 pub trait Runner: Send + Sync {
     fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome>;
     fn name(&self) -> &'static str;

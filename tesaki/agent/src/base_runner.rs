@@ -305,8 +305,19 @@ pub(crate) fn run_cli_runner(
     mission_dir: &Path,
     config: &RunnerConfig,
     extract_error: bool,
+    prompt_override: Option<String>,
+    input_file: Option<&Path>,
+    output_file: Option<&Path>,
 ) -> Result<RunnerOutcome> {
-    let parts: Vec<&str> = command_template.split_whitespace().collect();
+    let mut expanded_cmd = command_template.to_string();
+    if let Some(path) = input_file {
+        expanded_cmd = expanded_cmd.replace("{input_file}", &path.display().to_string());
+    }
+    if let Some(path) = output_file {
+        expanded_cmd = expanded_cmd.replace("{output_file}", &path.display().to_string());
+    }
+
+    let parts: Vec<&str> = expanded_cmd.split_whitespace().collect();
 
     if parts.is_empty() {
         return Ok(RunnerOutcome {
@@ -330,24 +341,15 @@ pub(crate) fn run_cli_runner(
     let mission_dir_abs =
         std::fs::canonicalize(mission_dir).unwrap_or_else(|_| mission_dir.to_path_buf());
 
-    // Read the MISSION.md file to provide as stdin prompt
-    let mission_path = mission_dir.join("MISSION.md");
-    let prompt = match std::fs::read_to_string(&mission_path) {
-        Ok(content) => content,
-        Err(e) => {
-            return Ok(RunnerOutcome {
-                exit_code: None,
-                classification: OutcomeClassification::EnvironmentError,
-                elapsed_seconds: start.elapsed().as_secs_f64(),
-                stdout_path: None,
-                stderr_path: None,
-                error_message: Some(format!(
-                    "Failed to read MISSION.md from {}: {}",
-                    mission_path.display(),
-                    e
-                )),
-                token_usage: None,
-            });
+    // Use provided prompt or read from MISSION.md
+    let prompt = if let Some(p) = prompt_override {
+        Some(p)
+    } else {
+        let mission_path = mission_dir.join("MISSION.md");
+        if mission_path.exists() {
+            std::fs::read_to_string(&mission_path).ok()
+        } else {
+            None
         }
     };
 
@@ -355,9 +357,16 @@ pub(crate) fn run_cli_runner(
     cmd.args(&args)
         .current_dir(&config.working_dir)
         .env("TESAKI_MISSION_DIR", &mission_dir_abs)
-        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    // Use stdin only if we have a prompt and no input file is specified
+    let use_stdin = prompt.is_some() && input_file.is_none();
+    if use_stdin {
+        cmd.stdin(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::null());
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -374,20 +383,24 @@ pub(crate) fn run_cli_runner(
         }
     };
 
-    // Write the prompt to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(prompt.as_bytes()) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(RunnerOutcome {
-                exit_code: None,
-                classification: OutcomeClassification::EnvironmentError,
-                elapsed_seconds: start.elapsed().as_secs_f64(),
-                stdout_path: None,
-                stderr_path: None,
-                error_message: Some(format!("Failed to write prompt to stdin: {}", e)),
-                token_usage: None,
-            });
+    // Write the prompt to stdin if needed
+    if use_stdin {
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Some(p) = prompt {
+                if let Err(e) = stdin.write_all(p.as_bytes()) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Ok(RunnerOutcome {
+                        exit_code: None,
+                        classification: OutcomeClassification::EnvironmentError,
+                        elapsed_seconds: start.elapsed().as_secs_f64(),
+                        stdout_path: None,
+                        stderr_path: None,
+                        error_message: Some(format!("Failed to write prompt to stdin: {}", e)),
+                        token_usage: None,
+                    });
+                }
+            }
         }
         // stdin is dropped here, closing the pipe
     }

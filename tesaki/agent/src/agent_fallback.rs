@@ -1,14 +1,13 @@
 use anyhow::{bail, Result};
 use std::path::PathBuf;
 
-use crate::chat_planner::ChatPlanner;
-use crate::claude_code_agent::ClaudeCodeAgent;
+use crate::chat_planner::{ChatPlanner, MockChatPlanner};
+use crate::claude_agent::ClaudeAgent;
 use crate::codex_agent::CodexAgent;
 use crate::copilot_agent::CopilotAgent;
 use crate::runner::{OutcomeClassification, Runner, RunnerOutcome};
 use crate::runner_test::MockRunner;
 use crate::chat_plan::ChatPlan;
-use crate::chat_planner::MockChatPlanner;
 
 const AI_RUNNERS: [&str; 3] = ["claude", "copilot", "codex"];
 
@@ -100,40 +99,22 @@ pub fn describe_planner_candidates(names: &[PlannerCandidate]) -> String {
 
 pub fn build_runner(
     candidate: &RunnerCandidate,
-    spec_root: &PathBuf,
-    max_runtime_seconds: u32,
+    _spec_root: &PathBuf,
+    _max_runtime_seconds: u32,
 ) -> Result<Box<dyn Runner>> {
     match candidate.name.as_str() {
         "mock" => Ok(Box::new(MockRunner::success())),
         "claude" => {
-            ClaudeCodeAgent::check_available()?;
-            Ok(Box::new(ClaudeCodeAgent::new_with_timeout_and_stream(
-                candidate.runner_cmd.clone(),
-                None,
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(max_runtime_seconds as u64)),
-                true,
-            )?))
+            ClaudeAgent::check_available()?;
+            Ok(Box::new(ClaudeAgent::new(candidate.runner_cmd.clone(), true)))
         }
         "codex" => {
             CodexAgent::check_available()?;
-            Ok(Box::new(CodexAgent::new_with_timeout_and_stream(
-                candidate.runner_cmd.clone(),
-                None,
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(max_runtime_seconds as u64)),
-                true,
-            )?))
+            Ok(Box::new(CodexAgent::new(candidate.runner_cmd.clone())))
         }
         "copilot" => {
             CopilotAgent::check_available()?;
-            Ok(Box::new(CopilotAgent::new_with_timeout_and_stream(
-                candidate.runner_cmd.clone(),
-                None,
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(max_runtime_seconds as u64)),
-                true,
-            )?))
+            Ok(Box::new(CopilotAgent::new(candidate.runner_cmd.clone())))
         }
         other => bail!("Unknown runner: {}", other),
     }
@@ -141,8 +122,8 @@ pub fn build_runner(
 
 pub fn build_planner(
     candidate: &PlannerCandidate,
-    spec_root: &PathBuf,
-    timeout_seconds: u64,
+    _spec_root: &PathBuf,
+    _timeout_seconds: u64,
 ) -> Result<Box<dyn ChatPlanner>> {
     match candidate.name.as_str() {
         "mock" => Ok(Box::new(MockChatPlanner::new(ChatPlan {
@@ -152,34 +133,16 @@ pub fn build_planner(
             done: true,
         }))),
         "claude" => {
-            ClaudeCodeAgent::check_available()?;
-            Ok(Box::new(ClaudeCodeAgent::new_with_timeout_and_stream(
-                candidate.runner_cmd.clone(),
-                candidate.planner_cmd.clone(),
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(timeout_seconds)),
-                true,
-            )?))
+            ClaudeAgent::check_available()?;
+            Ok(Box::new(ClaudeAgent::new(candidate.planner_cmd.clone(), true)))
         }
         "codex" => {
             CodexAgent::check_available()?;
-            Ok(Box::new(CodexAgent::new_with_timeout_and_stream(
-                candidate.runner_cmd.clone(),
-                candidate.planner_cmd.clone(),
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(timeout_seconds)),
-                true,
-            )?))
+            Ok(Box::new(CodexAgent::new(candidate.planner_cmd.clone())))
         }
         "copilot" => {
             CopilotAgent::check_available()?;
-            Ok(Box::new(CopilotAgent::new_with_timeout_and_stream(
-                candidate.runner_cmd.clone(),
-                candidate.planner_cmd.clone(),
-                spec_root.clone(),
-                Some(std::time::Duration::from_secs(timeout_seconds)),
-                true,
-            )?))
+            Ok(Box::new(CopilotAgent::new(candidate.planner_cmd.clone())))
         }
         other => bail!("Unsupported planner backend: {}", other),
     }

@@ -1,58 +1,25 @@
-//! Codex CLI agent backend (runner + chat planner).
+//! Codex CLI agent.
+
+use anyhow::{bail, Result};
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use crate::base_runner::run_cli_runner;
-use crate::chat_plan::{ChatPlan, ChatTurnInput};
-use crate::chat_planner::{BaseChatPlanner, ChatPlanner};
-use crate::runner::{Runner, RunnerConfig, RunnerOutcome, RunnerInvocation};
-use anyhow::{bail, Result};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::Duration;
+use crate::llm_backend::{LLMBackend, LLMRequest, LLMResponse};
+use crate::runner::RunnerInvocation;
 
-/// Agent backend for Codex CLI.
-///
-/// Runs missions via `Runner` and provides chat planning via `ChatPlanner`.
 pub struct CodexAgent {
-    runner_command_template: String,
-    planner: BaseChatPlanner,
+    command_template: String,
 }
 
 impl CodexAgent {
-    /// Create a new CodexAgent.
-    ///
-    /// If `runner_command` is None, uses a default `codex exec` command.
-    /// If `planner_command` is None, uses a default `codex exec` command (stdin input).
-    pub fn new_with_timeout_and_stream(
-        runner_command: Option<String>,
-        planner_command: Option<String>,
-        planner_working_dir: PathBuf,
-        planner_timeout: Option<Duration>,
-        stream_output: bool,
-    ) -> Result<Self> {
-        let runner_cmd = runner_command.unwrap_or_else(|| {
-            // Default Codex CLI command using exec subcommand for non-interactive mode.
-            // Uses --dangerously-bypass-approvals-and-sandbox for autonomous execution.
-            // Reads prompt from stdin via the `-` argument.
+    pub fn new(command: Option<String>) -> Self {
+        let command_template = command.unwrap_or_else(|| {
             "codex exec --dangerously-bypass-approvals-and-sandbox -C {working_dir} -".to_string()
         });
-        let planner_cmd = planner_command.unwrap_or_else(|| {
-            // Default Codex planner command streams JSONL events and writes the final
-            // message to a temp file for reliable parsing.
-            "codex exec --dangerously-bypass-approvals-and-sandbox --json --output-last-message {output_file} -".to_string()
-        });
-
-        Ok(Self {
-            runner_command_template: runner_cmd,
-            planner: BaseChatPlanner::new_with_timeout_and_stream(
-                planner_cmd,
-                planner_working_dir,
-                planner_timeout,
-                stream_output,
-            ),
-        })
+        Self { command_template }
     }
 
-    /// Check if the Codex CLI is available.
     pub fn check_available() -> Result<()> {
         let output = Command::new("codex")
             .arg("--version")
@@ -70,105 +37,106 @@ impl CodexAgent {
         }
     }
 
-    /// Expand the runner command template with the mission directory and working directory.
-    fn expand_runner_command(&self, mission_dir: &Path, working_dir: &Path) -> String {
-        self.runner_command_template
-            .replace("{mission_dir}", &mission_dir.display().to_string())
-            .replace("{working_dir}", &working_dir.display().to_string())
-    }
-
-    /// Build the full runner command with optional model argument.
-    fn build_runner_command(&self, mission_dir: &Path, config: &RunnerConfig) -> String {
-        let base = self.expand_runner_command(mission_dir, &config.working_dir);
-        match &config.model {
-            Some(model) => format!("{} --model {}", base, model),
-            None => base,
+    fn expand_command(&self, request: &LLMRequest) -> String {
+        let mut cmd = self.command_template.clone();
+        if let Some(model) = &request.model {
+            cmd = format!("{} --model {}", cmd, model);
         }
+        
+        let mission_dir = request.input_file.as_ref()
+            .and_then(|p| p.parent())
+            .unwrap_or(&request.working_dir);
+            
+        cmd.replace("{mission_dir}", &mission_dir.display().to_string())
+           .replace("{working_dir}", &request.working_dir.display().to_string())
     }
 }
 
-impl Runner for CodexAgent {
-    fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome> {
-        let cmd = self.build_runner_command(mission_dir, config);
-        run_cli_runner(&cmd, mission_dir, config, false)
-    }
-
+impl LLMBackend for CodexAgent {
     fn name(&self) -> &'static str {
         "codex"
     }
 
-    fn planned_invocation(
-        &self,
-        mission_dir: &Path,
-        config: &RunnerConfig,
-    ) -> Option<RunnerInvocation> {
-        let cmd = self.build_runner_command(mission_dir, config);
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        if parts.is_empty() {
-            return None;
+    fn execute(&self, request: &LLMRequest) -> Result<LLMResponse> {
+        let cmd = self.expand_command(request);
+        
+        let wants_input_file = self.command_template.contains("{input_file}");
+        let wants_output_file = self.command_template.contains("{output_file}");
+
+        let mut temp_input = None;
+        let mut input_path = request.input_file.clone();
+        
+        if wants_input_file && input_path.is_none() {
+            let mut file = tempfile::NamedTempFile::new()?;
+            file.write_all(request.prompt.as_bytes())?;
+            input_path = Some(file.path().to_path_buf());
+            temp_input = Some(file);
         }
-        let program = parts[0].to_string();
-        let args = parts[1..].iter().map(|s| s.to_string()).collect();
-        let mission_dir_abs =
-            std::fs::canonicalize(mission_dir).unwrap_or_else(|_| mission_dir.to_path_buf());
-        Some(RunnerInvocation {
-            program,
-            args,
-            working_dir: config.working_dir.display().to_string(),
-            env: vec![(
-                "TESAKI_MISSION_DIR".to_string(),
-                mission_dir_abs.display().to_string(),
-            )],
+
+        let mut temp_output = None;
+        let mut output_path = None;
+        if wants_output_file {
+            let file = tempfile::NamedTempFile::new()?;
+            output_path = Some(file.path().to_path_buf());
+            temp_output = Some(file);
+        }
+
+        let mission_dir = input_path.as_deref()
+            .and_then(|p| p.parent())
+            .unwrap_or(&request.working_dir);
+
+        let outcome = run_cli_runner(
+            &cmd,
+            mission_dir,
+            &crate::runner::RunnerConfig {
+                working_dir: request.working_dir.clone(),
+                max_runtime_seconds: request.timeout.map(|d| d.as_secs() as u32).unwrap_or(300),
+                model: request.model.clone(),
+                stream_output: request.stream_output,
+            },
+            false,
+            if temp_input.is_some() || request.input_file.is_some() { None } else { Some(request.prompt.clone()) },
+            input_path.as_deref(),
+            output_path.as_deref(),
+        )?;
+
+        let text = if let Some(out_p) = output_path {
+            std::fs::read_to_string(out_p).unwrap_or_default()
+        } else {
+            outcome.stdout_path.as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .unwrap_or_default()
+        };
+
+        drop(temp_input);
+        drop(temp_output);
+
+        Ok(LLMResponse {
+            text,
+            exit_code: outcome.exit_code,
+            classification: outcome.classification,
+            stdout_path: outcome.stdout_path,
+            stderr_path: outcome.stderr_path,
+            token_usage: outcome.token_usage,
+            elapsed_seconds: outcome.elapsed_seconds,
         })
     }
-}
 
-impl ChatPlanner for CodexAgent {
-    fn plan_turn(&self, input: &ChatTurnInput) -> Result<ChatPlan> {
-        self.planner.plan_turn(input)
-    }
+    fn planned_invocation(&self, request: &LLMRequest) -> Option<RunnerInvocation> {
+        let cmd = self.expand_command(request);
+        let parts: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
+        if parts.is_empty() { return None; }
 
-    fn name(&self) -> &'static str {
-        "codex"
-    }
-}
+        let mission_dir = request.input_file.as_ref()
+            .and_then(|p| p.parent())
+            .unwrap_or(&request.working_dir);
+        let mission_dir_abs = std::fs::canonicalize(mission_dir).unwrap_or_else(|_| mission_dir.to_path_buf());
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_codex_agent_expand_default() {
-        let agent = CodexAgent::new_with_timeout_and_stream(None, None, PathBuf::from("/workspace"), None, false).unwrap();
-        let expanded =
-            agent.expand_runner_command(Path::new("/test/mission"), Path::new("/workspace"));
-        assert_eq!(
-            expanded,
-            "codex exec --dangerously-bypass-approvals-and-sandbox -C /workspace -"
-        );
-    }
-
-    #[test]
-    fn test_codex_agent_expand_custom() {
-        let agent = CodexAgent::new_with_timeout_and_stream(
-            Some("codex exec -C {working_dir} --full-auto < {mission_dir}/MISSION.md".to_string()),
-            None,
-            PathBuf::from("/workspace"),
-            None,
-            false,
-        )
-        .unwrap();
-        let expanded =
-            agent.expand_runner_command(Path::new("/test/mission"), Path::new("/workspace"));
-        assert_eq!(
-            expanded,
-            "codex exec -C /workspace --full-auto < /test/mission/MISSION.md"
-        );
-    }
-
-    #[test]
-    fn test_codex_agent_name() {
-        let agent = CodexAgent::new_with_timeout_and_stream(None, None, PathBuf::from("/workspace"), None, false).unwrap();
-        assert_eq!(crate::runner::Runner::name(&agent), "codex");
+        Some(RunnerInvocation {
+            program: parts[0].clone(),
+            args: parts[1..].to_vec(),
+            working_dir: request.working_dir.display().to_string(),
+            env: vec![("TESAKI_MISSION_DIR".to_string(), mission_dir_abs.display().to_string())],
+        })
     }
 }

@@ -1,4 +1,4 @@
-//! GitHub Copilot CLI agent.
+//! Claude Code agent.
 
 use anyhow::{bail, Result};
 use std::io::Write;
@@ -8,20 +8,24 @@ use crate::base_runner::run_cli_runner;
 use crate::llm_backend::{LLMBackend, LLMRequest, LLMResponse};
 use crate::runner::RunnerInvocation;
 
-pub struct CopilotAgent {
+pub struct ClaudeAgent {
     command_template: String,
 }
 
-impl CopilotAgent {
-    pub fn new(command: Option<String>) -> Self {
+impl ClaudeAgent {
+    pub fn new(command: Option<String>, stream_output: bool) -> Self {
         let command_template = command.unwrap_or_else(|| {
-            "copilot -p @{input_file} --allow-all --add-dir {working_dir}".to_string()
+            if stream_output {
+                "claude --print --dangerously-skip-permissions --output-format stream-json --include-partial-messages --verbose".to_string()
+            } else {
+                "claude --print --dangerously-skip-permissions".to_string()
+            }
         });
         Self { command_template }
     }
 
     pub fn check_available() -> Result<()> {
-        let output = Command::new("copilot")
+        let output = Command::new("claude")
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -29,19 +33,18 @@ impl CopilotAgent {
 
         match output {
             Ok(status) if status.success() => Ok(()),
-            Ok(_) => bail!("Copilot CLI returned non-zero exit code"),
+            Ok(_) => bail!("Claude CLI returned non-zero exit code"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                bail!("Copilot CLI not found. Please install GitHub Copilot CLI.")
+                bail!("Claude CLI not found. Please install Claude Code CLI.")
             }
-            Err(e) => bail!("Failed to check Copilot CLI availability: {}", e),
+            Err(e) => bail!("Failed to check Claude CLI availability: {}", e),
         }
     }
 
     fn expand_command(&self, request: &LLMRequest) -> String {
         let mut cmd = self.command_template.clone();
         if let Some(model) = &request.model {
-            let full_model = expand_model_name(model);
-            cmd = format!("{} --model {}", cmd, full_model);
+            cmd = format!("{} --model {}", cmd, model);
         }
         
         let mission_dir = request.input_file.as_ref()
@@ -53,15 +56,16 @@ impl CopilotAgent {
     }
 }
 
-impl LLMBackend for CopilotAgent {
+impl LLMBackend for ClaudeAgent {
     fn name(&self) -> &'static str {
-        "copilot"
+        "claude"
     }
 
     fn execute(&self, request: &LLMRequest) -> Result<LLMResponse> {
         let cmd = self.expand_command(request);
         
-        let wants_input_file = self.command_template.contains("{input_file}") || self.command_template.contains("{mission_dir}");
+        // Handle temp files if requested by the command template
+        let wants_input_file = self.command_template.contains("{input_file}");
         let wants_output_file = self.command_template.contains("{output_file}");
 
         let mut temp_input = None;
@@ -95,7 +99,7 @@ impl LLMBackend for CopilotAgent {
                 model: request.model.clone(),
                 stream_output: request.stream_output,
             },
-            false,
+            true,
             if temp_input.is_some() || request.input_file.is_some() { None } else { Some(request.prompt.clone()) },
             input_path.as_deref(),
             output_path.as_deref(),
@@ -139,14 +143,5 @@ impl LLMBackend for CopilotAgent {
             working_dir: request.working_dir.display().to_string(),
             env: vec![("TESAKI_MISSION_DIR".to_string(), mission_dir_abs.display().to_string())],
         })
-    }
-}
-
-fn expand_model_name(tier: &str) -> String {
-    match tier.to_lowercase().as_str() {
-        "opus" => "claude-opus-4.5".to_string(),
-        "sonnet" => "claude-sonnet-4.5".to_string(),
-        "haiku" => "claude-haiku-4.5".to_string(),
-        _ => tier.to_string(),
     }
 }
