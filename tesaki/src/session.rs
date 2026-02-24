@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::stage::Stage;
 use crate::surface_policy::{SurfaceLock, SurfacePolicy};
 
-// Re-export token stats types from tesaki_agent
-pub use tesaki_agent::SessionTokenStats;
+// Re-export token stats types from crate root
+pub use servling::SessionTokenStats;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionIntent {
@@ -103,7 +103,7 @@ impl SessionIntent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingMission {
-    pub proposal: tesaki_agent::MissionProposal,
+    pub proposal: crate::chat_planner::MissionProposal,
     pub approved: bool,
 }
 

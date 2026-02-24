@@ -4,7 +4,7 @@
 //! BEFORE they are actually written to disk, providing early feedback
 //! to the AI agent about policy violations.
 
-use tesaki_agent::matches_any_pattern;
+use crate::runner::matches_any_pattern;
 
 /// A proposed plan from the runner containing files to modify.
 #[derive(Debug, Clone)]
