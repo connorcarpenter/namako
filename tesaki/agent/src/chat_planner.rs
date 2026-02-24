@@ -1,10 +1,80 @@
-//! Plan-only chat planner implementations.
+//! Plan-only chat planner implementations and data structures.
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub use servling::{Servling, LLMRequest, LLMResponse};
-use crate::chat_plan::{ChatPlan, ChatTurnInput};
+
+/// A single allowlisted command request from the chat planner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllowedCommand {
+    /// Must be "namako". Enforced by Tesaki allowlist.
+    pub tool: String,
+    /// Args only (no shell). Enforced by Tesaki allowlist.
+    pub args: Vec<String>,
+    /// Optional explanation for UX.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Optional mission proposal emitted by the chat planner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionProposal {
+    pub mission_type: String,
+    pub stage: String,
+    pub target: String,
+    pub surfaces: SurfacePolicy,
+    pub objective: String,
+    pub validation: Vec<String>,
+}
+
+/// Surface policy shape used in chat plans.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurfacePolicy {
+    pub spec: SurfaceLock,
+    pub tests: SurfaceLock,
+    pub sut: SurfaceLock,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SurfaceLock {
+    Locked,
+    Unlocked,
+}
+
+/// The result for one REPL turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatPlan {
+    pub say: String,
+    #[serde(default)]
+    pub run: Vec<AllowedCommand>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_proposal: Option<MissionProposal>,
+    pub done: bool,
+}
+
+/// Input to the chat planner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatTurnInput {
+    pub user_message: String,
+    pub session_state_json: serde_json::Value,
+    pub recent_command_results: Vec<CommandResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandResult {
+    pub tool: String,
+    pub args: Vec<String>,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
 
 /// Plan-only chat interface.
 pub trait ChatPlanner: Send + Sync {
@@ -160,5 +230,33 @@ mod tests {
         
         let plan = ChatPlanner::plan_turn(&agent, &input).unwrap();
         assert_eq!(plan.say, "Mock success");
+    }
+
+    #[test]
+    fn test_chat_plan_json_round_trip() {
+        let plan = ChatPlan {
+            say: "ok".to_string(),
+            run: vec![AllowedCommand {
+                tool: "namako".to_string(),
+                args: vec!["status".to_string(), "--json".to_string()],
+                reason: None,
+            }],
+            mission_proposal: Some(MissionProposal {
+                mission_type: "CreateMissingBindings".to_string(),
+                stage: "Implement Tests & Bindings".to_string(),
+                target: "@Scenario(03)".to_string(),
+                surfaces: SurfacePolicy {
+                    spec: SurfaceLock::Locked,
+                    tests: SurfaceLock::Unlocked,
+                    sut: SurfaceLock::Locked,
+                },
+                objective: "Create bindings".to_string(),
+                validation: vec!["namako gate --json passes".to_string()],
+            }),
+            done: true,
+        };
+        let json = serde_json::to_string(&plan).unwrap();
+        let parsed: ChatPlan = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.say, "ok");
     }
 }

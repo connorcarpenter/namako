@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::stage::Stage;
 use crate::surface_policy::{SurfaceLock, SurfacePolicy};
 
-// Re-export token stats types from token_usage module for backwards compatibility
-pub use tesaki_agent::token_usage::SessionTokenStats;
+// Re-export token stats types from tesaki_agent
+pub use tesaki_agent::SessionTokenStats;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionIntent {

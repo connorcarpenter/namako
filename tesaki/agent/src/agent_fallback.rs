@@ -1,10 +1,9 @@
 use anyhow::{bail, Result};
 use std::path::PathBuf;
 
-use crate::chat_planner::{ChatPlanner, MockChatPlanner};
+use crate::chat_planner::{ChatPlanner, MockChatPlanner, ChatPlan, ChatTurnInput};
 pub use servling::{ClaudeAgent, CodexAgent, CopilotAgent};
 use crate::runner::{OutcomeClassification, Runner, RunnerOutcome, MockRunner};
-use crate::chat_plan::ChatPlan;
 
 const AI_RUNNERS: [&str; 3] = ["claude", "copilot", "codex"];
 
@@ -202,7 +201,7 @@ impl FallbackChatPlanner {
 }
 
 impl ChatPlanner for FallbackChatPlanner {
-    fn plan_turn(&self, input: &crate::chat_plan::ChatTurnInput) -> Result<ChatPlan> {
+    fn plan_turn(&self, input: &ChatTurnInput) -> Result<ChatPlan> {
         loop {
             let result = {
                 let state = self.state.lock().expect("planner state lock poisoned");
