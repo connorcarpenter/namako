@@ -2,7 +2,8 @@
 
 use anyhow::{bail, Result};
 use std::process::{Command, Stdio};
-use crate::backend::{Servling, LLMRequest, LLMResponse, CliBackend, RunnerInvocation};
+use crate::backend::{Servling, LLMRequest, LLMResponse, RunnerInvocation};
+use crate::cli_backend::CliBackend;
 
 pub struct CopilotAgent {
     cli: CliBackend,
@@ -56,7 +57,7 @@ impl Servling for CopilotAgent {
             None,
             request.model.as_deref().map(|m| expand_model_name(m)).as_deref()
         );
-        let parts: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
+        let parts: Vec<String> = cmd.split_whitespace().map(|s: &str| s.to_string()).collect();
         if parts.is_empty() { return None; }
 
         let mission_dir = request.input_file.as_ref()

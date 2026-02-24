@@ -3,6 +3,8 @@
 pub mod outcome;
 pub mod token_usage;
 pub mod backend;
+pub mod cli_backend;
+pub mod coding_agent;
 pub mod runner;
 pub mod claude_agent;
 pub mod codex_agent;
@@ -11,7 +13,9 @@ pub mod factory;
 
 pub use outcome::OutcomeClassification;
 pub use token_usage::{TokenUsage, MissionTokenStats, SessionTokenStats, MissionTypeStats, EfficiencyRating};
-pub use backend::{Servling, LLMRequest, LLMResponse, CliBackend, RunnerInvocation, CodingAgent, CodingAgentBuilder};
+pub use backend::{Servling, LLMRequest, LLMResponse, RunnerInvocation};
+pub use cli_backend::CliBackend;
+pub use coding_agent::{CodingAgent, CodingAgentBuilder};
 pub use runner::{run_cli_runner, CliRunnerConfig, CliRunnerOutcome};
 pub use claude_agent::ClaudeAgent;
 pub use codex_agent::CodexAgent;
