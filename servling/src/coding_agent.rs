@@ -1,9 +1,53 @@
 //! High-level agent orchestration with fallback logic.
 
-use anyhow::{bail, Result};
 use std::sync::Mutex;
 
-use crate::core::{OutcomeClassification, Servling, LLMRequest, LLMResponse, RunnerInvocation};
+use anyhow::{bail, Result};
+
+use crate::core::{Servling, LLMRequest, LLMResponse, RunnerInvocation, OutcomeClassification};
+
+const AI_BACKENDS: [&str; 3] = ["claude", "copilot", "codex"];
+
+#[derive(Debug, Clone)]
+pub struct AgentCandidate {
+    pub name: String,
+    pub command: Option<String>,
+}
+
+/// Generate a prioritized list of agent candidates.
+pub fn agent_candidates(preferred: &str, custom_command: Option<String>) -> Vec<AgentCandidate> {
+    let preferred = preferred.to_lowercase();
+    let mut candidates = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    let mut push = |name: &str, cmd: Option<String>| {
+        if seen.insert(name.to_string()) {
+            candidates.push(AgentCandidate {
+                name: name.to_string(),
+                command: cmd,
+            });
+        }
+    };
+
+    if AI_BACKENDS.contains(&preferred.as_str()) {
+        push(&preferred, custom_command);
+        for name in AI_BACKENDS {
+            push(name, None);
+        }
+    } else {
+        push(&preferred, custom_command);
+    }
+
+    candidates
+}
+
+/// Format a candidate chain for display (e.g., "claude -> copilot -> codex").
+pub fn describe_candidates(candidates: &[AgentCandidate]) -> String {
+    candidates.iter()
+        .map(|c| c.name.as_str())
+        .collect::<Vec<_>>()
+        .join(" -> ")
+}
 
 /// A high-level agent that orchestrates one or more backends with fallback logic.
 pub struct CodingAgent {
@@ -18,7 +62,7 @@ impl CodingAgent {
     }
 
     fn should_fallback(classification: OutcomeClassification) -> bool {
-        matches!(classification, OutcomeClassification::RateLimited)
+        classification.should_fallback()
     }
 }
 

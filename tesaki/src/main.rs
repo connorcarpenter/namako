@@ -1286,7 +1286,7 @@ fn run_run(
     use tesaki_agent::{
         Runner, RunnerConfig, OutcomeClassification, TokenUsage,
         agent_candidates, describe_candidates,
-        should_fallback, normalize_model, outcome_from_error,
+        normalize_model, outcome_from_error,
     };
     use crate::repo_state::RepoState;
     use crate::stage::{Stage, StageConstraint, detect_stage};
@@ -1732,7 +1732,7 @@ fn run_run(
         fs::write(&stop_reason_path, stop_reason_json)
             .context("Failed to write RUNNER_OUTPUT/stop_reason.json")?;
 
-        if should_fallback(outcome.classification) {
+        if outcome.classification.should_fallback() {
             // Already handled by CodingAgent internally
         }
 

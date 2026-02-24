@@ -16,7 +16,7 @@ pub use runner::{
 // Re-export the entire agent engine and factory from servling
 pub use servling::{
     agent_candidates, build_coding_agent, build_servling, describe_candidates, normalize_model,
-    should_fallback, AgentCandidate, ClaudeAgent, CodexAgent, CodingAgent, CodingAgentBuilder,
+    AgentCandidate, ClaudeAgent, CodexAgent, CodingAgent, CodingAgentBuilder,
     CopilotAgent, EfficiencyRating, LLMRequest, LLMResponse, MissionTokenStats, MissionTypeStats,
     Servling, SessionTokenStats, TokenUsage,
 };

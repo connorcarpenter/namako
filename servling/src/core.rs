@@ -47,6 +47,24 @@ pub struct LLMRequest {
     pub input_file: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum OutcomeClassification {
+    Ok,
+    Failed,
+    Timeout,
+    EnvironmentError,
+    /// Rate limited by the AI provider (Claude, Codex, etc.)
+    RateLimited,
+}
+
+impl OutcomeClassification {
+    /// Returns true if this classification should trigger an agent fallback.
+    pub fn should_fallback(&self) -> bool {
+        matches!(self, Self::RateLimited)
+    }
+}
+
 /// A standardized response from a Servling.
 #[derive(Debug, Clone)]
 pub struct LLMResponse {
@@ -67,13 +85,21 @@ pub struct RunnerInvocation {
     pub env: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum OutcomeClassification {
-    Ok,
-    Failed,
-    Timeout,
-    EnvironmentError,
-    /// Rate limited by the AI provider (Claude, Codex, etc.)
-    RateLimited,
+/// Helper to normalize a requested model name for a specific backend.
+pub fn normalize_model(backend_name: &str, model: Option<String>) -> Option<String> {
+    let model = model?;
+    // Claude models pass through to Claude backend
+    if backend_name == "claude" {
+        return Some(model);
+    }
+    // Generic tiers are stripped for non-claude backends unless they match
+    if is_claude_tier(&model) {
+        return None;
+    }
+    Some(model)
+}
+
+fn is_claude_tier(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    matches!(lower.as_str(), "haiku" | "sonnet" | "opus") || lower.contains("claude-")
 }

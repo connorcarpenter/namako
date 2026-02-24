@@ -10,7 +10,7 @@ pub use tesaki_agent::{
     RunnerInvocation, RunnerOutcome, TokenUsage, MockRunner, SessionTokenStats, MissionTokenStats,
     // Agent Registry & Factory
     AgentCandidate, agent_candidates, build_coding_agent, build_servling, describe_candidates,
-    normalize_model, should_fallback, MissionProposal,
+    normalize_model, MissionProposal,
 };
 
 pub mod binding_extractor;
