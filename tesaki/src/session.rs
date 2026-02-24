@@ -103,7 +103,7 @@ impl SessionIntent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingMission {
-    pub proposal: tesaki_agent::chat_plan::MissionProposal,
+    pub proposal: tesaki_agent::MissionProposal,
     pub approved: bool,
 }
 

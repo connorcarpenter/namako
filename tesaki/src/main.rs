@@ -1283,14 +1283,10 @@ fn run_run(
         parse_run_report_json,
         parse_status_json,
     };
-    use tesaki_agent::runner::{Runner, RunnerConfig, OutcomeClassification};
-    use tesaki_agent::agent_fallback::{
-        runner_candidates,
-        describe_candidates,
-        build_runner,
-        should_fallback_on_outcome,
-        normalize_model_for_runner,
-        outcome_from_error,
+    use tesaki_agent::{
+        Runner, RunnerConfig, OutcomeClassification, TokenUsage,
+        agent_candidates, describe_candidates,
+        should_fallback, normalize_model, outcome_from_error,
     };
     use crate::repo_state::RepoState;
     use crate::stage::{Stage, StageConstraint, detect_stage};
@@ -1352,38 +1348,17 @@ fn run_run(
     // Determine namako CLI command
     let namako = namako_cli.command.clone();
 
-    let runner_candidates = runner_candidates(runner_name, runner_cmd.clone());
+    let runner_candidates = agent_candidates(runner_name, runner_cmd.clone());
     if runner_candidates.len() > 1 {
         eprintln!(
             "Runner fallback chain: {}",
             describe_candidates(&runner_candidates)
         );
     }
-    let mut runner_index = 0usize;
-    let mut runner: Option<Box<dyn Runner>> = None;
-    let mut last_runner_error: Option<anyhow::Error> = None;
-    while runner_index < runner_candidates.len() {
-        let candidate = &runner_candidates[runner_index];
-        match build_runner(candidate, &spec_root, max_runtime_seconds) {
-            Ok(selected) => {
-                runner = Some(selected);
-                break;
-            }
-            Err(err) => {
-                eprintln!(
-                    "  ⚠️  Runner {} unavailable: {}",
-                    candidate.name, err
-                );
-                last_runner_error = Some(err);
-                runner_index += 1;
-            }
-        }
-    }
-    let mut runner = match runner {
-        Some(runner) => runner,
-        None => {
-            let err = last_runner_error
-                .unwrap_or_else(|| anyhow::anyhow!("No runner candidates available"));
+    
+    let runner: Box<dyn Runner> = match tesaki_agent::build_runner(runner_candidates) {
+        Ok(agent) => agent,
+        Err(err) => {
             let result = RunResult::error(StopReason::EnvironmentError, format!("{}", err));
             emit_run_result(&result, &spec_root)?;
             log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
@@ -1694,7 +1669,7 @@ fn run_run(
             Some(tier.to_string())
         };
 
-        let normalized_model = normalize_model_for_runner(runner.name(), selected_model.clone());
+        let normalized_model = normalize_model(runner.name(), selected_model.clone());
         if let Some(ref m) = selected_model {
             if normalized_model.is_none() && runner.name() != "claude" {
                 eprintln!("  Model: {} (ignored by {})", m, runner.name());
@@ -1734,6 +1709,7 @@ fn run_run(
         
         // Display token usage immediately after runner completes (before any move to failed/)
         if let Some(ref usage) = outcome.token_usage {
+            let usage: &TokenUsage = usage;
             eprintln!("  {}", usage.to_display_line());
         }
 
@@ -1756,38 +1732,8 @@ fn run_run(
         fs::write(&stop_reason_path, stop_reason_json)
             .context("Failed to write RUNNER_OUTPUT/stop_reason.json")?;
 
-        if should_fallback_on_outcome(&outcome) {
-            let mut next_index = runner_index + 1;
-            let mut next_runner: Option<(usize, Box<dyn Runner>, String)> = None;
-            while next_index < runner_candidates.len() {
-                let candidate = &runner_candidates[next_index];
-                match build_runner(candidate, &spec_root, max_runtime_seconds) {
-                    Ok(next) => {
-                        next_runner = Some((next_index, next, candidate.name.clone()));
-                        break;
-                    }
-                    Err(err) => {
-                        eprintln!(
-                            "  ⚠️  Runner {} unavailable: {}",
-                            candidate.name, err
-                        );
-                        next_index += 1;
-                    }
-                }
-            }
-            if let Some((new_index, new_runner, new_name)) = next_runner {
-                eprintln!(
-                    "  ⚠️  Rate limited on {}. Switching runner to {}.",
-                    runner.name(),
-                    new_name
-                );
-                let _ = mission.preserve_failed()?;
-                runner = new_runner;
-                runner_index = new_index;
-                prev_attempt_failed = false;
-                attempts_made = attempts_made.saturating_sub(1);
-                continue;
-            }
+        if should_fallback(outcome.classification) {
+            // Already handled by CodingAgent internally
         }
 
         // Determine stop reason from runner outcome
@@ -1839,7 +1785,7 @@ fn run_run(
         }
 
         // Check surface policy violations
-        let violations = tesaki_agent::base_runner::check_surface_violations(
+        let violations = tesaki_agent::check_surface_violations(
             &changes.changed_files,
             &surface_definitions.spec.patterns,
             &surface_definitions.tests_bindings.patterns,
@@ -3367,7 +3313,7 @@ mod tests {
     /// Test surface violation detection
     #[test]
     fn test_surface_violation_triggers_rollback() {
-        use tesaki_agent::base_runner::check_surface_violations;
+        use tesaki_agent::check_surface_violations;
 
         let changed = vec!["features/test.feature".to_string()];
         let spec_patterns = vec!["features/**/*.feature".to_string()];

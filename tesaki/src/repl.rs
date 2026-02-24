@@ -5,12 +5,12 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use tesaki_agent::chat_plan::{
+use tesaki_agent::{
     ChatPlan, ChatTurnInput, MissionProposal,
     SurfaceLock as PlanSurfaceLock, SurfacePolicy as PlanSurfacePolicy,
 };
-use tesaki_agent::chat_planner::{ChatPlanner, MockChatPlanner};
-use tesaki_agent::agent_fallback::{planner_candidates, describe_planner_candidates, FallbackChatPlanner};
+use tesaki_agent::{ChatPlanner, MockChatPlanner};
+use tesaki_agent::{agent_candidates, describe_candidates};
 use crate::config::{self, ConfigDiscoveryResult};
 use crate::diagnosis::StallDiagnosis;
 use crate::escalation;
@@ -23,8 +23,6 @@ use crate::stage::{detect_stage, Stage, StageConstraint};
 use crate::stop_reason::StopReason;
 use crate::surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy};
 use tesaki_agent::{MissionTokenStats, TokenUsage};
-
-const DEFAULT_PLANNER_TIMEOUT_SECONDS: u64 = 60;
 
 /// Run the autonomous loop directly without REPL (headless mode).
 /// Usage: `tesaki --loop 10` or `tesaki -l 10`
@@ -136,15 +134,14 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
         );
     }
 
-    let planner_candidates = planner_candidates(
+    let planner_candidates = agent_candidates(
         planner_name,
-        config.runner_cmd.clone(),
         config.planner_cmd.clone(),
     );
     if planner_candidates.len() > 1 {
         println!(
             "Planner fallback chain: {}",
-            describe_planner_candidates(&planner_candidates)
+            describe_candidates(&planner_candidates)
         );
     }
     let planner: Box<dyn ChatPlanner> = if planner_name == "mock" {
@@ -155,11 +152,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
             done: true,
         }))
     } else {
-        Box::new(FallbackChatPlanner::new(
-            planner_candidates,
-            &spec_root,
-            DEFAULT_PLANNER_TIMEOUT_SECONDS,
-        )?)
+        tesaki_agent::build_planner(planner_candidates)?
     };
 
     let mut session = SessionState::default();
@@ -571,7 +564,7 @@ fn handle_mission_proposal(plan: &ChatPlan, session: &mut SessionState) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tesaki_agent::chat_plan::{ChatPlan, MissionProposal, SurfaceLock, SurfacePolicy};
+    use tesaki_agent::{ChatPlan, MissionProposal, SurfaceLock, SurfacePolicy};
 
     #[test]
     fn repl_sets_pending_mission_from_plan() {

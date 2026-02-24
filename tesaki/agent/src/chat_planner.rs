@@ -83,7 +83,7 @@ pub trait ChatPlanner: Send + Sync {
 }
 
 /// Blanket implementation: Every Servling is a ChatPlanner.
-impl<T: Servling> ChatPlanner for T {
+impl<T: Servling + ?Sized> ChatPlanner for T {
     fn name(&self) -> &'static str {
         self.name()
     }
@@ -215,7 +215,7 @@ pub fn strip_markdown_code_fences(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use servling::MockAgent;
+    use crate::runner::MockAgent;
 
     #[test]
     fn test_blanket_planner_impl() {

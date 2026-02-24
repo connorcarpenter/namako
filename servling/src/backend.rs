@@ -24,6 +24,21 @@ pub trait Servling: Send + Sync {
     }
 }
 
+/// Implement Servling for Boxed trait objects to allow delegation.
+impl Servling for Box<dyn Servling> {
+    fn execute(&self, request: &LLMRequest) -> Result<LLMResponse> {
+        (**self).execute(request)
+    }
+
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+
+    fn planned_invocation(&self, request: &LLMRequest) -> Option<RunnerInvocation> {
+        (**self).planned_invocation(request)
+    }
+}
+
 /// A standardized request to a Servling.
 #[derive(Debug, Clone)]
 pub struct LLMRequest {

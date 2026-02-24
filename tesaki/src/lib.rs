@@ -2,13 +2,15 @@
 //!
 //! This library module exports the core abstractions for the Tesaki orchestrator.
 
-// Re-export agent abstractions and implementations
+// Re-export agent abstractions and implementations from tesaki_agent
 pub use tesaki_agent::{
-    agent_fallback, base_runner, chat_plan, chat_planner, runner,
+    chat_planner, runner,
     // Key types
-    ChatPlan, ChatPlanner, ChatTurnInput, OutcomeClassification, Runner, RunnerConfig,
-    RunnerInvocation, RunnerOutcome, TokenUsage, FallbackChatPlanner, PlannerCandidate,
-    RunnerCandidate, MockRunner, SessionTokenStats, MissionTokenStats,
+    AllowedCommand, ChatPlan, ChatPlanner, ChatTurnInput, OutcomeClassification, Runner, RunnerConfig,
+    RunnerInvocation, RunnerOutcome, TokenUsage, MockRunner, SessionTokenStats, MissionTokenStats,
+    // Agent Registry & Factory
+    AgentCandidate, agent_candidates, build_coding_agent, build_servling, describe_candidates,
+    normalize_model, should_fallback, MissionProposal,
 };
 
 pub mod binding_extractor;

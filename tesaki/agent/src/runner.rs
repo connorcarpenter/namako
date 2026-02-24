@@ -58,7 +58,8 @@ pub struct RunnerInvocation {
 }
 
 /// Blanket implementation: Every Servling is a Runner.
-impl<T: Servling> Runner for T {
+/// Blanket implementation: Every Servling is a Runner.
+impl<T: Servling + ?Sized> Runner for T {
     fn name(&self) -> &'static str {
         self.name()
     }
@@ -173,6 +174,37 @@ fn segment_match(pattern: &str, segment: &str) -> bool {
     pattern == segment
 }
 
+/// Mock agent for testing.
+pub struct MockAgent {
+    pub response_text: String,
+}
+
+impl MockAgent {
+    pub fn success() -> Self {
+        Self {
+            response_text: r#"{"say": "Mock success", "done": true}"#.to_string(),
+        }
+    }
+}
+
+impl Servling for MockAgent {
+    fn name(&self) -> &'static str {
+        "mock"
+    }
+
+    fn execute(&self, _request: &LLMRequest) -> Result<LLMResponse> {
+        Ok(LLMResponse {
+            text: self.response_text.clone(),
+            classification: OutcomeClassification::Ok,
+            exit_code: Some(0),
+            token_usage: None,
+            elapsed_seconds: 0.1,
+            stdout_path: None,
+            stderr_path: None,
+        })
+    }
+}
+
 /// Mock runner for testing.
 pub struct MockRunner {
     pub should_succeed: bool,
@@ -257,7 +289,6 @@ impl Runner for MockRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use servling::MockAgent;
 
     #[test]
     fn test_mock_runner_success() {
