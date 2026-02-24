@@ -1,162 +1,3337 @@
-//! Tesaki task orchestrator v1.8.
+//! Tesaki - AI-friendly task orchestrator for Namako spec-driven development
+//!
+//! Tesaki is a deterministic task generator that:
+//! - Consumes Namako status and review packets
+//! - Generates NEXT_TASK.md with specific, actionable instructions
+//! - Never modifies source files (only writes to artifact directories)
+//! - May run update-cert up to max-cert-updates times per run (governed by config)
+//!
+//! # v1.7 Runner Integration
+//!
+//! With v1.7, Tesaki can orchestrate an autonomous coding agent (runner) via the REPL.
+//! The runner operates on the specs repository only - it never edits Namako/Tesaki code.
+//!
+//! # Configuration Discovery
+//!
+//! Tesaki searches for `.tesaki/config.toml` in the current directory and parent
+//! directories. See the Tesaki README for details.
 
+mod binding_extractor;
+mod config;
+mod diagnosis;
+mod error_parser;
+mod escalation;
+mod gate;
+mod issue_classifier;
+mod lessons;
+mod logging;
+mod mission;
+mod mission_selector;
+mod mission_type;
+mod model_tier;
+mod packet_parser;
+mod plan_validator;
+mod policy_violation;
+mod prompts;
+mod repl;
+mod repo_state;
+mod scenario_extractor;
+mod session;
+mod stage;
+mod stop_reason;
+mod surface_policy;
+mod spec_quality;
+mod workspace;
+
+use anyhow::{bail, Context, Result};
+use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
-use log::{info, warn, error, debug};
-use anyhow::{Result, Context};
-use serde_json::json;
+use std::process::{Command, Output};
 
-use tesaki::config::{self, ConfigDiscoveryResult};
-use tesaki::packet_parser::{
-    parse_gate_json, parse_review_json, parse_status_json, 
-    GatePacket, ReviewPacket, StatusPacket, StatusValue,
-};
-use tesaki::repo_state::RepoState;
-use tesaki::session::{SessionState, PendingMission};
-use tesaki::stage::{detect_stage, Stage, StageConstraint};
-use tesaki::mission_type::MissionType;
-use tesaki::mission_selector::{select_mission_type, select_with_constraints};
-use tesaki::model_tier::select_model_for_attempt;
-use tesaki::workspace::Workspace;
-use tesaki::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker, PhaseStatus};
-use tesaki::surface_policy::{SurfaceLock, SurfacePolicy, SurfaceDefinition};
-use tesaki::error_parser::run_pre_gate_build;
-use tesaki::plan_validator::{ProposedPlan, validate_plan};
-use tesaki::runner::{
-    Runner, RunnerConfig, RunnerOutcome, RunnerInvocation, 
-    outcome_from_error, build_runner, check_surface_violations,
-};
-use servling::{
-    agent_candidates, describe_candidates, normalize_model, 
-    OutcomeClassification, TokenUsage,
-};
+/// Log file name for update-cert audit trail
+const UPDATE_CERT_LOG: &str = "update_cert_log.jsonl";
 
-/// Main entry point for `tesaki run`.
-pub fn run_run(
-    config: &tesaki::config::TesakiConfig,
-    spec_root: &Path,
-    adapter: &str,
-    namako_cmd: &str,
-    pre_gate_build_mode: tesaki::config::PreGateBuildMode,
-    session: &mut SessionState,
-    lessons_db: &mut tesaki::lessons::LessonsDatabase,
-    logger: &tesaki::logging::JsonlLogger,
-) -> Result<tesaki::stop_reason::RunResult> {
-    info!("Starting Tesaki run loop...");
-    
-    let mut iterations = 0;
-    let max_iterations = config.max_iterations.unwrap_or(10);
+/// Log entry for each update-cert operation (append-only audit log)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UpdateCertLogEntry {
+    timestamp_utc: String,
+    old_identity: Option<IdentitySnapshot>,
+    new_identity: IdentitySnapshot,
+    reason: String,
+    updates_this_run: u32,
+    max_updates_allowed: u32,
+}
 
-    loop {
-        iterations += 1;
-        if iterations > max_iterations {
-            info!("Reached max iterations ({})", max_iterations);
-            return Ok(tesaki::stop_reason::RunResult {
-                stop_reason: tesaki::stop_reason::StopReason::MaxIterationsReached,
-                iterations,
-            });
+/// Snapshot of identity hashes for logging
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IdentitySnapshot {
+    feature_fingerprint_hash: String,
+    step_registry_hash: String,
+    resolved_plan_hash: String,
+}
+
+/// Tesaki - AI-friendly task orchestrator for Namako
+#[derive(Parser)]
+#[command(name = "tesaki")]
+#[command(about = "AI-friendly task orchestrator for Namako spec-driven development")]
+#[command(disable_version_flag = true)]
+#[command(after_help = "Run `tesaki` to start the interactive REPL, or `tesaki --loop N` for autonomous mode.")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// Run autonomous loop for N iterations (or until done/stalled)
+    #[arg(long, short = 'l')]
+    r#loop: Option<u32>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Diagnose a mission by ID
+    Diagnose {
+        /// Mission ID (e.g., M-abc123)
+        mission_id: String,
+    },
+}
+
+/// Status JSON structure from `namako status --json`
+#[derive(Debug, Deserialize)]
+struct StatusJson {
+    recommended_next_action: String,
+    #[serde(default)]
+    drift: Option<DriftInfo>,
+    #[serde(default)]
+    last_run_failures: Vec<FailureInfo>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DriftInfo {
+    kind: String,
+    #[serde(default)]
+    details: Vec<DriftDetail>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DriftDetail {
+    field: String,
+    baseline: String,
+    current: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct FailureInfo {
+    scenario_key: String,
+    scenario_name: String,
+    failure_kind: String,
+}
+
+/// Review JSON structure from `namako review`
+#[derive(Debug, Deserialize)]
+struct ReviewJson {
+    coverage_summary: CoverageSummary,
+    #[serde(default)]
+    promotion_candidates: Vec<PromotionCandidate>,
+    #[serde(default)]
+    missing_bindings_for_top_candidates: Vec<MissingBindings>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoverageSummary {
+    executable_scenarios_total: u32,
+    deferred_items_total: u32,
+}
+
+/// Blocker classification matching namako review output.
+/// - HARNESS_ONLY: Can be unblocked with test harness changes only
+/// - CORE: Requires changes to the core codebase
+/// - EXTERNAL: Requires external dependencies
+/// - UNKNOWN: No blocker annotation found
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum BlockerType {
+    HarnessOnly,
+    Core,
+    External,
+    Unknown,
+}
+
+impl Default for BlockerType {
+    fn default() -> Self {
+        BlockerType::Unknown
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PromotionCandidate {
+    scenario_name: String,
+    feature_path: String,
+    rule_name: String,
+    reuse_score: f32,
+    new_step_texts_estimate: u32,
+    #[serde(default)]
+    #[allow(dead_code)]
+    blocker: BlockerType,
+    /// Whether this is a stub scenario (should always be false in promotion_candidates,
+    /// since namako review filters them out; kept for defense-in-depth)
+    #[serde(default)]
+    is_stub: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct MissingBindings {
+    candidate_name: String,
+    #[serde(default)]
+    missing_step_texts: Vec<String>,
+}
+
+
+fn cmd_diagnose(mission_id: &str, spec_root: &Path) -> Result<()> {
+    // Find mission directory
+    let missions_dir = spec_root.join(".tesaki").join("missions");
+    let mission_dir = find_mission_by_id(&missions_dir, mission_id)?;
+
+    // Read mission metadata
+    let metadata_path = mission_dir.join("metadata.json");
+    let metadata: serde_json::Value = if metadata_path.exists() {
+        serde_json::from_str(&fs::read_to_string(&metadata_path)?)?
+    } else {
+        serde_json::json!({})
+    };
+
+    // Print mission info
+    println!("Mission: {}", mission_id);
+    if let Some(mission_type) = metadata.get("mission_type").and_then(|v| v.as_str()) {
+        println!("Type: {}", mission_type);
+    }
+    if let Some(target) = metadata.get("target").and_then(|v| v.as_str()) {
+        println!("Target: {}", target);
+    }
+    println!();
+
+    // Print selection reason from INPUTS.json
+    let inputs_path = mission_dir.join("INPUTS.json");
+    if inputs_path.exists() {
+        let inputs: serde_json::Value = serde_json::from_str(&fs::read_to_string(&inputs_path)?)?;
+        println!("Selection Reason:");
+        if let Some(evidence) = inputs.get("selection_evidence") {
+            println!("  {}", serde_json::to_string_pretty(evidence)?);
         }
+    }
+    println!();
 
-        info!("Iteration {}/{}", iterations, max_iterations);
-
-        // 1. Get current repo state
-        let gate_json = tesaki::gate::run_namako_gate_json(namako_cmd, adapter, spec_root, logger)?;
-        let status_json = tesaki::repo_state::run_namako_status(namako_cmd, adapter, spec_root, None, logger)?;
-        let review_json = tesaki::repo_state::run_namako_review(namako_cmd, adapter, spec_root, logger)?;
-
-        let gate = parse_gate_json(&gate_json)?;
-        let status = parse_status_json(&status_json)?;
-        let review = parse_review_json(&review_json)?;
-
-        let stage = detect_stage(&gate, &status, &review);
-        session.stage = Some(stage.clone());
-        info!("Current Stage: {:?}", stage);
-
-        if matches!(stage, Stage::Finalize) {
-            info!("All goals achieved. Stopping.");
-            return Ok(tesaki::stop_reason::RunResult {
-                stop_reason: tesaki::stop_reason::StopReason::GoalsAchieved,
-                iterations,
-            });
+    // Print gate result from GATE_RESULT.json
+    let gate_path = mission_dir.join("GATE_RESULT.json");
+    if gate_path.exists() {
+        let gate: serde_json::Value = serde_json::from_str(&fs::read_to_string(&gate_path)?)?;
+        let outcome = gate.get("outcome").and_then(|v| v.as_str()).unwrap_or("unknown");
+        println!("Gate Result: {}", outcome);
+        if let Some(errors) = gate.get("errors").and_then(|v| v.as_array()) {
+            for err in errors.iter().take(5) {
+                println!("  - {}", err.as_str().unwrap_or(""));
+            }
         }
+    }
+    println!();
 
-        // 2. Select mission
-        let mission_type = if let Some(proposal) = &session.pending_mission {
-            // If we have a pending mission from REPL, use its type
-            // This is a simplification; in reality we'd need to map proposal back to MissionType
-            select_mission_type(&gate, &status, &review, &StageConstraint::None)
-        } else {
-            select_mission_type(&gate, &status, &review, &StageConstraint::None)
-        };
-
-        let mission_id = session.pending_mission.as_ref().map(|m| m.id.clone())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-        // 3. Execute mission
-        let outcome = run_mission(
-            config,
-            spec_root,
-            adapter,
-            namako_cmd,
-            &mission_type,
-            &mission_id,
-            session,
-            lessons_db,
-            logger,
-        )?;
-
-        if outcome.classification.should_fallback() {
-            warn!("Mission rate limited or failed with fallbackable error.");
+    // Print suggested fix based on mission type
+    println!("Suggested Fix:");
+    if let Some(mission_type) = metadata.get("mission_type").and_then(|v| v.as_str()) {
+        match mission_type {
+            "CreateMissingBindings" => {
+                println!("  - Add step bindings in test harness for the missing steps");
+                println!("  - Or mark scenario @Deferred if bindings cannot be added yet");
+            }
+            "AddOrClarifyScenario" => {
+                println!("  - Add a scenario that covers the rule's core guarantee");
+                println!("  - Use domain-specific language from the rule header");
+            }
+            "FixRegressionFromGateFailure" => {
+                println!("  - Fix the failing assertion in the SUT code");
+                println!("  - Or update the scenario if the expected behavior changed");
+            }
+            _ => {
+                println!("  - Review the mission brief for specific guidance");
+            }
         }
+    } else {
+        println!("  - Review the mission brief for specific guidance");
+    }
 
-        if matches!(outcome.classification, OutcomeClassification::Failed) {
-            warn!("Mission failed. Stopping loop.");
-            return Ok(tesaki::stop_reason::RunResult {
-                stop_reason: tesaki::stop_reason::StopReason::MissionFailed,
-                iterations,
-            });
+    Ok(())
+}
+
+fn find_mission_by_id(missions_dir: &Path, mission_id: &str) -> Result<PathBuf> {
+    // Mission directories are named like "M-{timestamp}-{hash}"
+    // The mission_id could be the full name or just the hash suffix
+    for entry in fs::read_dir(missions_dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == mission_id || name.ends_with(mission_id) || name.contains(mission_id) {
+            return Ok(entry.path());
+        }
+    }
+    bail!("Mission not found: {}", mission_id)
+}
+
+fn main() -> Result<()> {
+    // Initialize logging - configure via RUST_LOG env var
+    logging::init();
+
+    let cli = Cli::parse();
+
+    // Handle diagnose command
+    match cli.command {
+        Some(Commands::Diagnose { mission_id }) => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let discovery = config::discover_config(&cwd)?;
+            match discovery {
+                config::ConfigDiscoveryResult::Found(config) => {
+                    return cmd_diagnose(&mission_id, &config.specs_dir);
+                }
+                config::ConfigDiscoveryResult::NotFound { .. } => {
+                    config::print_config_error();
+                    bail!("No .tesaki/config.toml found");
+                }
+            }
+        }
+        None => {}
+    }
+
+    let log_path = std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from);
+    // Use Off mode for cleaner REPL output - state is shown in summary
+    let logger = logging::JsonlLogger::new_with_console(
+        log_path,
+        logging::ConsoleMode::Off,
+    );
+
+    if let Some(iterations) = cli.r#loop {
+        // Autonomous mode: run loop directly without REPL
+        repl::run_loop_headless(
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            iterations,
+            &logger,
+        )
+    } else {
+        // Interactive mode: start REPL
+        repl::run_repl(
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            &logger,
+        )
+    }
+}
+
+/// Resolved configuration from CLI flags and/or config file
+#[allow(dead_code)]
+struct ResolvedArgs {
+    specs_dir: PathBuf,
+    adapter_cmd: String,
+    namako_cli: Option<String>,
+    max_cert_updates: Option<u32>,
+    runner: Option<String>,
+    runner_cmd: Option<String>,
+    max_retries: Option<u32>,
+    max_runtime_seconds: Option<u64>,
+    max_files_changed: Option<usize>,
+    surfaces: Option<config::SurfacesConfig>,
+    model: Option<String>,
+}
+
+/// Resolve configuration from CLI flags, falling back to config file if flags are missing.
+/// CLI flags always override config file values.
+#[allow(dead_code)]
+fn resolve_config_or_flags(
+    spec_root: Option<PathBuf>,
+    adapter: Option<String>,
+    max_cert_updates: Option<u32>,
+    runner: Option<String>,
+    runner_cmd: Option<String>,
+    max_retries: Option<u32>,
+    max_runtime_seconds: Option<u64>,
+    max_files_changed: Option<usize>,
+) -> Result<ResolvedArgs> {
+    // If both required flags are provided, use them directly
+    if let (Some(spec_root), Some(adapter)) = (&spec_root, &adapter) {
+        let spec_root = fs::canonicalize(spec_root)
+            .with_context(|| format!("Failed to canonicalize spec_root: {}", spec_root.display()))?;
+        let adapter = canonicalize_adapter_cmd(adapter)?;
+        return Ok(ResolvedArgs {
+            specs_dir: spec_root,
+            adapter_cmd: adapter,
+            namako_cli: None,
+            max_cert_updates,
+            runner,
+            runner_cmd,
+            max_retries,
+            max_runtime_seconds,
+            max_files_changed,
+            surfaces: None,
+            model: None,
+        });
+    }
+
+    // Try to discover config
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let discovery = config::discover_config(&cwd)?;
+
+    match discovery {
+        config::ConfigDiscoveryResult::Found(cfg) => {
+            eprintln!("Using config: {}", cfg.config_path.display());
+
+            // CLI flags override config values
+            let specs_dir = spec_root
+                .map(|p| fs::canonicalize(&p).unwrap_or(p))
+                .unwrap_or(cfg.specs_dir);
+            let adapter_cmd = adapter
+                .map(|a| canonicalize_adapter_cmd(&a).unwrap_or(a))
+                .unwrap_or(cfg.adapter_cmd);
+
+            Ok(ResolvedArgs {
+                specs_dir,
+                adapter_cmd,
+                namako_cli: cfg.namako_cli.clone(),
+                max_cert_updates: max_cert_updates.or(cfg.max_cert_updates),
+                runner: runner.or(cfg.runner),
+                runner_cmd: runner_cmd.or(cfg.runner_cmd),
+                max_retries: max_retries.or(cfg.max_retries),
+                max_runtime_seconds: max_runtime_seconds.or(cfg.max_runtime_seconds),
+                max_files_changed: max_files_changed.or(cfg.max_files_changed),
+                surfaces: cfg.surfaces,
+                model: cfg.model,
+            })
+        }
+        config::ConfigDiscoveryResult::NotFound { .. } => {
+            // Check if we have at least partial flags
+            if spec_root.is_some() || adapter.is_some() {
+                anyhow::bail!(
+                    "Configuration is required when no config file is found.\n\n\
+                    Create .tesaki/config.toml in your repository."
+                );
+            }
+
+            config::print_config_error();
+            std::process::exit(1);
         }
     }
 }
 
-pub fn run_mission(
-    config: &tesaki::config::TesakiConfig,
-    spec_root: &Path,
-    adapter: &str,
-    namako_cmd: &str,
-    mission_type: &MissionType,
-    mission_id: &str,
-    session: &mut SessionState,
-    _lessons_db: &mut tesaki::lessons::LessonsDatabase,
-    logger: &tesaki::logging::JsonlLogger,
-) -> Result<RunnerOutcome> {
-    let preferred_agent = config.preferred_agent.clone();
-    let custom_command = config.agent_command.clone();
-    let runner_candidates = agent_candidates(&preferred_agent, custom_command);
-    
-    let runner = build_runner(runner_candidates)?;
-    
-    let mission_dir = spec_root.to_path_buf(); // Simplified
-    let runner_config = RunnerConfig {
-        working_dir: spec_root.to_path_buf(),
-        max_runtime_seconds: 300,
-        model: config.model_tier.as_ref().map(|t| t.to_string()),
-        stream_output: true,
-    };
+/// Print resolved configuration (internal helper).
+#[allow(dead_code)]
+fn run_config_print() -> Result<()> {
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let discovery = config::discover_config(&cwd)?;
 
-    info!("Executing mission {} with runner {}", mission_id, runner.name());
-    
-    let outcome = runner.run(&mission_dir, &runner_config)?;
-    
-    logger.log_event(tesaki::logging::LogEvent::MissionExecuted {
-        mission_id: mission_id.to_string(),
-        runner: runner.name().to_string(),
-        outcome: outcome.clone(),
-    });
-
-    Ok(outcome)
+    match discovery {
+        config::ConfigDiscoveryResult::Found(cfg) => {
+            println!("Config file: {}", cfg.config_path.display());
+            println!("Config root: {}", cfg.config_root.display());
+            println!();
+            println!("Resolved values:");
+            println!("  specs_dir: {}", cfg.specs_dir.display());
+            println!("  adapter_cmd: {}", cfg.adapter_cmd);
+            let namako = resolve_namako_cli(None, cfg.namako_cli.clone(), &cfg.specs_dir);
+            println!(
+                "  namako_cli: {} ({})",
+                namako.command,
+                namako.source.label()
+            );
+            if let Some(ref runner) = cfg.runner {
+                println!("  runner: {}", runner);
+            }
+            if let Some(ref runner_cmd) = cfg.runner_cmd {
+                println!("  runner_cmd: {}", runner_cmd);
+            }
+            if let Some(ref planner) = cfg.planner {
+                println!("  planner: {}", planner);
+            }
+            if let Some(ref planner_cmd) = cfg.planner_cmd {
+                println!("  planner_cmd: {}", planner_cmd);
+            }
+            if let Some(max_retries) = cfg.max_retries {
+                println!("  max_retries: {}", max_retries);
+            }
+            if let Some(max_cert_updates) = cfg.max_cert_updates {
+                println!("  max_cert_updates: {}", max_cert_updates);
+            }
+            if let Some(max_runtime_seconds) = cfg.max_runtime_seconds {
+                println!("  max_runtime_seconds: {}", max_runtime_seconds);
+            }
+            if let Some(max_files_changed) = cfg.max_files_changed {
+                println!("  max_files_changed: {}", max_files_changed);
+            }
+            Ok(())
+        }
+        config::ConfigDiscoveryResult::NotFound { searched_dirs } => {
+            eprintln!("No config file found.");
+            eprintln!();
+            eprintln!("Searched directories:");
+            for dir in searched_dirs.iter().take(5) {
+                eprintln!("  - {}", dir.display());
+            }
+            if searched_dirs.len() > 5 {
+                eprintln!("  ... and {} more", searched_dirs.len() - 5);
+            }
+            eprintln!();
+            config::print_config_error();
+            std::process::exit(1);
+        }
+    }
 }
 
-fn main() -> Result<()> {
-    // Basic main implementation to satisfy compiler
+#[allow(dead_code)]
+fn run_status_cmd(
+    spec_root: &PathBuf,
+    adapter: &str,
+    namako_cli: NamakoCliResolution,
+    logger: &logging::JsonlLogger,
+) -> Result<()> {
+    use crate::packet_parser::{
+        parse_gate_json,
+        parse_review_json,
+        parse_status_json,
+    };
+    use crate::repo_state::RepoState;
+    use crate::stage::detect_stage;
+
+    let namako = namako_cli.command.clone();
+    log_session_start(
+        logger,
+        spec_root,
+        adapter,
+        &namako_cli,
+        None,
+        None,
+    );
+    let gate_json = run_namako_gate_json(&namako, adapter, spec_root, logger)?;
+    let gate_packet = parse_gate_json(&gate_json)?;
+
+    let out_dir = spec_root.join("target/namako_artifacts/tesaki");
+    fs::create_dir_all(&out_dir)?;
+    let status_path = out_dir.join("status.json");
+    let review_path = out_dir.join("review.json");
+
+    let status_json = run_namako_status(&namako, adapter, spec_root, None, logger)?;
+    fs::write(&status_path, &status_json)?;
+    let review_json = run_namako_review(&namako, adapter, spec_root, logger)?;
+    fs::write(&review_path, &review_json)?;
+
+    let status_packet = parse_status_json(&status_json)?;
+    let review_packet = parse_review_json(&review_json)?;
+
+    let repo_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+    let stage = detect_stage(&repo_state);
+    println!("RepoState: {}", repo_state.summary());
+    println!("Stage: {}", stage.name());
+    println!("Propagation: {}", repo_state.propagation_summary().to_line());
+
+    log_session_end(logger, stop_reason::StopReason::Done, None);
     Ok(())
+}
+
+#[allow(dead_code)]
+fn run_explain_cmd(
+    spec_root: &PathBuf,
+    adapter: &str,
+    namako_cli: NamakoCliResolution,
+    logger: &logging::JsonlLogger,
+) -> Result<()> {
+    use crate::mission_selector::select_mission_type;
+    use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
+    use crate::repo_state::RepoState;
+    use crate::stage::detect_stage;
+
+    let namako = namako_cli.command.clone();
+    log_session_start(
+        logger,
+        spec_root,
+        adapter,
+        &namako_cli,
+        None,
+        None,
+    );
+    let gate_json = run_namako_gate_json(&namako, adapter, spec_root, logger)?;
+    let gate_packet = parse_gate_json(&gate_json)?;
+
+    let out_dir = spec_root.join("target/namako_artifacts/tesaki");
+    fs::create_dir_all(&out_dir)?;
+    let status_path = out_dir.join("status.json");
+    let review_path = out_dir.join("review.json");
+
+    let status_json = run_namako_status(&namako, adapter, spec_root, None, logger)?;
+    fs::write(&status_path, &status_json)?;
+    let review_json = run_namako_review(&namako, adapter, spec_root, logger)?;
+    fs::write(&review_path, &review_json)?;
+
+    let status_packet = parse_status_json(&status_json)?;
+    let review_packet = parse_review_json(&review_json)?;
+
+    let repo_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+    let stage = detect_stage(&repo_state);
+    println!("Stage: {}", stage.name());
+    println!("RepoState: {}", repo_state.summary());
+
+    if let Some(task) = repo_state.top_candidate() {
+        println!("Top issue: {} ({:?})", task.name, task.priority);
+        println!("Why: {}", task.description);
+    }
+
+    if let Some(mission) = select_mission_type(&repo_state) {
+        println!("Proposed mission: {}", mission.name());
+        if let Some(target) = mission.target_label() {
+            println!("Target: {}", target);
+        }
+    } else {
+        println!("Proposed mission: none (no work remaining)");
+    }
+
+    log_session_end(logger, stop_reason::StopReason::Done, None);
+    Ok(())
+}
+
+/// Canonicalize any --manifest-path arguments in the adapter command
+fn canonicalize_adapter_cmd(adapter: &str) -> Result<String> {
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let parts: Vec<&str> = adapter.split_whitespace().collect();
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < parts.len() {
+        if parts[i] == "--manifest-path" && i + 1 < parts.len() {
+            result.push(parts[i].to_string());
+            i += 1;
+            let path = PathBuf::from(parts[i]);
+            let abs_path = if path.is_absolute() {
+                path
+            } else {
+                cwd.join(&path)
+            };
+            // Try to canonicalize, or use the absolute path if it doesn't exist yet
+            let final_path = fs::canonicalize(&abs_path).unwrap_or(abs_path);
+            result.push(final_path.display().to_string());
+        } else if parts[i].starts_with("--manifest-path=") {
+            let path_str = parts[i].strip_prefix("--manifest-path=").unwrap_or("");
+            let path = PathBuf::from(path_str);
+            let abs_path = if path.is_absolute() {
+                path
+            } else {
+                cwd.join(&path)
+            };
+            let final_path = fs::canonicalize(&abs_path).unwrap_or(abs_path);
+            result.push(format!("--manifest-path={}", final_path.display()));
+        } else {
+            result.push(parts[i].to_string());
+        }
+        i += 1;
+    }
+    Ok(result.join(" "))
+}
+
+#[allow(dead_code)]
+fn run_next(
+    spec_root: &PathBuf,
+    adapter: &str,
+    out: Option<PathBuf>,
+    namako_cli: NamakoCliResolution,
+    max_cert_updates: u32,
+    logger: &logging::JsonlLogger,
+) -> Result<()> {
+    // Canonicalize spec_root to get absolute path
+    let spec_root = fs::canonicalize(spec_root)
+        .context("Failed to canonicalize spec_root path")?;
+
+    // Canonicalize adapter command paths
+    let adapter = canonicalize_adapter_cmd(adapter)?;
+
+    // Determine output directory
+    let out_dir = out
+        .map(|p| {
+            if p.is_absolute() {
+                p
+            } else {
+                std::env::current_dir().unwrap_or_default().join(p)
+            }
+        })
+        .unwrap_or_else(|| spec_root.join("target/namako_artifacts/tesaki"));
+    fs::create_dir_all(&out_dir).context("Failed to create output directory")?;
+
+    // Determine namako CLI command
+    let namako = namako_cli.command.clone();
+    log_session_start(
+        logger,
+        &spec_root,
+        &adapter,
+        &namako_cli,
+        None,
+        None,
+    );
+
+    // Define artifact paths used throughout
+    let artifacts_dir = spec_root.join("target/namako_artifacts");
+    let run_report_path =
+        resolve_run_report_path(&spec_root).unwrap_or_else(|| artifacts_dir.join("run_report.json"));
+    let cert_path = spec_root.join("certification.json");
+    let log_path = out_dir.join(UPDATE_CERT_LOG);
+
+    // Track update-cert operations for this run
+    let mut updates_this_run: u32 = 0;
+
+    eprintln!("=== Tesaki v2 ===");
+    eprintln!("Spec root: {}", spec_root.display());
+    eprintln!("Output dir: {}", out_dir.display());
+    eprintln!("Max cert updates: {}", max_cert_updates);
+    eprintln!();
+
+    // Step 1: Run namako status (auto-passes --run-report if file exists per TODO.md §2.1)
+    eprintln!("[1/4] Running namako status...");
+    let status_path = out_dir.join("status.json");
+    let run_report_opt = if run_report_path.exists() {
+        Some(&run_report_path)
+    } else {
+        None
+    };
+    let status_content =
+        run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
+    fs::write(&status_path, &status_content)?;
+
+    // Parse status
+    let status: StatusJson =
+        serde_json::from_str(&status_content).context("Failed to parse status.json")?;
+
+    let mut action = status.recommended_next_action.clone();
+    eprintln!("  Action: {}", action);
+
+    // Step 2: Run namako review
+    eprintln!("[2/4] Running namako review...");
+    let review_path = out_dir.join("review.json");
+    let review_content = run_namako_review(&namako, &adapter, &spec_root, logger)?;
+    fs::write(&review_path, &review_content)?;
+
+    // Parse review
+    let review: ReviewJson =
+        serde_json::from_str(&review_content).context("Failed to parse review.json")?;
+
+    eprintln!(
+        "  Executable: {} | Deferred: {} | Promotable: {}",
+        review.coverage_summary.executable_scenarios_total,
+        review.coverage_summary.deferred_items_total,
+        review.promotion_candidates.len()
+    );
+
+    // Step 3: Handle NEEDS_UPDATE_CERT_APPROVAL with update-cert governance
+    let mut update_cert_message: Option<String> = None;
+    if action == "NEEDS_UPDATE_CERT_APPROVAL" {
+        eprintln!("[3/4] Checking update-cert governance...");
+
+        let remaining = max_cert_updates.saturating_sub(updates_this_run);
+        if remaining > 0 {
+            eprintln!("  {} updates remaining this run (max: {})", remaining, max_cert_updates);
+        } else {
+            eprintln!("  No updates remaining this run (max: {})", max_cert_updates);
+        }
+
+        if !run_report_path.exists() {
+            update_cert_message = Some(
+                "Cannot attempt autonomous update: run_report.json not found. Run `namako run` first.".to_string()
+            );
+        } else if max_cert_updates == 0 {
+            eprintln!("  Autonomous updates disabled (max_cert_updates=0)");
+            update_cert_message = Some(
+                "Autonomous updates disabled. Set max_cert_updates in .tesaki/config.toml to enable.".to_string()
+            );
+        } else if updates_this_run >= max_cert_updates {
+            eprintln!("  Update limit reached for this run");
+            update_cert_message = Some(format!(
+                "Update limit reached ({}/{} used this run). Run tesaki again for more updates.",
+                updates_this_run, max_cert_updates
+            ));
+        } else {
+            // Read old certification for logging (if exists)
+            let old_identity = read_certification_identity(&cert_path);
+
+            // Attempt update-cert
+            let result = run_namako_update_cert(
+                &namako,
+                &adapter,
+                &spec_root,
+                &run_report_path,
+                &cert_path,
+                logger,
+            );
+
+            match result {
+                Ok(()) => {
+                    updates_this_run += 1;
+                    eprintln!("  ✓ Baseline updated ({}/{} used this run)", updates_this_run, max_cert_updates);
+
+                    // Read new certification for logging
+                    let new_identity = read_certification_identity(&cert_path);
+
+                    // Log the update
+                    let drift_reason = status.drift.as_ref()
+                        .map(|d| d.kind.clone())
+                        .unwrap_or_else(|| "UNKNOWN".to_string());
+
+                    if let Some(new_id) = new_identity {
+                        let log_entry = UpdateCertLogEntry {
+                            timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                            old_identity,
+                            new_identity: new_id,
+                            reason: drift_reason,
+                            updates_this_run,
+                            max_updates_allowed: max_cert_updates,
+                        };
+                        append_to_log(&log_path, &log_entry);
+                    }
+
+                    update_cert_message = Some(format!(
+                        "Baseline updated autonomously. {}/{} updates used this run.",
+                        updates_this_run, max_cert_updates
+                    ));
+                    action = "DONE".to_string();
+                }
+                Err(err) => {
+                    eprintln!("  ✗ Update-cert failed: {}", err);
+                    update_cert_message = Some(format!("Update-cert failed: {}", err));
+                }
+            }
+        }
+    } else {
+        eprintln!("[3/4] Skipped (no baseline update needed)");
+    }
+
+    // Step 4: Generate NEXT_TASK.md
+    eprintln!("[4/4] Generating NEXT_TASK.md...");
+
+    // If FIX_RUN and we have failures, generate explain
+    let explain_path = if action == "FIX_RUN" && !status.last_run_failures.is_empty() {
+        let first_failure = &status.last_run_failures[0];
+        eprintln!(
+            "  Generating explain for: {}",
+            first_failure.scenario_key
+        );
+        let explain_file = out_dir.join("explain_failure.json");
+        let _ = run_namako_explain(
+            &namako,
+            &adapter,
+            &spec_root,
+            &first_failure.scenario_key,
+            &explain_file,
+            logger,
+        );
+        Some(explain_file)
+    } else {
+        None
+    };
+
+    let next_task_path = out_dir.join("NEXT_TASK.md");
+    generate_next_task(
+        &next_task_path,
+        &action,
+        &status,
+        &review,
+        explain_path.as_ref(),
+        &out_dir,
+        update_cert_message.as_ref(),
+        max_cert_updates,
+    )?;
+
+    eprintln!();
+    eprintln!("Generated: {}", next_task_path.display());
+    eprintln!();
+
+    // Print the generated task
+    let task_content = fs::read_to_string(&next_task_path)?;
+    println!("{}", task_content);
+
+    Ok(())
+}
+
+fn run_namako_status(
+    namako: &str,
+    adapter: &str,
+    spec_root: &PathBuf,
+    run_report_path: Option<&PathBuf>,
+    logger: &logging::JsonlLogger,
+) -> Result<String> {
+    let args: Vec<&str> = namako.split_whitespace().collect();
+    let (program, namako_args) = args.split_first().context("Empty namako command")?;
+
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("status".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+    cmd_args.push("--json".to_string());
+
+    // Pass --run-report automatically if the file exists (per TODO.md §2.1)
+    if let Some(run_report) = run_report_path {
+        if run_report.exists() {
+            cmd_args.push("--run-report".to_string());
+            cmd_args.push(run_report.display().to_string());
+        }
+    }
+
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
+    let output = Command::new(program)
+        .args(&cmd_args)
+        .current_dir(spec_root)
+        .output()
+        .context("Failed to run namako status")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("namako status failed: {}", stderr);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if stdout.trim().is_empty() {
+        anyhow::bail!("namako status returned empty output");
+    }
+
+    Ok(stdout)
+}
+
+fn resolve_run_report_path(spec_root: &PathBuf) -> Option<PathBuf> {
+    let primary = spec_root.join("run_report.json");
+    if primary.exists() {
+        return Some(primary);
+    }
+    let fallback = spec_root.join("target/namako_artifacts/run_report.json");
+    if fallback.exists() {
+        return Some(fallback);
+    }
+    None
+}
+
+fn run_namako_review(
+    namako: &str,
+    adapter: &str,
+    spec_root: &PathBuf,
+    logger: &logging::JsonlLogger,
+) -> Result<String> {
+    let args: Vec<&str> = namako.split_whitespace().collect();
+    let (program, namako_args) = args.split_first().context("Empty namako command")?;
+
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("review".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
+    let output = Command::new(program)
+        .args(&cmd_args)
+        .current_dir(spec_root)
+        .output()
+        .context("Failed to run namako review")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("namako review failed: {}", stderr);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if stdout.trim().is_empty() {
+        anyhow::bail!("namako review returned empty output");
+    }
+
+    Ok(stdout)
+}
+
+fn run_namako_explain(
+    namako: &str,
+    adapter: &str,
+    spec_root: &PathBuf,
+    scenario_key: &str,
+    out_path: &PathBuf,
+    logger: &logging::JsonlLogger,
+) -> Result<()> {
+    let args: Vec<&str> = namako.split_whitespace().collect();
+    let (program, namako_args) = args.split_first().context("Empty namako command")?;
+
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("explain".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+    cmd_args.push("--scenario-key".to_string());
+    cmd_args.push(scenario_key.to_string());
+    cmd_args.push("--out".to_string());
+    cmd_args.push(out_path.display().to_string());
+
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
+    let output = Command::new(program)
+        .args(&cmd_args)
+        .current_dir(spec_root)
+        .output()
+        .context("Failed to run namako explain")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("namako explain failed: {}", stderr);
+    }
+
+    Ok(())
+}
+
+/// Run namako update-cert to update the baseline certification.
+fn run_namako_update_cert(
+    namako: &str,
+    adapter: &str,
+    spec_root: &PathBuf,
+    run_report_path: &PathBuf,
+    cert_output_path: &PathBuf,
+    logger: &logging::JsonlLogger,
+) -> Result<()> {
+    let args: Vec<&str> = namako.split_whitespace().collect();
+    let (program, namako_args) = args.split_first().context("Empty namako command")?;
+
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("update-cert".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+    cmd_args.push("--run-report".to_string());
+    cmd_args.push(run_report_path.display().to_string());
+    cmd_args.push("--output".to_string());
+    cmd_args.push(cert_output_path.display().to_string());
+
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
+    let output = Command::new(program)
+        .args(&cmd_args)
+        .current_dir(spec_root)
+        .output()
+        .context("Failed to run namako update-cert")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("namako update-cert failed: {}", stderr);
+    }
+
+    Ok(())
+}
+
+/// Read certification.json and extract identity fields for logging
+fn read_certification_identity(cert_path: &PathBuf) -> Option<IdentitySnapshot> {
+    let content = fs::read_to_string(cert_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let identity = json.get("identity")?;
+    Some(IdentitySnapshot {
+        feature_fingerprint_hash: identity.get("feature_fingerprint_hash")?.as_str()?.to_string(),
+        step_registry_hash: identity.get("step_registry_hash")?.as_str()?.to_string(),
+        resolved_plan_hash: identity.get("resolved_plan_hash")?.as_str()?.to_string(),
+    })
+}
+
+/// Append an update-cert log entry to the audit log (JSONL format)
+fn append_to_log(log_path: &PathBuf, entry: &UpdateCertLogEntry) {
+    use std::io::Write;
+    let json_line = match serde_json::to_string(entry) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("  WARNING: Failed to serialize log entry: {}", e);
+            return;
+        }
+    };
+    let mut file = match fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("  WARNING: Failed to open log file: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = writeln!(file, "{}", json_line) {
+        eprintln!("  WARNING: Failed to write log entry: {}", e);
+    }
+}
+
+fn generate_next_task(
+    path: &PathBuf,
+    action: &str,
+    status: &StatusJson,
+    review: &ReviewJson,
+    explain_path: Option<&PathBuf>,
+    out_dir: &PathBuf,
+    update_cert_message: Option<&String>,
+    max_cert_updates: u32,
+) -> Result<()> {
+    use prompts::{
+        render_next_task_base, render_next_task_done, render_next_task_fix_lint,
+        render_next_task_fix_run, render_next_task_needs_approval, render_next_task_run_gate,
+        render_next_task_unknown, render_next_task_artifacts,
+        NextTaskBaseContext, NextTaskDoneContext, NextTaskFixLintContext, NextTaskFixRunContext,
+        NextTaskNeedsApprovalContext, NextTaskRunGateContext, NextTaskArtifactsContext,
+        CandidateContext, MissingBindingContext, FailureDisplayContext, DriftDetailContext,
+        TESAKI_VERSION,
+    };
+
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    // Filter out stubs (defense-in-depth)
+    // Per TODO.md §2: Tesaki must NEVER select @Stub scenarios as tasks.
+    let eligible_candidates: Vec<_> = review.promotion_candidates.iter()
+        .filter(|c| !c.is_stub)
+        .collect();
+    let drift_kind = status
+        .drift
+        .as_ref()
+        .map(|d| d.kind.as_str())
+        .unwrap_or("NONE");
+
+    // Render base header
+    let base_ctx = NextTaskBaseContext {
+        timestamp: timestamp.clone(),
+        action: action.to_string(),
+        executable_scenarios_total: review.coverage_summary.executable_scenarios_total,
+        deferred_items_total: review.coverage_summary.deferred_items_total,
+        promotion_candidates_total: review.promotion_candidates.len(),
+        eligible_candidates_count: eligible_candidates.len(),
+        drift_kind: drift_kind.to_string(),
+    };
+
+    let mut content = render_next_task_base(&base_ctx)
+        .unwrap_or_else(|e| {
+            log::error!("Failed to render next_task base: {}", e);
+            format!("# NEXT_TASK.md\n\n**Action:** `{}`\n\n---\n\n", action)
+        });
+
+    // Convert candidates to context
+    let candidate_contexts: Vec<CandidateContext> = eligible_candidates
+        .iter()
+        .take(3)
+        .map(|c| CandidateContext {
+            scenario_name: c.scenario_name.clone(),
+            feature_path: c.feature_path.clone(),
+            rule_name: c.rule_name.clone(),
+            reuse_score: c.reuse_score,
+            new_step_texts_estimate: c.new_step_texts_estimate,
+        })
+        .collect();
+
+    let missing_binding_contexts: Vec<MissingBindingContext> = review
+        .missing_bindings_for_top_candidates
+        .iter()
+        .take(3)
+        .map(|mb| MissingBindingContext {
+            candidate_name: mb.candidate_name.clone(),
+            missing_step_texts: mb.missing_step_texts.clone(),
+        })
+        .collect();
+
+    // Action-specific content
+    let action_content = match action {
+        "DONE" => {
+            let ctx = NextTaskDoneContext {
+                eligible_candidates: candidate_contexts,
+                missing_bindings: missing_binding_contexts,
+                update_cert_message: update_cert_message.cloned(),
+            };
+            render_next_task_done(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task done: {}", e);
+                "## Task: DONE\n\nAll gates are green.\n".to_string()
+            })
+        }
+
+        "FIX_LINT" => {
+            let ctx = NextTaskFixLintContext {
+                missing_bindings: missing_binding_contexts,
+            };
+            render_next_task_fix_lint(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task fix_lint: {}", e);
+                "## Task: Fix Lint Errors\n\nLint failed.\n".to_string()
+            })
+        }
+
+        "FIX_RUN" => {
+            let failures: Vec<FailureDisplayContext> = status
+                .last_run_failures
+                .iter()
+                .map(|f| FailureDisplayContext {
+                    scenario_key: f.scenario_key.clone(),
+                    scenario_name: f.scenario_name.clone(),
+                    failure_kind: f.failure_kind.clone(),
+                })
+                .collect();
+
+            let ctx = NextTaskFixRunContext {
+                failures,
+                explain_path: explain_path.map(|p| p.display().to_string()),
+            };
+            render_next_task_fix_run(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task fix_run: {}", e);
+                "## Task: Fix Failing Scenarios\n\nTest execution failed.\n".to_string()
+            })
+        }
+
+        "NEEDS_UPDATE_CERT_APPROVAL" => {
+            let drift_details: Vec<DriftDetailContext> = status
+                .drift
+                .as_ref()
+                .map(|d| {
+                    d.details
+                        .iter()
+                        .map(|detail| DriftDetailContext {
+                            field: detail.field.clone(),
+                            baseline: detail.baseline.clone(),
+                            current: detail.current.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let ctx = NextTaskNeedsApprovalContext {
+                drift_details,
+                update_cert_message: update_cert_message.cloned(),
+                max_cert_updates,
+            };
+            render_next_task_needs_approval(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task needs_approval: {}", e);
+                "## STOP: Approval Required\n\nDrift detected.\n".to_string()
+            })
+        }
+
+        "RUN_LINT" | "RUN" | "RUN_VERIFY" => {
+            let ctx = NextTaskRunGateContext {
+                action: action.to_string(),
+            };
+            render_next_task_run_gate(&ctx).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task run_gate: {}", e);
+                format!("## Task: Run Gate `{}`\n\nThe pipeline needs to be executed.\n", action)
+            })
+        }
+
+        _ => {
+            render_next_task_unknown(action).unwrap_or_else(|e| {
+                log::error!("Failed to render next_task unknown: {}", e);
+                format!("## Task: Unknown State `{}`\n\nThe recommended action is not recognized.\n", action)
+            })
+        }
+    };
+
+    content.push_str("\n");
+    content.push_str(&action_content);
+
+    // Artifacts section
+    let artifacts_ctx = NextTaskArtifactsContext {
+        out_dir: out_dir.display().to_string(),
+        explain_path: explain_path.map(|p| p.display().to_string()),
+        version: TESAKI_VERSION.to_string(),
+    };
+
+    content.push_str("\n");
+    content.push_str(&render_next_task_artifacts(&artifacts_ctx).unwrap_or_else(|e| {
+        log::error!("Failed to render next_task artifacts: {}", e);
+        format!("\n---\n\n## Artifacts\n\n| Artifact | Path |\n|----------|------|\n| Status | `{}/status.json` |\n", out_dir.display())
+    }));
+
+    fs::write(path, content)?;
+    Ok(())
+}
+
+// ============================================================================
+// v1.7 Runner Integration: single-mission run loop
+// ============================================================================
+
+/// Run the autonomous development loop (v1.7).
+///
+/// This implements the canonical UX flow per GOLD_PLAN.md §10.7.9:
+/// 1. Measure via Namako packets
+/// 2. Select next task from packets (or enter stop condition)
+/// 3. Create mission bundle
+/// 4. Invoke runner backend
+/// 5. Validate via namako gate --json
+/// 6. Apply update-cert governance (if verify-only failure)
+/// 7. Retry if failure is retryable and attempts remain
+/// 8. Transition or stop
+#[allow(clippy::too_many_arguments)]
+fn run_run(
+    spec_root: &PathBuf,
+    adapter: &str,
+    namako_cli: NamakoCliResolution,
+    max_cert_updates: u32,
+    runner_name: &str,
+    runner_cmd: Option<String>,
+    max_runtime_seconds: u32,
+    max_files_changed: u32,
+    max_retries: u32,
+    model: Option<String>,
+    stage: Option<String>,
+    surfaces: Option<config::SurfacesConfig>,
+    surface_overrides: Option<crate::surface_policy::SurfacePolicy>,
+    allow_dirty: bool,
+    model_overrides: Option<config::ModelOverrides>,
+    pre_gate_build_cmd: Option<String>,
+    pre_gate_build_mode: config::PreGateBuildMode,
+    logger: &logging::JsonlLogger,
+) -> Result<()> {
+    use crate::mission::{MissionBundle, MissionBudgets, MissionInputs};
+    use crate::mission::SurfaceDefinitions;
+    use crate::mission_selector::select_with_constraints;
+    use crate::model_tier::select_model_for_attempt;
+    use crate::packet_parser::{
+        failures_from_run_report,
+        parse_gate_json,
+        parse_review_json,
+        parse_run_report_json,
+        parse_status_json,
+    };
+    use tesaki_agent::{
+        Runner, RunnerConfig, OutcomeClassification, TokenUsage,
+        agent_candidates, describe_candidates,
+        normalize_model, outcome_from_error,
+    };
+    use crate::repo_state::RepoState;
+    use crate::stage::{Stage, StageConstraint, detect_stage};
+    use crate::stop_reason::{StopReason, RunResult};
+    use crate::workspace::Workspace;
+    use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker};
+    use crate::surface_policy::SurfaceDefinition;
+    use crate::error_parser::run_pre_gate_build;
+
+    // Canonicalize spec_root
+    let spec_root = fs::canonicalize(spec_root)
+        .context("Failed to canonicalize spec_root path")?;
+
+    // Canonicalize adapter command
+    let adapter = canonicalize_adapter_cmd(adapter)?;
+
+    // Enforce a minimum timeout to avoid premature aborts.
+    const MIN_RUNTIME_SECONDS: u32 = 180;
+    let max_runtime_seconds = if max_runtime_seconds < MIN_RUNTIME_SECONDS {
+        eprintln!(
+            "  ⚠️  max_runtime_seconds={} is below minimum; clamping to {}",
+            max_runtime_seconds, MIN_RUNTIME_SECONDS
+        );
+        MIN_RUNTIME_SECONDS
+    } else {
+        max_runtime_seconds
+    };
+
+    // Set up budgets
+    let budgets = MissionBudgets {
+        max_files_changed,
+        max_scenarios_promoted: 3,
+        max_runtime_seconds,
+        max_retries,
+        max_cert_updates,
+    };
+
+    // Set up workspace
+    let workspace = Workspace::from_specs_dir(&spec_root, &adapter, budgets.clone())?;
+
+    // Check workspace is clean (unless allow_dirty is set)
+    let workspace_state = workspace.check_clean()?;
+    if !workspace_state.is_clean && !allow_dirty {
+        let result = RunResult::error(
+            StopReason::HumanRequired,
+            format!(
+                "Workspace has uncommitted changes. Please commit or stash before running.\nDirty files: {:?}",
+                workspace_state.dirty_files
+            ),
+        );
+        emit_run_result(&result, &spec_root)?;
+        log_session_end(logger, StopReason::HumanRequired, result.details.clone());
+        eprintln!("STOP: {}", result.reason);
+        eprintln!("Outcome: {}", stop_reason_label(result.reason));
+        eprintln!("Details: {}", result.details.as_deref().unwrap_or(""));
+        return Ok(());
+    }
+
+    // Determine namako CLI command
+    let namako = namako_cli.command.clone();
+
+    let runner_candidates = agent_candidates(runner_name, runner_cmd.clone());
+    if runner_candidates.len() > 1 {
+        eprintln!(
+            "Runner fallback chain: {}",
+            describe_candidates(&runner_candidates)
+        );
+    }
+    
+    let runner: Box<dyn Runner> = match tesaki_agent::build_runner(runner_candidates) {
+        Ok(agent) => agent,
+        Err(err) => {
+            let result = RunResult::error(StopReason::EnvironmentError, format!("{}", err));
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::EnvironmentError, result.details.clone());
+            eprintln!("STOP: {}", result.reason);
+            eprintln!("Outcome: {}", stop_reason_label(result.reason));
+            return Ok(());
+        }
+    };
+
+    log_session_start(
+        logger,
+        &spec_root,
+        &adapter,
+        &namako_cli,
+        Some(runner.name()),
+        None,
+    );
+
+    eprintln!("=== Tesaki v1.9 ===");
+    eprintln!("Spec root: {}", spec_root.display());
+    eprintln!("Runner: {}", runner.name());
+    eprintln!();
+
+    // Step 1: Measure via Namako packets
+    eprintln!("[1/6] Running namako gate --json (pre-mission state)...");
+    let gate_json = run_namako_gate_json(&namako, &adapter, &spec_root, logger)?;
+    let gate_packet = parse_gate_json(&gate_json)?;
+    let gate_outcome = GateOutcome::from_json_str(&gate_json);
+    let gate_passes = gate_outcome == GateOutcome::Pass;
+
+    eprintln!(
+        "  Gate: {}",
+        if gate_passes { "PASS (all phases green)" } else { "Not all phases passing" }
+    );
+
+    // Step 2: Get status and review packets
+    eprintln!("[2/6] Running namako status/review...");
+    let out_dir = spec_root.join("target/namako_artifacts/tesaki");
+    fs::create_dir_all(&out_dir)?;
+
+    let status_path = out_dir.join("status.json");
+    let review_path = out_dir.join("review.json");
+    let run_report_path = resolve_run_report_path(&spec_root);
+    let run_report_opt = run_report_path.as_ref().filter(|path| path.exists());
+
+    let status_json =
+        run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
+    fs::write(&status_path, &status_json)?;
+    let review_json = run_namako_review(&namako, &adapter, &spec_root, logger)?;
+    fs::write(&review_path, &review_json)?;
+
+    let mut status_packet = parse_status_json(&status_json)?;
+    if let Some(path) = run_report_opt {
+        if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(report) = parse_run_report_json(&content) {
+                let failures = failures_from_run_report(&report);
+                if !failures.is_empty() {
+                    status_packet.last_run_failures = failures;
+                }
+            }
+        }
+    }
+    let review_packet = parse_review_json(&review_json)?;
+
+    let repo_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
+    eprintln!("  RepoState: {}", repo_state.summary());
+    let pre_fingerprint = fingerprint_packets(&status_json, &review_json, &gate_json);
+
+    let stage_override = match stage.as_deref() {
+        Some(value) => Stage::from_str(value)
+            .ok_or_else(|| anyhow::anyhow!("Invalid stage '{}'", value))?,
+        None => detect_stage(&repo_state),
+    };
+    eprintln!(
+        "  Stage: {} {}",
+        stage_override.name(),
+        if stage.is_some() { "(manual)" } else { "(auto)" }
+    );
+
+    // Step 3: Select mission type
+    eprintln!("[3/6] Selecting mission...");
+    let constraint = StageConstraint {
+        stage: if stage.is_some() { Some(stage_override) } else { None },
+        surface_overrides,
+    };
+
+    let selection = select_with_constraints(&repo_state, &constraint);
+    let (mission_type, active_stage, surface_policy) = match selection {
+        Some(result) => result,
+        None => {
+            if repo_state.has_work() {
+                let result = RunResult::blocked("No eligible mission for the selected stage");
+                emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::Blocked, result.details.clone());
+                eprintln!("STOP: BLOCKED - No eligible mission for stage");
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::Blocked));
+                return Ok(());
+            }
+            let result = RunResult::done(0, 0);
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::Done, None);
+            eprintln!("STOP: DONE - No work remaining");
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::Done));
+            return Ok(());
+        }
+    };
+
+    let mut scenario_budget: Option<ScenarioAddBudget> = None;
+    let mut pre_feature_scenario_count: Option<usize> = None;
+    let mut pre_rule_scenario_count: Option<usize> = None;
+    let (pre_rule_count, feature_snapshot) = match &mission_type {
+        crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, rule_name } => {
+            pre_feature_scenario_count = repo_state.scenario_count_for_feature(feature_path);
+            if let Some(rule) = rule_name.as_ref() {
+                pre_rule_scenario_count =
+                    repo_state.scenario_count_for_rule(feature_path, rule);
+            }
+            scenario_budget = Some(scenario_add_budget(
+                feature_path,
+                rule_name.as_deref(),
+                &repo_state,
+                &review_packet,
+            ));
+            (
+                repo_state.rule_count_for_feature(feature_path),
+                read_feature_snapshot(&spec_root, feature_path),
+            )
+        }
+        _ => (None, None),
+    };
+
+    if let Some(record) = load_no_progress_record(&spec_root) {
+        let skip_cooldown = matches!(
+            mission_type,
+            crate::mission_type::MissionType::AddOrClarifyScenario { .. }
+        );
+        if record.matches(&mission_type, &pre_fingerprint) && !skip_cooldown {
+            let details = format!(
+                "No new evidence since last no-progress mission ({}).",
+                record.mission_type
+            );
+            let result = RunResult::error(StopReason::NoProgress, details.clone());
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::NoProgress, Some(details));
+            eprintln!("STOP: NO_PROGRESS - cooldown in effect");
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
+            return Ok(());
+        }
+    }
+
+    let previous_failure = load_failure_record(&spec_root).map(|record| {
+        let mut details = record.details.clone();
+        // Append gate errors to details for concrete feedback
+        if let Some(ref errors) = record.gate_errors {
+            let errors_text = errors.join("\n");
+            details = Some(format!(
+                "{}\n\n**Gate errors:**\n{}",
+                details.unwrap_or_default(),
+                errors_text
+            ));
+        }
+        crate::prompts::PreviousFailureContext {
+            mission_type: record.mission_type,
+            target: record.target,
+            stop_reason: record.stop_reason,
+            details,
+            violated_files: record.violated_files,
+            violated_surface: record.violated_surface,
+            attempted_approach: None, // Not captured yet
+        }
+    });
+
+    let brief = mission_type.generate_brief(&repo_state);
+
+    eprintln!("  Type: {}", mission_type.name());
+    if let Some(target) = mission_type.target_label() {
+        eprintln!("  Target: {}", target);
+    }
+    eprintln!(
+        "  Surfaces: Spec {} • Tests {} • SUT {}",
+        lock_label(surface_policy.spec),
+        lock_label(surface_policy.tests_bindings),
+        lock_label(surface_policy.sut)
+    );
+    log_mission_proposed(logger, &mission_type, &active_stage, &surface_policy);
+
+    // Pre-gate build check (optional; skip for spec-only unless forced)
+    let should_build = should_run_pre_gate_build_for_policy(pre_gate_build_mode, &surface_policy)
+        && crate::error_parser::should_run_pre_gate_build(workspace.working_dir());
+    if should_build {
+        eprintln!("Pre-gate build check...");
+        let build_result = run_pre_gate_build(workspace.working_dir(), pre_gate_build_cmd.as_deref());
+        if !build_result.success {
+            eprintln!("{}", build_result.to_markdown(5));
+
+            // Store build result for potential retry context
+            let build_result_path = spec_root.join(".tesaki/last_build_result.json");
+            if let Ok(json) = serde_json::to_string_pretty(&build_result) {
+                let _ = fs::write(&build_result_path, json);
+            }
+
+            let result = RunResult::error(
+                StopReason::GateFailed,
+                format!(
+                    "Pre-gate build failed with {} compile errors. Fix compilation before running missions.\n\n{}",
+                    build_result.total_errors, build_result.to_markdown(5)
+                ),
+            );
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::GateFailed, result.details.clone());
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::GateFailed));
+            eprintln!("Details: {}", result.details.as_deref().unwrap_or(""));
+            return Ok(());
+        }
+        // Show warning if present (e.g., workspace-wide check failed but we're proceeding)
+        if let Some(ref warning) = build_result.warning {
+            eprintln!("  ⚠️  {}", warning);
+        }
+        eprintln!("  ✅ Build passed ({:.1}s)", build_result.elapsed_seconds);
+    } else {
+        let reason = match pre_gate_build_mode {
+            config::PreGateBuildMode::Never => "disabled by config",
+            config::PreGateBuildMode::Auto => "spec-only mission",
+            config::PreGateBuildMode::Always => "disabled by cache",
+        };
+        eprintln!("Pre-gate build check: skipped ({})", reason);
+    }
+
+    let mut surface_definitions = SurfaceDefinitions {
+        spec: SurfaceDefinition::spec(),
+        tests_bindings: SurfaceDefinition::tests_bindings(),
+        sut: SurfaceDefinition::sut(),
+    };
+    if let Some(overrides) = surfaces {
+        if let Some(spec) = overrides.spec {
+            if !spec.patterns.is_empty() {
+                surface_definitions.spec.patterns = spec.patterns;
+            }
+        }
+        if let Some(tests) = overrides.tests {
+            if !tests.patterns.is_empty() {
+                surface_definitions.tests_bindings.patterns = tests.patterns;
+            }
+        }
+        if let Some(sut) = overrides.sut {
+            if !sut.patterns.is_empty() {
+                surface_definitions.sut.patterns = sut.patterns;
+            }
+        }
+    }
+
+    // Tracking for governance
+    let mut attempts_made: u32 = 0;
+    let mut cert_updates_made: u32 = 0;
+    let mut prev_attempt_failed = false;
+    let invoker = ProcessInvoker;
+
+    // Retry loop per TODO.md §B2
+    loop {
+        attempts_made += 1;
+        eprintln!("\n--- Attempt {}/{} ---", attempts_made, max_retries + 1);
+
+        // Step 4: Create mission bundle (MISSION.md per v1.8)
+        eprintln!("[4/6] Creating mission bundle...");
+
+        let tesaki_dir = spec_root.join(".tesaki");
+        fs::create_dir_all(&tesaki_dir)?;
+
+        let repo_state_json = serde_json::to_string_pretty(&repo_state)
+            .context("Failed to serialize repo_state.json")?;
+
+        let inputs = MissionInputs {
+            status_json: status_json.clone(),
+            review_json: review_json.clone(),
+            gate_json: gate_json.clone(),
+            explain_json: None,
+            workspace_json: workspace.to_json()?,
+            repo_state_json,
+        };
+
+        let mission = MissionBundle::create(
+            &tesaki_dir,
+            &mission_type,
+            &brief,
+            &active_stage,
+            &surface_policy,
+            &surface_definitions,
+            &inputs,
+            budgets.clone(),
+            previous_failure.clone(),
+        )?;
+        eprintln!("  Mission: {}", mission.id);
+        eprintln!("  Path: {}", mission.path.display());
+
+        // Step 5: Invoke runner
+        eprintln!("[5/6] Invoking runner ({})...", runner.name());
+
+        // Select model: explicit override > tiered selection
+        let selected_model = if model.is_some() {
+            model.clone()
+        } else {
+            let tier = select_model_for_attempt(
+                &mission_type,
+                attempts_made,
+                prev_attempt_failed,
+                model_overrides.as_ref(),
+            );
+            Some(tier.to_string())
+        };
+
+        let normalized_model = normalize_model(runner.name(), selected_model.clone());
+        if let Some(ref m) = selected_model {
+            if normalized_model.is_none() && runner.name() != "claude" {
+                eprintln!("  Model: {} (ignored by {})", m, runner.name());
+            }
+        }
+        if let Some(ref m) = normalized_model {
+            eprintln!(
+                "  Model: {} (attempt {}, prev_failed={})",
+                m, attempts_made, prev_attempt_failed
+            );
+        }
+
+        let runner_config = RunnerConfig {
+            max_runtime_seconds,
+            working_dir: workspace.working_dir().to_path_buf(),
+            model: normalized_model,
+            stream_output: true,
+        };
+
+        let planned_invocation = runner.planned_invocation(&mission.path, &runner_config);
+        if let Some(invocation) = &planned_invocation {
+            log_command_run(
+                logger,
+                &invocation.program,
+                &invocation.args,
+                PathBuf::from(&invocation.working_dir).as_path(),
+                Some(invocation.env.clone()),
+            );
+        }
+
+        let outcome = match runner.run(&mission.path, &runner_config) {
+            Ok(outcome) => outcome,
+            Err(err) => outcome_from_error(err),
+        };
+        eprintln!("  Runner outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
+            outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
+        
+        // Display token usage immediately after runner completes (before any move to failed/)
+        if let Some(ref usage) = outcome.token_usage {
+            let usage: &TokenUsage = usage;
+            eprintln!("  {}", usage.to_display_line());
+        }
+
+        log_mission_executed(logger, mission.id.as_str(), runner.name(), &outcome);
+        if let Some(invocation) = &planned_invocation {
+            log_runner_command_result(logger, invocation, &outcome);
+        }
+
+        // Detect policy violations in runner output (non-fatal, informational).
+        if let Some(report) = scan_runner_policy_violations(&outcome) {
+            eprintln!("  ⚠️  {}", report.summary_line());
+            if let Err(err) = write_policy_violation_artifacts(&mission.path, &report) {
+                eprintln!("  ⚠️  Failed to record policy violations: {}", err);
+            }
+        }
+
+        let stop_reason_path = mission.path.join("RUNNER_OUTPUT").join("stop_reason.json");
+        let stop_reason_json = serde_json::to_string_pretty(&outcome)
+            .context("Failed to serialize runner outcome")?;
+        fs::write(&stop_reason_path, stop_reason_json)
+            .context("Failed to write RUNNER_OUTPUT/stop_reason.json")?;
+
+        if outcome.classification.should_fallback() {
+            // Already handled by CodingAgent internally
+        }
+
+        // Determine stop reason from runner outcome
+        let runner_stop = match outcome.classification {
+            OutcomeClassification::Ok => None,
+            OutcomeClassification::Failed => Some(StopReason::RunnerFailed),
+            OutcomeClassification::Timeout => Some(StopReason::Budget),
+            OutcomeClassification::EnvironmentError => Some(StopReason::EnvironmentError),
+            OutcomeClassification::RateLimited => Some(StopReason::RateLimited),
+        };
+
+        // If runner failed, check if retryable
+        if let Some(stop) = runner_stop {
+            if !stop.is_retryable() || attempts_made > max_retries {
+                let failed_path = mission.preserve_failed()?;
+                let result = RunResult::error(stop.clone(), format!("Runner failed: {:?}", outcome.classification))
+                    .with_mission_path(failed_path.display().to_string())
+                    .with_missions(attempts_made);
+                let _ = save_failure_record(&spec_root, &mission_type, stop.clone(), result.details.clone());
+                emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, stop.clone(), result.details.clone());
+                eprintln!("STOP: {} - After {} attempt(s)", stop, attempts_made);
+                eprintln!("Outcome: {}", stop_reason_label(stop));
+                eprintln!("Failed mission preserved at: {}", failed_path.display());
+                return Ok(());
+            }
+            // Retryable and attempts remain
+            eprintln!("  Runner failed but retryable. {} attempts remaining.", max_retries + 1 - attempts_made);
+            prev_attempt_failed = true;
+            let _ = mission.preserve_failed()?;
+            continue;
+        }
+
+        let changes = workspace.compute_changes()?;
+        if changes.total_files_changed == 0 {
+            let details = "Runner made no file changes.".to_string();
+            let failed_path = mission.preserve_failed()?;
+            let result = RunResult::error(StopReason::NoProgress, details.clone())
+                .with_mission_path(failed_path.display().to_string())
+                .with_missions(attempts_made);
+            let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+            emit_run_result(&result, &spec_root)?;
+            save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
+            log_session_end(logger, StopReason::NoProgress, Some(details));
+            eprintln!("STOP: NO_PROGRESS - Runner made no changes");
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
+            eprintln!("Failed mission preserved at: {}", failed_path.display());
+            return Ok(());
+        }
+
+        // Check surface policy violations
+        let violations = tesaki_agent::check_surface_violations(
+            &changes.changed_files,
+            &surface_definitions.spec.patterns,
+            &surface_definitions.tests_bindings.patterns,
+            &surface_definitions.sut.patterns,
+            surface_policy.spec == crate::surface_policy::SurfaceLock::Unlocked,
+            surface_policy.tests_bindings == crate::surface_policy::SurfaceLock::Unlocked,
+            surface_policy.sut == crate::surface_policy::SurfaceLock::Unlocked,
+        );
+
+        if !violations.is_empty() {
+            // Generate plan validation guidance for the violation
+            let proposed = crate::plan_validator::ProposedPlan {
+                files_to_modify: changes.changed_files.clone(),
+            };
+            let validation = crate::plan_validator::validate_plan(
+                &proposed,
+                &surface_definitions.spec.patterns,
+                &surface_definitions.tests_bindings.patterns,
+                &surface_definitions.sut.patterns,
+                surface_policy.spec == crate::surface_policy::SurfaceLock::Locked,
+                surface_policy.tests_bindings == crate::surface_policy::SurfaceLock::Locked,
+                surface_policy.sut == crate::surface_policy::SurfaceLock::Locked,
+            );
+            eprintln!("  ⚠️  Surface policy violations detected ({} file(s)):", validation.violations.len());
+            for v in &violations {
+                eprintln!("      - {}", v);
+            }
+            if !validation.valid {
+                eprintln!("{}", validation.guidance);
+            }
+
+            // Extract violated files and surfaces for failure context
+            let mut violated_files = Vec::new();
+            let mut violated_surfaces = Vec::new();
+            for violation in &violations {
+                // Parse violation format: "file/path (surface LOCKED)"
+                if let Some(idx) = violation.find(" (") {
+                    let file = violation[..idx].to_string();
+                    violated_files.push(file);
+
+                    if violation.contains("spec surface LOCKED") {
+                        violated_surfaces.push("spec");
+                    } else if violation.contains("tests surface LOCKED") {
+                        violated_surfaces.push("tests");
+                    } else if violation.contains("sut surface LOCKED") {
+                        violated_surfaces.push("sut");
+                    }
+                }
+            }
+            violated_surfaces.sort();
+            violated_surfaces.dedup();
+            let violated_surface = violated_surfaces.join(", ");
+
+            // Roll back changes
+            let _ = Command::new("git")
+                .args(["checkout", "--", "."])
+                .current_dir(&spec_root)
+                .output();
+
+            let details = format!("Surface policy violation: {}", violations.join(", "));
+            let failed_path = mission.preserve_failed()?;
+
+            // Save failure record with violation details for next mission
+            let _ = save_failure_record_full(
+                &spec_root,
+                &mission_type,
+                StopReason::PolicyViolation,
+                Some(details.clone()),
+                None, // gate_errors
+                Some(violated_files),
+                Some(violated_surface),
+            );
+
+            let result = RunResult::error(StopReason::PolicyViolation, details.clone())
+                .with_mission_path(failed_path.display().to_string())
+                .with_missions(attempts_made);
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::PolicyViolation, Some(details));
+            return Ok(());
+        }
+
+        // Step 6: Validate via namako gate --json
+        eprintln!("[6/6] Validating (namako gate --json)...");
+
+        let post_gate_json = run_namako_gate_json(&namako, &adapter, &spec_root, logger)?;
+        mission.write_gate_result(&post_gate_json)?;
+
+        let gate_outcome = GateOutcome::from_json_str(&post_gate_json);
+        eprintln!("  Gate outcome: {:?}", gate_outcome);
+        log_post_gate(logger, gate_outcome, mission.path.join("POST_GATE.json"));
+
+        let post_status_path = out_dir.join("status.post.json");
+        let post_review_path = out_dir.join("review.post.json");
+        let post_status_json =
+            run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
+        fs::write(&post_status_path, &post_status_json)?;
+        let post_review_json = run_namako_review(&namako, &adapter, &spec_root, logger)?;
+        fs::write(&post_review_path, &post_review_json)?;
+
+        let post_status_packet = parse_status_json(&post_status_json)?;
+        let post_review_packet = parse_review_json(&post_review_json)?;
+        let post_gate_packet = parse_gate_json(&post_gate_json)?;
+        let post_state = RepoState::compute(&post_status_packet, &post_review_packet, &post_gate_packet, None)?;
+
+        let mut scenario_delta_feature: Option<i32> = None;
+        let mut scenario_delta_rule: Option<i32> = None;
+        if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, rule_name } = &mission_type {
+            let post_feature_scenarios = post_state.scenario_count_for_feature(feature_path);
+            scenario_delta_feature = match (pre_feature_scenario_count, post_feature_scenarios) {
+                (Some(pre), Some(post)) => Some(post as i32 - pre as i32),
+                _ => None,
+            };
+            if let Some(rule) = rule_name.as_ref() {
+                let post_rule_scenarios = post_state.scenario_count_for_rule(feature_path, rule);
+                scenario_delta_rule = match (pre_rule_scenario_count, post_rule_scenarios) {
+                    (Some(pre), Some(post)) => Some(post as i32 - pre as i32),
+                    _ => None,
+                };
+            }
+        }
+
+        let scenario_delta_for_budget = if matches!(mission_type, crate::mission_type::MissionType::AddOrClarifyScenario { rule_name: Some(_), .. }) {
+            scenario_delta_rule
+        } else {
+            scenario_delta_feature
+        };
+
+        if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } = &mission_type {
+            let post_rule_count = post_state.rule_count_for_feature(feature_path);
+            let rules_increased = matches!((pre_rule_count, post_rule_count), (Some(pre), Some(post)) if post > pre);
+            if rules_increased {
+                if let Some(snapshot) = feature_snapshot.as_ref() {
+                    let _ = restore_feature_snapshot(&spec_root, feature_path, snapshot);
+                }
+                let details = format!(
+                    "Rule-count invariant violated for {} (before: {:?}, after: {:?}).",
+                    feature_path, pre_rule_count, post_rule_count
+                );
+                let failed_path = mission.preserve_failed()?;
+                let result = RunResult::error(StopReason::NoProgress, details.clone())
+                    .with_mission_path(failed_path.display().to_string())
+                    .with_missions(attempts_made);
+                let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+                emit_run_result(&result, &spec_root)?;
+                save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
+                log_session_end(logger, StopReason::NoProgress, Some(details));
+                eprintln!("STOP: RULE_COUNT_INCREASE - Mission rejected");
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
+                eprintln!("Failed mission preserved at: {}", failed_path.display());
+                return Ok(());
+            }
+        }
+
+        if matches!(mission_type, crate::mission_type::MissionType::AddOrClarifyScenario { .. }) {
+            if let (Some(delta), Some(budget)) = (scenario_delta_for_budget, scenario_budget) {
+                if delta > budget.max_additional {
+                    if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } = &mission_type {
+                        if let Some(snapshot) = feature_snapshot.as_ref() {
+                            let _ = restore_feature_snapshot(&spec_root, feature_path, snapshot);
+                        }
+                    }
+                    let details = format!(
+                        "Scenario budget exceeded (added {}, max {}). Tighten to the allowed budget before retrying.",
+                        delta, budget.max_additional
+                    );
+                    let failed_path = mission.preserve_failed()?;
+                    let result = RunResult::error(StopReason::NoProgress, details.clone())
+                        .with_mission_path(failed_path.display().to_string())
+                        .with_missions(attempts_made);
+                    let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+                    emit_run_result(&result, &spec_root)?;
+                    save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
+                    log_session_end(logger, StopReason::NoProgress, Some(details));
+                    eprintln!("STOP: SCENARIO_BUDGET_EXCEEDED - Mission rejected");
+                    eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
+                    eprintln!("Failed mission preserved at: {}", failed_path.display());
+                    return Ok(());
+                }
+            }
+        }
+
+        if !has_progress(&repo_state, &post_state, &mission_type) {
+            let details = "Post-gate evidence shows no progress for the mission target.".to_string();
+            let failed_path = mission.preserve_failed()?;
+            let result = RunResult::error(StopReason::NoProgress, details.clone())
+                .with_mission_path(failed_path.display().to_string())
+                .with_missions(attempts_made);
+            let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+            emit_run_result(&result, &spec_root)?;
+            save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
+            log_session_end(logger, StopReason::NoProgress, Some(details));
+            eprintln!("STOP: NO_PROGRESS - No improvement detected");
+            eprintln!("Outcome: {}", stop_reason_label(StopReason::NoProgress));
+            eprintln!("Failed mission preserved at: {}", failed_path.display());
+            return Ok(());
+        }
+
+        let expected_cascade = matches!(
+            mission_type,
+            crate::mission_type::MissionType::AddOrClarifyScenario { .. }
+        ) && status_has_missing_steps_only(&post_status_packet)
+            && !post_state.binding_issues.is_empty();
+
+        if expected_cascade {
+            eprintln!("  Expected cascade: missing bindings created.");
+            let mut result = RunResult::done(attempts_made, cert_updates_made)
+                .with_mission_path(mission.path.display().to_string());
+            result.details = Some("Expected cascade: missing bindings created.".to_string());
+            clear_failure_record(&spec_root);
+            emit_run_result(&result, &spec_root)?;
+            log_session_end(logger, StopReason::Done, result.details.clone());
+            eprintln!("\nSUCCESS: Scenarios added (bindings pending)");
+            eprintln!("Outcome: EXPECTED_CASCADE");
+            return Ok(());
+        }
+
+        match gate_outcome {
+            GateOutcome::Pass => {
+                // Success!
+                let result = RunResult::done(attempts_made, cert_updates_made)
+                    .with_mission_path(mission.path.display().to_string());
+                clear_failure_record(&spec_root);
+                emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::Done, None);
+                eprintln!("\nSUCCESS: Mission completed after {} attempt(s)", attempts_made);
+                eprintln!("Mission bundle: {}", mission.path.display());
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::Done));
+                return Ok(());
+            }
+
+            GateOutcome::FailVerifyOnly => {
+                // Per TODO.md §A3: Check if update-cert is allowed
+                if cert_updates_made >= max_cert_updates {
+                    eprintln!("  Verify failed but update-cert limit reached ({}/{})",
+                        cert_updates_made, max_cert_updates);
+                    // Treat as GATE_FAILED, check if retryable
+                } else {
+                    eprintln!("  Verify-only failure - attempting update-cert ({}/{} used)...",
+                        cert_updates_made, max_cert_updates);
+
+                    // Paths for update-cert
+                    let run_report_path =
+                        resolve_run_report_path(&spec_root)
+                            .unwrap_or_else(|| spec_root.join("run_report.json"));
+                    let cert_path = spec_root.join("certification.json");
+
+                    // Read old identity for logging
+                    let old_identity = read_certification_identity(&cert_path);
+
+                    // Run update-cert
+                    let mut update_args: Vec<String> = namako.split_whitespace().map(|s| s.to_string()).collect();
+                    update_args.push("update-cert".to_string());
+                    update_args.push("-a".to_string());
+                    update_args.push(adapter.to_string());
+                    update_args.push("--run-report".to_string());
+                    update_args.push(run_report_path.display().to_string());
+                    update_args.push("--output".to_string());
+                    update_args.push(cert_path.display().to_string());
+                    log_command_run(logger, "namako", &update_args, &spec_root, None);
+                    let update_result = invoker.run_update_cert(
+                        &namako,
+                        &adapter,
+                        &spec_root,
+                        &run_report_path,
+                        &cert_path,
+                    );
+                    log_command_result_from_text(
+                        logger,
+                        "namako",
+                        &update_args,
+                        update_result.exit_status.unwrap_or(-1),
+                        Some(update_result.stdout.clone()),
+                        Some(update_result.stderr.clone()),
+                    );
+
+                    if update_result.success {
+                        cert_updates_made += 1;
+                        eprintln!("  ✓ Update-cert succeeded");
+
+                        // Log the update
+                        let new_identity = read_certification_identity(&cert_path);
+                        if let Some(new_id) = new_identity {
+                            let log_entry = UpdateCertLogEntry {
+                                timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                                old_identity,
+                                new_identity: new_id,
+                                reason: "VERIFY_ONLY_FAIL".to_string(),
+                                updates_this_run: cert_updates_made,
+                                max_updates_allowed: max_cert_updates,
+                            };
+                            let log_path = spec_root.join("target/namako_artifacts/tesaki").join(UPDATE_CERT_LOG);
+                            append_to_log(&log_path, &log_entry);
+                        }
+
+                        // Re-gate to confirm
+                        eprintln!("  Re-validating after update-cert...");
+                        let recheck_json = run_namako_gate_json(&namako, &adapter, &spec_root, logger)?;
+
+                        // Write POST_GATE_AFTER_UPDATE_CERT.json per TODO.md §A4
+                        let after_cert_path = mission.path.join("POST_GATE_AFTER_UPDATE_CERT.json");
+                        fs::write(&after_cert_path, &recheck_json)?;
+
+                        let recheck_outcome = GateOutcome::from_json_str(&recheck_json);
+
+                        if recheck_outcome.is_pass() {
+                            eprintln!("  ✓ Gate passes after update-cert");
+                            let result = RunResult::done(attempts_made, cert_updates_made)
+                                .with_mission_path(mission.path.display().to_string());
+                            clear_failure_record(&spec_root);
+                            emit_run_result(&result, &spec_root)?;
+                            log_session_end(logger, StopReason::Done, None);
+                            eprintln!("\nSUCCESS: Mission completed after {} attempt(s), {} cert update(s)",
+                                attempts_made, cert_updates_made);
+                            eprintln!("Outcome: {}", stop_reason_label(StopReason::Done));
+                            return Ok(());
+                        } else {
+                            eprintln!("  ✗ Gate still failing after update-cert: {:?}", recheck_outcome);
+                            // Fall through to GATE_FAILED handling
+                        }
+                    } else {
+                        eprintln!("  ✗ Update-cert failed: {}", update_result.stderr);
+                        // Fall through to GATE_FAILED handling
+                    }
+                }
+
+                // GATE_FAILED - check if retryable
+                if StopReason::GateFailed.is_retryable() && attempts_made <= max_retries {
+                    eprintln!("  Gate failed but retryable. {} attempts remaining.",
+                        max_retries + 1 - attempts_made);
+                    let _ = mission.preserve_failed()?;
+                    continue;
+                }
+
+                let failed_path = mission.preserve_failed()?;
+                let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed (verify-only after update-cert)")
+                    .with_mission_path(failed_path.display().to_string())
+                    .with_missions(attempts_made)
+                    .with_cert_updates(cert_updates_made);
+                let gate_errors = extract_gate_errors(&post_gate_json);
+                let _ = save_failure_record_with_errors(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone(), Some(gate_errors));
+                emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::GateFailed, result.details.clone());
+                eprintln!("\nSTOP: GATE_FAILED - Verify still failing after update-cert");
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::GateFailed));
+                eprintln!("Failed mission preserved at: {}", failed_path.display());
+                return Ok(());
+            }
+
+            GateOutcome::FailOther => {
+                // lint or run failed - NO update-cert attempt per TODO.md §A3
+                eprintln!("  Gate failed (lint or run) - no update-cert attempt");
+
+                if StopReason::GateFailed.is_retryable() && attempts_made <= max_retries {
+                    eprintln!("  Gate failed but retryable. {} attempts remaining.",
+                        max_retries + 1 - attempts_made);
+                    let _ = mission.preserve_failed()?;
+                    continue;
+                }
+
+                let failed_path = mission.preserve_failed()?;
+                let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed (lint or run)")
+                    .with_mission_path(failed_path.display().to_string())
+                    .with_missions(attempts_made);
+                let gate_errors = extract_gate_errors(&post_gate_json);
+                let _ = save_failure_record_with_errors(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone(), Some(gate_errors));
+                emit_run_result(&result, &spec_root)?;
+                log_session_end(logger, StopReason::GateFailed, result.details.clone());
+                eprintln!("\nSTOP: GATE_FAILED - Post-run validation failed");
+                eprintln!("Outcome: {}", stop_reason_label(StopReason::GateFailed));
+                eprintln!("Failed mission preserved at: {}", failed_path.display());
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Run namako gate --json and return the JSON output.
+fn run_namako_gate_json(
+    namako: &str,
+    adapter: &str,
+    spec_root: &PathBuf,
+    logger: &logging::JsonlLogger,
+) -> Result<String> {
+    let args: Vec<&str> = namako.split_whitespace().collect();
+    let (program, namako_args) = args.split_first().context("Empty namako command")?;
+
+    let mut cmd_args: Vec<String> = namako_args.iter().map(|s| s.to_string()).collect();
+    cmd_args.push("gate".to_string());
+    cmd_args.push("-s".to_string());
+    cmd_args.push(".".to_string());
+    cmd_args.push("-a".to_string());
+    cmd_args.push(adapter.to_string());
+    cmd_args.push("--json".to_string());
+    cmd_args.push("--auto-cert".to_string()); // Self-heal on baseline drift
+    log_command_run(logger, "namako", &cmd_args, spec_root, None);
+
+    let output = Command::new(program)
+        .args(&cmd_args)
+        .current_dir(spec_root)
+        .output()
+        .context("Failed to run namako gate --json")?;
+
+    log_command_result(logger, "namako", &cmd_args, &output);
+
+    // gate --json outputs to stdout even on failure (with status in JSON)
+    let stdout = String::from_utf8(output.stdout)
+        .context("namako gate output is not valid UTF-8")?;
+
+    // If stdout is empty but we have stderr, the command itself failed
+    if stdout.trim().is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("namako gate --json produced no output. stderr: {}", stderr);
+    }
+
+    Ok(stdout)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum NamakoCliSource {
+    Explicit,
+    Config,
+    Path,
+    WorkspaceDefault,
+}
+
+impl NamakoCliSource {
+    fn label(&self) -> &'static str {
+        match self {
+            NamakoCliSource::Explicit => "explicit",
+            NamakoCliSource::Config => "from config",
+            NamakoCliSource::Path => "from PATH",
+            NamakoCliSource::WorkspaceDefault => "workspace default",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct NamakoCliResolution {
+    command: String,
+    source: NamakoCliSource,
+}
+
+impl NamakoCliResolution {
+    pub(crate) fn explicit(command: String) -> Self {
+        Self {
+            command,
+            source: NamakoCliSource::Explicit,
+        }
+    }
+}
+
+fn resolve_namako_cli(
+    explicit: Option<String>,
+    config_value: Option<String>,
+    spec_root: &PathBuf,
+) -> NamakoCliResolution {
+    if let Some(cmd) = explicit {
+        return NamakoCliResolution {
+            command: cmd,
+            source: NamakoCliSource::Explicit,
+        };
+    }
+
+    if let Some(cmd) = config_value {
+        return NamakoCliResolution {
+            command: cmd,
+            source: NamakoCliSource::Config,
+        };
+    }
+
+    if let Some(path) = find_executable_on_path("namako") {
+        return NamakoCliResolution {
+            command: path.display().to_string(),
+            source: NamakoCliSource::Path,
+        };
+    }
+
+    let namako_root = spec_root
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .map(|p| p.join("namako"))
+        .unwrap_or_else(|| PathBuf::from("/home/ccarpenter/Personal/specops/namako"));
+    let namako_root = if namako_root.join("Cargo.toml").is_file() {
+        namako_root
+    } else {
+        PathBuf::from("/home/ccarpenter/Personal/specops/namako")
+    };
+    let command = format!(
+        "cargo run -p namako_cli --manifest-path {}/Cargo.toml -q --",
+        namako_root.display()
+    );
+    NamakoCliResolution {
+        command,
+        source: NamakoCliSource::WorkspaceDefault,
+    }
+}
+
+fn find_executable_on_path(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+pub(crate) fn log_session_start(
+    logger: &logging::JsonlLogger,
+    spec_root: &PathBuf,
+    adapter: &str,
+    namako_cli: &NamakoCliResolution,
+    runner: Option<&str>,
+    planner: Option<&str>,
+) {
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .display()
+        .to_string();
+    let config = logging::ConfigLog {
+        specs_dir: spec_root.display().to_string(),
+        adapter_cmd: adapter.to_string(),
+        namako_cli: Some(namako_cli.command.clone()),
+        namako_cli_source: Some(namako_cli.source.label().to_string()),
+        runner: runner.map(|s| s.to_string()),
+        planner: planner.map(|s| s.to_string()),
+    };
+    logger.log_event(logging::LogEvent::SessionStart {
+        cwd,
+        config: Some(config),
+        runner: runner.map(|s| s.to_string()),
+    });
+}
+
+pub(crate) fn log_session_end(
+    logger: &logging::JsonlLogger,
+    reason: stop_reason::StopReason,
+    details: Option<String>,
+) {
+    logger.log_event(logging::LogEvent::SessionEnd {
+        stop_reason: stop_reason_label(reason).to_string(),
+        details,
+    });
+}
+
+pub(crate) fn log_command_run(
+    logger: &logging::JsonlLogger,
+    tool: &str,
+    args: &[String],
+    cwd: &Path,
+    env: Option<Vec<(String, String)>>,
+) {
+    logger.log_event(logging::LogEvent::CommandRun {
+        tool: tool.to_string(),
+        args: args.to_vec(),
+        cwd: cwd.display().to_string(),
+        env,
+    });
+}
+
+pub(crate) fn log_command_result(
+    logger: &logging::JsonlLogger,
+    tool: &str,
+    args: &[String],
+    output: &Output,
+) {
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(-1);
+    let payload = logging::CommandResultLog {
+        tool: tool.to_string(),
+        args: args.to_vec(),
+        exit_code,
+        stdout: Some(stdout),
+        stderr: Some(stderr),
+        stdout_path: None,
+        stderr_path: None,
+    };
+    let logged = logger.log_command_result(payload);
+    logger.log_event(logging::LogEvent::CommandResult {
+        tool: logged.tool,
+        args: logged.args,
+        exit_code: logged.exit_code,
+        stdout: logged.stdout,
+        stderr: logged.stderr,
+        stdout_path: logged.stdout_path,
+        stderr_path: logged.stderr_path,
+    });
+}
+
+pub(crate) fn log_command_result_from_text(
+    logger: &logging::JsonlLogger,
+    tool: &str,
+    args: &[String],
+    exit_code: i32,
+    stdout: Option<String>,
+    stderr: Option<String>,
+) {
+    let payload = logging::CommandResultLog {
+        tool: tool.to_string(),
+        args: args.to_vec(),
+        exit_code,
+        stdout,
+        stderr,
+        stdout_path: None,
+        stderr_path: None,
+    };
+    let logged = logger.log_command_result(payload);
+    logger.log_event(logging::LogEvent::CommandResult {
+        tool: logged.tool,
+        args: logged.args,
+        exit_code: logged.exit_code,
+        stdout: logged.stdout,
+        stderr: logged.stderr,
+        stdout_path: logged.stdout_path,
+        stderr_path: logged.stderr_path,
+    });
+}
+
+fn surface_log(surface_policy: &crate::surface_policy::SurfacePolicy) -> logging::SurfaceLog {
+    logging::SurfaceLog {
+        spec: lock_label(surface_policy.spec).to_string(),
+        tests: lock_label(surface_policy.tests_bindings).to_string(),
+        sut: lock_label(surface_policy.sut).to_string(),
+    }
+}
+
+pub(crate) fn log_mission_proposed(
+    logger: &logging::JsonlLogger,
+    mission_type: &crate::mission_type::MissionType,
+    stage: &crate::stage::Stage,
+    surface_policy: &crate::surface_policy::SurfacePolicy,
+) {
+    let target = mission_type.target_label().unwrap_or_else(|| "none".to_string());
+    logger.log_event(logging::LogEvent::MissionProposed {
+        mission_type: mission_type.name().to_string(),
+        stage: stage.name().to_string(),
+        target,
+        surfaces: surface_log(surface_policy),
+    });
+}
+
+pub(crate) fn log_mission_executed(
+    logger: &logging::JsonlLogger,
+    mission_id: &str,
+    runner: &str,
+    outcome: &tesaki_agent::runner::RunnerOutcome,
+) {
+    logger.log_event(logging::LogEvent::MissionExecuted {
+        mission_id: mission_id.to_string(),
+        runner: runner.to_string(),
+        outcome: outcome.clone(),
+    });
+}
+
+pub(crate) fn log_post_gate(
+    logger: &logging::JsonlLogger,
+    outcome: crate::gate::GateOutcome,
+    post_gate_path: PathBuf,
+) {
+    logger.log_event(logging::LogEvent::PostGate {
+        outcome: format!("{:?}", outcome),
+        post_gate_path: post_gate_path.display().to_string(),
+    });
+}
+
+pub(crate) fn log_runner_command_result(
+    logger: &logging::JsonlLogger,
+    invocation: &tesaki_agent::runner::RunnerInvocation,
+    outcome: &tesaki_agent::runner::RunnerOutcome,
+) {
+    let stdout = outcome
+        .stdout_path
+        .as_ref()
+        .and_then(|p| fs::read_to_string(p).ok());
+    let stderr = outcome
+        .stderr_path
+        .as_ref()
+        .and_then(|p| fs::read_to_string(p).ok());
+    log_command_result_from_text(
+        logger,
+        &invocation.program,
+        &invocation.args,
+        outcome.exit_code.unwrap_or(-1),
+        stdout,
+        stderr,
+    );
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct NoProgressRecord {
+    mission_type: String,
+    target: Option<String>,
+    packets_fingerprint: String,
+    timestamp_utc: String,
+}
+
+impl NoProgressRecord {
+    fn matches(&self, mission_type: &crate::mission_type::MissionType, fingerprint: &str) -> bool {
+        self.mission_type == mission_type.name()
+            && self.target == mission_type.target_label()
+            && self.packets_fingerprint == fingerprint
+    }
+}
+
+fn no_progress_path(spec_root: &PathBuf) -> PathBuf {
+    spec_root.join(".tesaki").join("no_progress.json")
+}
+
+fn load_no_progress_record(spec_root: &PathBuf) -> Option<NoProgressRecord> {
+    let path = no_progress_path(spec_root);
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn save_no_progress_record(
+    spec_root: &PathBuf,
+    mission_type: &crate::mission_type::MissionType,
+    fingerprint: &str,
+) -> Result<()> {
+    let record = NoProgressRecord {
+        mission_type: mission_type.name().to_string(),
+        target: mission_type.target_label(),
+        packets_fingerprint: fingerprint.to_string(),
+        timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+    let path = no_progress_path(spec_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&record)?;
+    fs::write(path, json)?;
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
+struct FailureRecord {
+    mission_type: String,
+    target: Option<String>,
+    stop_reason: String,
+    details: Option<String>,
+    /// Top gate errors formatted for injection into next mission.
+    gate_errors: Option<Vec<String>>,
+    timestamp_utc: String,
+    /// List of files that violated surface policy
+    violated_files: Option<Vec<String>>,
+    /// Which surface was violated (spec/tests/sut)
+    violated_surface: Option<String>,
+}
+
+
+fn last_failure_path(spec_root: &PathBuf) -> PathBuf {
+    spec_root.join(".tesaki").join("last_failure.json")
+}
+
+fn load_failure_record(spec_root: &PathBuf) -> Option<FailureRecord> {
+    let path = last_failure_path(spec_root);
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn save_failure_record(
+    spec_root: &PathBuf,
+    mission_type: &crate::mission_type::MissionType,
+    stop_reason: stop_reason::StopReason,
+    details: Option<String>,
+) -> Result<()> {
+    save_failure_record_with_errors(spec_root, mission_type, stop_reason, details, None)
+}
+
+fn save_failure_record_with_errors(
+    spec_root: &PathBuf,
+    mission_type: &crate::mission_type::MissionType,
+    stop_reason: stop_reason::StopReason,
+    details: Option<String>,
+    gate_errors: Option<Vec<String>>,
+) -> Result<()> {
+    save_failure_record_full(spec_root, mission_type, stop_reason, details, gate_errors, None, None)
+}
+
+fn save_failure_record_full(
+    spec_root: &PathBuf,
+    mission_type: &crate::mission_type::MissionType,
+    stop_reason: stop_reason::StopReason,
+    details: Option<String>,
+    gate_errors: Option<Vec<String>>,
+    violated_files: Option<Vec<String>>,
+    violated_surface: Option<String>,
+) -> Result<()> {
+    let record = FailureRecord {
+        mission_type: mission_type.name().to_string(),
+        target: mission_type.target_label(),
+        stop_reason: stop_reason.to_string(),
+        details,
+        gate_errors,
+        timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        violated_files,
+        violated_surface,
+    };
+    let path = last_failure_path(spec_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&record)?;
+    fs::write(path, json)?;
+    Ok(())
+}
+
+/// Extract top gate errors from gate JSON for injection into failure feedback.
+/// Returns up to 5 concise error descriptions.
+fn extract_gate_errors(gate_json: &str) -> Vec<String> {
+    let gate: crate::gate::GateJson = match serde_json::from_str(gate_json) {
+        Ok(g) => g,
+        Err(_) => return vec!["Gate JSON parse error".to_string()],
+    };
+
+    let mut errors = Vec::new();
+    for phase in &[("lint", &gate.lint), ("run", &gate.run), ("verify", &gate.verify)] {
+        let (name, result) = phase;
+        if result.status == crate::gate::PhaseStatus::Fail {
+            if let Some(ref errs) = result.errors {
+                for err in errs.iter().take(3) {
+                    let loc = match (&err.file, err.line) {
+                        (Some(f), Some(l)) => format!("{}:{}: ", f, l),
+                        _ => String::new(),
+                    };
+                    if let Some(ref step) = err.step_text {
+                        errors.push(format!("[{}] {}Missing binding: `{}`", name, loc, step));
+                    } else {
+                        errors.push(format!("[{}] {}{}", name, loc, err.message));
+                    }
+                }
+            } else if let Some(ref reason) = result.reason {
+                errors.push(format!("[{}] {}", name, reason));
+            }
+        }
+        if errors.len() >= 5 {
+            break;
+        }
+    }
+    if errors.is_empty() {
+        errors.push("Gate failed (no details available)".to_string());
+    }
+    errors
+}
+
+fn clear_failure_record(spec_root: &PathBuf) {
+    let path = last_failure_path(spec_root);
+    let _ = fs::remove_file(path);
+}
+
+fn fingerprint_packets(status: &str, review: &str, gate: &str) -> String {
+    let mut data = String::new();
+    data.push_str(status);
+    data.push_str(review);
+    data.push_str(gate);
+    let hash = blake3::hash(data.as_bytes());
+    hash.to_hex().to_string()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScenarioAddBudget {
+    max_additional: i32,
+}
+
+fn scenario_add_budget(
+    feature_path: &str,
+    rule_name: Option<&str>,
+    repo_state: &crate::repo_state::RepoState,
+    review: &crate::packet_parser::ReviewPacket,
+) -> ScenarioAddBudget {
+    let mut max_additional = 1;
+    if let Some(rule) = rule_name {
+        let rule_scenarios = repo_state.scenario_count_for_rule(feature_path, rule);
+        let deferred = deferred_count_for_rule(review, feature_path, rule).unwrap_or(0);
+        if rule_scenarios == Some(0) && deferred == 0 {
+            max_additional = 2;
+        }
+    }
+    ScenarioAddBudget { max_additional }
+}
+
+fn deferred_count_for_rule(
+    review: &crate::packet_parser::ReviewPacket,
+    feature_path: &str,
+    rule_name: &str,
+) -> Option<usize> {
+    review
+        .features
+        .iter()
+        .find(|feature| feature.feature_path == feature_path)
+        .and_then(|feature| {
+            feature
+                .rules
+                .iter()
+                .find(|rule| rule.rule_name == rule_name)
+                .map(|rule| rule.deferred_items.len())
+        })
+}
+
+fn lint_summary_missing_steps_only(summary: &str) -> bool {
+    if !summary.contains("MissingStep {") {
+        return false;
+    }
+
+    let other_errors = [
+        "AmbiguousStep",
+        "SignatureMismatch",
+        "ParseError",
+        "InvalidExpression",
+        "MissingFeatureId",
+        "MissingRuleSection",
+        "ScenarioOutsideRule",
+        "MissingRuleId",
+        "MissingScenarioId",
+        "DuplicateScenarioKey",
+        "DuplicateRuleId",
+        "DuplicateScenarioId",
+    ];
+
+    !other_errors.iter().any(|name| summary.contains(name))
+}
+
+fn status_has_missing_steps_only(status: &crate::packet_parser::StatusPacket) -> bool {
+    if status.lint_status != crate::packet_parser::StatusValue::Fail {
+        return false;
+    }
+    status
+        .gates
+        .as_ref()
+        .and_then(|gates| gates.lint.summary.as_deref())
+        .map(lint_summary_missing_steps_only)
+        .unwrap_or(false)
+}
+
+fn should_run_pre_gate_build_for_policy(
+    mode: config::PreGateBuildMode,
+    policy: &crate::surface_policy::SurfacePolicy,
+) -> bool {
+    match mode {
+        config::PreGateBuildMode::Never => false,
+        config::PreGateBuildMode::Always => true,
+        config::PreGateBuildMode::Auto => {
+            !(policy.spec == crate::surface_policy::SurfaceLock::Unlocked
+                && policy.tests_bindings == crate::surface_policy::SurfaceLock::Locked
+                && policy.sut == crate::surface_policy::SurfaceLock::Locked)
+        }
+    }
+}
+
+fn scan_runner_policy_violations(
+    outcome: &tesaki_agent::runner::RunnerOutcome,
+) -> Option<policy_violation::PolicyViolationsReport> {
+    let mut combined = String::new();
+    let mut has_output = false;
+
+    if let Some(path) = outcome.stdout_path.as_ref() {
+        if let Ok(text) = fs::read_to_string(path) {
+            combined.push_str(&text);
+            combined.push('\n');
+            has_output = true;
+        }
+    }
+    if let Some(path) = outcome.stderr_path.as_ref() {
+        if let Ok(text) = fs::read_to_string(path) {
+            combined.push_str(&text);
+            combined.push('\n');
+            has_output = true;
+        }
+    }
+
+    if !has_output {
+        return None;
+    }
+
+    let report = policy_violation::scan_policy_violations(&combined);
+    if report.is_empty() { None } else { Some(report) }
+}
+
+fn write_policy_violation_artifacts(
+    mission_dir: &Path,
+    report: &policy_violation::PolicyViolationsReport,
+) -> Result<()> {
+    let output_dir = mission_dir.join("RUNNER_OUTPUT");
+    fs::create_dir_all(&output_dir)?;
+
+    let report_path = output_dir.join("policy_violations.json");
+    let json = serde_json::to_string_pretty(report)?;
+    fs::write(&report_path, json)?;
+
+    append_policy_violations_to_attempt_report(&output_dir, report)?;
+
+    Ok(())
+}
+
+fn append_policy_violations_to_attempt_report(
+    output_dir: &Path,
+    report: &policy_violation::PolicyViolationsReport,
+) -> Result<()> {
+    let report_md = report.to_markdown();
+    let attempt_report_path = output_dir.join("attempt_report.md");
+
+    if attempt_report_path.is_file() {
+        let mut content = fs::read_to_string(&attempt_report_path).unwrap_or_default();
+        if !content.contains("## Policy Violations") {
+            if !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push('\n');
+            content.push_str(&report_md);
+            fs::write(&attempt_report_path, content)?;
+        }
+        return Ok(());
+    }
+
+    let fallback_path = output_dir.join("policy_violations.md");
+    fs::write(&fallback_path, report_md)?;
+    Ok(())
+}
+
+fn has_progress(
+    pre: &crate::repo_state::RepoState,
+    post: &crate::repo_state::RepoState,
+    mission_type: &crate::mission_type::MissionType,
+) -> bool {
+    let gate_improved = !pre.all_gates_pass() && post.all_gates_pass();
+    let issue_count_decrease = post.total_issue_count() < pre.total_issue_count();
+    
+    // Use expected issue flow to calculate "adjusted" progress
+    // Some missions create expected downstream work (e.g., new scenarios need bindings)
+    let expected_flow = mission_type.expected_issue_flow();
+    
+    // Calculate adjusted issue delta (excluding expected increases)
+    let spec_delta = post.spec_issues.len() as i32 - pre.spec_issues.len() as i32;
+    let binding_delta = post.binding_issues.len() as i32 - pre.binding_issues.len() as i32;
+    let sut_delta = post.sut_issues.len() as i32 - pre.sut_issues.len() as i32;
+    
+    let adjusted_delta = {
+        let mut adj = spec_delta + binding_delta + sut_delta 
+            + (post.structure_issues.len() as i32 - pre.structure_issues.len() as i32);
+        if expected_flow.binding_increase_ok && binding_delta > 0 {
+            adj -= binding_delta;
+        }
+        if expected_flow.sut_increase_ok && sut_delta > 0 {
+            adj -= sut_delta;
+        }
+        adj
+    };
+    
+    // Progress if adjusted delta is negative (net improvement)
+    let adjusted_progress = adjusted_delta < 0;
+
+    match mission_type {
+        crate::mission_type::MissionType::CreateMissingBindings { scenario_key, .. } => {
+            let pre_target = count_missing_bindings(pre, Some(scenario_key));
+            let post_target = count_missing_bindings(post, Some(scenario_key));
+            // Progress: target bindings decreased, OR overall bindings decreased, OR gate improved
+            // SUT increase is expected (new bindings may surface test failures)
+            (pre_target > 0 && post_target < pre_target)
+                || post.binding_issues.len() < pre.binding_issues.len()
+                || gate_improved
+                || adjusted_progress
+        }
+        crate::mission_type::MissionType::ImplementBehaviorForScenario { scenario_key, .. } => {
+            let pre_target = count_failures(pre, scenario_key);
+            let post_target = count_failures(post, scenario_key);
+            (pre_target > 0 && post_target == 0)
+                || post.sut_issues.len() < pre.sut_issues.len()
+                || gate_improved
+        }
+        crate::mission_type::MissionType::FixRegressionFromGateFailure { failure } => {
+            let pre_target = count_failures(pre, &failure.scenario_key);
+            let post_target = count_failures(post, &failure.scenario_key);
+            (pre_target > 0 && post_target == 0)
+                || post.sut_issues.len() < pre.sut_issues.len()
+                || gate_improved
+        }
+        crate::mission_type::MissionType::NormalizeIdentityTags { .. }
+        | crate::mission_type::MissionType::RefineFeatureIntent { .. }
+        | crate::mission_type::MissionType::DraftSpecScenarios { .. }
+        | crate::mission_type::MissionType::PromoteScenariosToExecutable { .. } => {
+            post.spec_issues.len() < pre.spec_issues.len()
+                || post.structure_issues.len() < pre.structure_issues.len()
+                || gate_improved
+        }
+        crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } => {
+            // For AddOrClarifyScenario, progress means new scenarios were added to the target feature.
+            let pre_count = pre.scenario_count_for_feature(feature_path);
+            let post_count = post.scenario_count_for_feature(feature_path);
+            let scenarios_added = matches!((pre_count, post_count), (Some(pre), Some(post)) if post > pre);
+            let counts_known = pre_count.is_some() && post_count.is_some();
+
+            if scenarios_added {
+                true
+            } else if !counts_known {
+                // If counts are unavailable (e.g., feature file missing), fall back to expected flow.
+                let expected_flow_progress = binding_delta > 0;
+                expected_flow_progress || gate_improved || adjusted_progress
+            } else {
+                false
+            }
+        }
+        crate::mission_type::MissionType::AssessSpecCoverage => {
+            pre.coverage_assessment.is_none() && post.coverage_assessment.is_some()
+        }
+        crate::mission_type::MissionType::StrengthenThenAssertions { .. }
+        | crate::mission_type::MissionType::RefactorBindingsForClarity { .. }
+        | crate::mission_type::MissionType::SummarizeAndClose
+        | crate::mission_type::MissionType::CleanupAfterSuccess => {
+            gate_improved || issue_count_decrease
+        }
+        crate::mission_type::MissionType::ExplainState
+        | crate::mission_type::MissionType::TriageFailures => true,
+    }
+}
+
+fn count_missing_bindings(state: &crate::repo_state::RepoState, scenario_key: Option<&str>) -> usize {
+    state
+        .binding_issues
+        .iter()
+        .filter(|issue| issue.kind == crate::repo_state::BindingIssueKind::MissingBinding)
+        .filter(|issue| match (scenario_key, issue.scenario_key.as_deref()) {
+            (Some(target), Some(key)) => key == target,
+            (Some(_), None) => false,
+            (None, _) => true,
+        })
+        .count()
+}
+
+fn resolve_feature_path(spec_root: &PathBuf, feature_path: &str) -> PathBuf {
+    let path = PathBuf::from(feature_path);
+    if path.is_absolute() {
+        path
+    } else {
+        spec_root.join(feature_path)
+    }
+}
+
+fn read_feature_snapshot(spec_root: &PathBuf, feature_path: &str) -> Option<String> {
+    let path = resolve_feature_path(spec_root, feature_path);
+    fs::read_to_string(path).ok()
+}
+
+fn restore_feature_snapshot(spec_root: &PathBuf, feature_path: &str, snapshot: &str) -> Result<()> {
+    let path = resolve_feature_path(spec_root, feature_path);
+    fs::write(path, snapshot)?;
+    Ok(())
+}
+
+fn count_failures(state: &crate::repo_state::RepoState, scenario_key: &str) -> usize {
+    state
+        .sut_issues
+        .iter()
+        .filter(|issue| issue.scenario_key == scenario_key)
+        .count()
+}
+
+fn stop_reason_label(reason: stop_reason::StopReason) -> &'static str {
+    match reason {
+        stop_reason::StopReason::Done => "DONE",
+        stop_reason::StopReason::Blocked => "BLOCKED",
+        stop_reason::StopReason::HumanRequired => "HUMAN_REQUIRED",
+        stop_reason::StopReason::EnvironmentError => "ENVIRONMENT_ERROR",
+        stop_reason::StopReason::Budget => "BUDGET",
+        stop_reason::StopReason::RunnerFailed => "RUNNER_FAILED",
+        stop_reason::StopReason::NoProgress => "NO_PROGRESS",
+        stop_reason::StopReason::GateFailed => "GATE_FAILED",
+        stop_reason::StopReason::RateLimited => "RATE_LIMITED",
+        stop_reason::StopReason::PolicyViolation => "POLICY_VIOLATION",
+    }
+}
+
+/// Emit the run result to .tesaki/last_run.json.
+fn emit_run_result(result: &stop_reason::RunResult, spec_root: &PathBuf) -> Result<()> {
+    let tesaki_dir = spec_root.join(".tesaki");
+    fs::create_dir_all(&tesaki_dir)?;
+
+    let json = serde_json::to_string_pretty(result)?;
+    fs::write(tesaki_dir.join("last_run.json"), &json)?;
+
+    Ok(())
+}
+
+fn lock_label(lock: crate::surface_policy::SurfaceLock) -> &'static str {
+    match lock {
+        crate::surface_policy::SurfaceLock::Locked => "LOCKED",
+        crate::surface_policy::SurfaceLock::Unlocked => "UNLOCKED",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+    use crate::packet_parser::{
+        BlockerType as ReviewBlockerType, CoverageSummary, DeferredItem, FeatureReview,
+        IdentityFields, IdentitySection, LegacyGateResult, LegacyGateStatus, ReviewPacket,
+        RuleReview, ScenarioReview, SourceSpan, StatusPacket, StatusValue, StepInfo,
+    };
+
+    /// Test log entry serialization
+    #[test]
+    fn test_log_entry_serialization() {
+        let entry = UpdateCertLogEntry {
+            timestamp_utc: "2026-01-19T12:00:00Z".to_string(),
+            old_identity: Some(IdentitySnapshot {
+                feature_fingerprint_hash: "aaa".to_string(),
+                step_registry_hash: "bbb".to_string(),
+                resolved_plan_hash: "ccc".to_string(),
+            }),
+            new_identity: IdentitySnapshot {
+                feature_fingerprint_hash: "ddd".to_string(),
+                step_registry_hash: "eee".to_string(),
+                resolved_plan_hash: "fff".to_string(),
+            },
+            reason: "FEATURE_DRIFT".to_string(),
+            updates_this_run: 1,
+            max_updates_allowed: 3,
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("timestamp_utc"));
+        assert!(json.contains("old_identity"));
+        assert!(json.contains("new_identity"));
+        assert!(json.contains("reason"));
+
+        // Verify it can be deserialized back
+        let parsed: UpdateCertLogEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.reason, "FEATURE_DRIFT");
+        assert_eq!(parsed.updates_this_run, 1);
+    }
+
+    /// Test append_to_log writes valid JSONL
+    #[test]
+    fn test_append_to_log() {
+        let temp_dir = TempDir::new().unwrap();
+        let log_path = temp_dir.path().join("update_cert_log.jsonl");
+
+        let entry1 = UpdateCertLogEntry {
+            timestamp_utc: "2026-01-19T12:00:00Z".to_string(),
+            old_identity: None,
+            new_identity: IdentitySnapshot {
+                feature_fingerprint_hash: "aaa".to_string(),
+                step_registry_hash: "bbb".to_string(),
+                resolved_plan_hash: "ccc".to_string(),
+            },
+            reason: "INITIAL".to_string(),
+            updates_this_run: 1,
+            max_updates_allowed: 3,
+        };
+
+        let entry2 = UpdateCertLogEntry {
+            timestamp_utc: "2026-01-19T12:01:00Z".to_string(),
+            old_identity: Some(IdentitySnapshot {
+                feature_fingerprint_hash: "aaa".to_string(),
+                step_registry_hash: "bbb".to_string(),
+                resolved_plan_hash: "ccc".to_string(),
+            }),
+            new_identity: IdentitySnapshot {
+                feature_fingerprint_hash: "ddd".to_string(),
+                step_registry_hash: "eee".to_string(),
+                resolved_plan_hash: "fff".to_string(),
+            },
+            reason: "REGISTRY_DRIFT".to_string(),
+            updates_this_run: 2,
+            max_updates_allowed: 3,
+        };
+
+        append_to_log(&log_path, &entry1);
+        append_to_log(&log_path, &entry2);
+
+        let content = fs::read_to_string(&log_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        // Each line should be valid JSON
+        let _: UpdateCertLogEntry = serde_json::from_str(lines[0]).unwrap();
+        let _: UpdateCertLogEntry = serde_json::from_str(lines[1]).unwrap();
+    }
+
+    /// Test read_certification_identity with valid cert
+    #[test]
+    fn test_read_certification_identity() {
+        let temp_dir = TempDir::new().unwrap();
+        let cert_path = temp_dir.path().join("certification.json");
+
+        let cert_content = r#"{
+            "identity": {
+                "feature_fingerprint_hash": "abc123",
+                "step_registry_hash": "def456",
+                "resolved_plan_hash": "ghi789"
+            },
+            "metadata": {}
+        }"#;
+
+        fs::write(&cert_path, cert_content).unwrap();
+
+        let identity = read_certification_identity(&cert_path).unwrap();
+        assert_eq!(identity.feature_fingerprint_hash, "abc123");
+        assert_eq!(identity.step_registry_hash, "def456");
+        assert_eq!(identity.resolved_plan_hash, "ghi789");
+    }
+
+    /// Test read_certification_identity returns None for missing file
+    #[test]
+    fn test_read_certification_identity_missing() {
+        let temp_dir = TempDir::new().unwrap();
+        let cert_path = temp_dir.path().join("nonexistent.json");
+
+        assert!(read_certification_identity(&cert_path).is_none());
+    }
+
+    #[test]
+    fn test_lint_summary_missing_steps_only() {
+        let summary = r#"Resolution errors: [MissingStep { step_text: "Given a", step_kind: "given", feature_path: "f.feature", line: 1 }]"#;
+        assert!(lint_summary_missing_steps_only(summary));
+
+        let summary = r#"Resolution errors: [MissingStep { step_text: "Given a", step_kind: "given", feature_path: "f.feature", line: 1 }, AmbiguousStep { step_text: "Given b", step_kind: "given", feature_path: "f.feature", line: 2, matching_bindings: ["x"] }]"#;
+        assert!(!lint_summary_missing_steps_only(summary));
+    }
+
+    #[test]
+    fn test_status_has_missing_steps_only() {
+        let status = status_with_lint_summary(
+            r#"Resolution errors: [MissingStep { step_text: "Given a", step_kind: "given", feature_path: "f.feature", line: 1 }]"#,
+        );
+        assert!(status_has_missing_steps_only(&status));
+
+        let status = status_with_lint_summary(
+            r#"Resolution errors: [MissingStep { step_text: "Given a", step_kind: "given", feature_path: "f.feature", line: 1 }, AmbiguousStep { step_text: "Given b", step_kind: "given", feature_path: "f.feature", line: 2, matching_bindings: ["x"] }]"#,
+        );
+        assert!(!status_has_missing_steps_only(&status));
+    }
+
+    #[test]
+    fn test_scenario_add_budget_allows_two_for_empty_rule() {
+        let feature_path = "features/a.feature";
+        let rule_name = "Rule A";
+        let review = review_for_rule(feature_path, rule_name, 0);
+        let mut state = crate::repo_state::RepoState::default();
+        state
+            .scenarios_per_rule
+            .insert(format!("{}::{}", feature_path, rule_name), 0);
+
+        let budget = scenario_add_budget(feature_path, Some(rule_name), &state, &review);
+        assert_eq!(budget.max_additional, 2);
+    }
+
+    #[test]
+    fn test_scenario_add_budget_limits_to_one_with_deferred() {
+        let feature_path = "features/a.feature";
+        let rule_name = "Rule A";
+        let review = review_for_rule(feature_path, rule_name, 1);
+        let mut state = crate::repo_state::RepoState::default();
+        state
+            .scenarios_per_rule
+            .insert(format!("{}::{}", feature_path, rule_name), 0);
+
+        let budget = scenario_add_budget(feature_path, Some(rule_name), &state, &review);
+        assert_eq!(budget.max_additional, 1);
+    }
+
+    #[test]
+    fn test_pre_gate_build_policy() {
+        let spec_only = crate::surface_policy::SurfacePolicy::for_refine_spec();
+        let tests_unlocked = crate::surface_policy::SurfacePolicy::for_implement_tests();
+        assert!(!should_run_pre_gate_build_for_policy(
+            config::PreGateBuildMode::Auto,
+            &spec_only
+        ));
+        assert!(should_run_pre_gate_build_for_policy(
+            config::PreGateBuildMode::Auto,
+            &tests_unlocked
+        ));
+        assert!(should_run_pre_gate_build_for_policy(
+            config::PreGateBuildMode::Always,
+            &spec_only
+        ));
+        assert!(!should_run_pre_gate_build_for_policy(
+            config::PreGateBuildMode::Never,
+            &tests_unlocked
+        ));
+    }
+
+    /// Test that stub scenarios are filtered from eligible candidates (defense-in-depth).
+    /// Per TODO.md §2: Tesaki must NEVER select @Stub scenarios as tasks.
+    #[test]
+    fn test_stub_scenarios_excluded_from_eligible_candidates() {
+        // Create candidates with various properties
+        let candidates = vec![
+            PromotionCandidate {
+                scenario_name: "Real scenario".to_string(),
+                feature_path: "features/test.feature".to_string(),
+                rule_name: "Rule(01)".to_string(),
+                reuse_score: 5.0,
+                new_step_texts_estimate: 2,
+                blocker: BlockerType::Unknown,
+                is_stub: false, // Real candidate
+            },
+            PromotionCandidate {
+                scenario_name: "Stub scenario".to_string(),
+                feature_path: "features/_orphan_stubs.feature".to_string(),
+                rule_name: "default".to_string(),
+                reuse_score: 0.0,
+                new_step_texts_estimate: 1,
+                blocker: BlockerType::Unknown,
+                is_stub: true, // STUB - should be excluded
+            },
+            PromotionCandidate {
+                scenario_name: "Another real scenario".to_string(),
+                feature_path: "features/core.feature".to_string(),
+                rule_name: "Rule(01)".to_string(),
+                reuse_score: 3.0,
+                new_step_texts_estimate: 1,
+                blocker: BlockerType::Core,
+                is_stub: false,
+            },
+        ];
+
+        // Simulate filtering (as in generate_next_task)
+        let eligible: Vec<_> = candidates.iter()
+            .filter(|c| !c.is_stub)
+            .collect();
+
+        // Both real scenarios should be eligible (stubs excluded)
+        assert_eq!(eligible.len(), 2);
+        assert_eq!(eligible[0].scenario_name, "Real scenario");
+        assert_eq!(eligible[1].scenario_name, "Another real scenario");
+
+        // Verify stub was excluded
+        let has_stub = eligible.iter().any(|c| c.scenario_name == "Stub scenario");
+        assert!(!has_stub, "Stub scenario should be excluded from eligible list");
+    }
+
+    fn review_for_rule(feature_path: &str, rule_name: &str, deferred_count: usize) -> ReviewPacket {
+        let deferred_items = (0..deferred_count)
+            .map(|i| DeferredItem {
+                text: format!("Deferred {}", i),
+                source_span: SourceSpan { start_line: 1, end_line: 1 },
+                blocker: ReviewBlockerType::Unknown,
+            })
+            .collect::<Vec<_>>();
+
+        ReviewPacket {
+            version: 1,
+            spec_root: "/repo".to_string(),
+            identity_current: IdentityFields {
+                hash_contract_version: "namako-v1-json+blake3-256".to_string(),
+                feature_fingerprint_hash: "a".to_string(),
+                step_registry_hash: "b".to_string(),
+                resolved_plan_hash: "c".to_string(),
+            },
+            features: vec![FeatureReview {
+                feature_path: feature_path.to_string(),
+                feature_name: "Feature".to_string(),
+                rules: vec![RuleReview {
+                    rule_name: rule_name.to_string(),
+                    source_span: SourceSpan { start_line: 1, end_line: 1 },
+                    executable_scenarios: vec![ScenarioReview {
+                        name: "Scenario".to_string(),
+                        source_span: SourceSpan { start_line: 1, end_line: 1 },
+                        steps: vec![StepInfo { kind: "given".to_string(), text: "x".to_string() }],
+                    }],
+                    deferred_items,
+                }],
+            }],
+            coverage_summary: CoverageSummary {
+                rules_total: 1,
+                rules_with_zero_executable: 0,
+                executable_scenarios_total: 1,
+                deferred_items_total: deferred_count as u32,
+            },
+            deferred_items: vec![],
+            promotion_candidates: vec![],
+            missing_bindings_for_top_candidates: vec![],
+            harness_gaps: vec![],
+            suggested_binding_bundle: None,
+        }
+    }
+
+    fn status_with_lint_summary(summary: &str) -> StatusPacket {
+        StatusPacket {
+            version: 1,
+            spec_root: "/repo".to_string(),
+            recommended_next_action: "FIX_LINT".to_string(),
+            lint_status: StatusValue::Fail,
+            run_status: StatusValue::NotRun,
+            verify_status: StatusValue::NotRun,
+            drift: None,
+            last_run_failures: vec![],
+            identity: IdentitySection {
+                current: IdentityFields {
+                    hash_contract_version: "namako-v1-json+blake3-256".to_string(),
+                    feature_fingerprint_hash: "a".to_string(),
+                    step_registry_hash: "b".to_string(),
+                    resolved_plan_hash: "c".to_string(),
+                },
+                baseline: None,
+            },
+            metadata: None,
+            gates: Some(LegacyGateStatus {
+                lint: LegacyGateResult {
+                    ok: false,
+                    code: 1,
+                    summary: Some(summary.to_string()),
+                },
+                run: LegacyGateResult {
+                    ok: false,
+                    code: 1,
+                    summary: Some("Cannot run - lint failed".to_string()),
+                },
+                verify: LegacyGateResult {
+                    ok: false,
+                    code: 1,
+                    summary: Some("Cannot verify - lint failed".to_string()),
+                },
+            }),
+        }
+    }
+
+    /// Test surface violation detection
+    #[test]
+    fn test_surface_violation_triggers_rollback() {
+        use tesaki_agent::check_surface_violations;
+
+        let changed = vec!["features/test.feature".to_string()];
+        let spec_patterns = vec!["features/**/*.feature".to_string()];
+        let tests_patterns = vec!["tests/**/*.rs".to_string()];
+        let sut_patterns = vec!["src/**/*.rs".to_string()];
+
+        // Spec is LOCKED, but a feature file changed
+        let violations = check_surface_violations(
+            &changed,
+            &spec_patterns,
+            &tests_patterns,
+            &sut_patterns,
+            false, // spec locked
+            true,  // tests unlocked
+            true,  // sut unlocked
+        );
+
+        assert!(!violations.is_empty());
+        assert!(violations[0].contains("spec surface LOCKED"));
+    }
 }

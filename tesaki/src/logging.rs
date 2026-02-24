@@ -171,7 +171,7 @@ pub enum LogEvent {
     MissionExecuted {
         mission_id: String,
         runner: String,
-        outcome: crate::runner::RunnerOutcome,
+        outcome: tesaki_agent::runner::RunnerOutcome,
     },
     PostGate {
         outcome: String,
