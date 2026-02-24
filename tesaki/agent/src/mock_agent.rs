@@ -24,12 +24,12 @@ impl LLMBackend for MockAgent {
     fn execute(&self, _request: &LLMRequest) -> Result<LLMResponse> {
         Ok(LLMResponse {
             text: self.response_text.clone(),
-            exit_code: Some(0),
             classification: OutcomeClassification::Ok,
-            stdout_path: None,
-            stderr_path: None,
+            exit_code: Some(0),
             token_usage: None,
             elapsed_seconds: 0.1,
+            stdout_path: None,
+            stderr_path: None,
         })
     }
 }
