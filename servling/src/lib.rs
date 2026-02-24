@@ -7,13 +7,13 @@ pub mod runner;
 pub mod claude_agent;
 pub mod codex_agent;
 pub mod copilot_agent;
-pub mod mock_agent;
+pub mod factory;
 
 pub use outcome::OutcomeClassification;
 pub use token_usage::{TokenUsage, MissionTokenStats, SessionTokenStats, MissionTypeStats, EfficiencyRating};
-pub use backend::{Servling, LLMRequest, LLMResponse, CliBackend, RunnerInvocation};
+pub use backend::{Servling, LLMRequest, LLMResponse, CliBackend, RunnerInvocation, CodingAgent, CodingAgentBuilder};
 pub use runner::{run_cli_runner, CliRunnerConfig, CliRunnerOutcome};
 pub use claude_agent::ClaudeAgent;
 pub use codex_agent::CodexAgent;
 pub use copilot_agent::CopilotAgent;
-pub use mock_agent::MockAgent;
+pub use factory::{AgentCandidate, agent_candidates, build_servling, build_coding_agent, describe_candidates, normalize_model, should_fallback};
