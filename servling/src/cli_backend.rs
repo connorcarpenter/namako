@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::backend::{LLMRequest, LLMResponse};
+use crate::core::{LLMRequest, LLMResponse};
 use crate::runner::{run_cli_runner, CliRunnerConfig};
 
 /// A unified workhorse for any CLI-based LLM agent.

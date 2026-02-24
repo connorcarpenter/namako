@@ -3,7 +3,7 @@
 use anyhow::{bail, Result};
 use std::sync::Mutex;
 
-use crate::backend::{Servling, LLMRequest, LLMResponse, RunnerInvocation};
+use crate::core::{Servling, LLMRequest, LLMResponse, RunnerInvocation};
 use crate::outcome::OutcomeClassification;
 
 /// A high-level agent that orchestrates one or more backends with fallback logic.

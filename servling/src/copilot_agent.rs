@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Result};
 use std::process::{Command, Stdio};
-use crate::backend::{Servling, LLMRequest, LLMResponse, RunnerInvocation};
+use crate::core::{Servling, LLMRequest, LLMResponse, RunnerInvocation};
 use crate::cli_backend::CliBackend;
 
 pub struct CopilotAgent {

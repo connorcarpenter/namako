@@ -1,7 +1,7 @@
 //! Factory and selection policy for Servling agents.
 
 use anyhow::{bail, Result};
-use crate::backend::{Servling};
+use crate::core::{Servling};
 use crate::coding_agent::CodingAgent;
 use crate::claude_agent::ClaudeAgent;
 use crate::codex_agent::CodexAgent;
