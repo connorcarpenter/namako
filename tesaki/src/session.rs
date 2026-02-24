@@ -1,12 +1,11 @@
 //! Session state for the interactive REPL.
 
 use serde::{Deserialize, Serialize};
+use servling::SessionTokenStats;
 
+use crate::chat_planner::MissionProposal;
 use crate::stage::Stage;
 use crate::surface_policy::{SurfaceLock, SurfacePolicy};
-
-// Re-export token stats types from tesaki_agent
-pub use tesaki_agent::SessionTokenStats;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionIntent {
@@ -103,7 +102,7 @@ impl SessionIntent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingMission {
-    pub proposal: tesaki_agent::MissionProposal,
+    pub proposal: MissionProposal,
     pub approved: bool,
 }
 

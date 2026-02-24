@@ -16,6 +16,10 @@
 //! Tesaki searches for `.tesaki/config.toml` in the current directory and parent
 //! directories. See the Tesaki README for details.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
 mod binding_extractor;
 mod config;
 mod diagnosis;
@@ -42,13 +46,15 @@ mod stop_reason;
 mod surface_policy;
 mod spec_quality;
 mod workspace;
+mod chat_planner;
+mod runner;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use servling::{agent_candidates, describe_candidates, normalize_model, OutcomeClassification, TokenUsage};
+
+use crate::runner::{build_runner, check_surface_violations, outcome_from_error, Runner, RunnerConfig};
 
 /// Log file name for update-cert audit trail
 const UPDATE_CERT_LOG: &str = "update_cert_log.jsonl";
@@ -1283,11 +1289,6 @@ fn run_run(
         parse_run_report_json,
         parse_status_json,
     };
-    use tesaki_agent::{
-        Runner, RunnerConfig, OutcomeClassification, TokenUsage,
-        agent_candidates, describe_candidates,
-        normalize_model, outcome_from_error,
-    };
     use crate::repo_state::RepoState;
     use crate::stage::{Stage, StageConstraint, detect_stage};
     use crate::stop_reason::{StopReason, RunResult};
@@ -1356,7 +1357,7 @@ fn run_run(
         );
     }
     
-    let runner: Box<dyn Runner> = match tesaki_agent::build_runner(runner_candidates) {
+    let runner: Box<dyn Runner> = match build_runner(runner_candidates) {
         Ok(agent) => agent,
         Err(err) => {
             let result = RunResult::error(StopReason::EnvironmentError, format!("{}", err));
@@ -1785,7 +1786,7 @@ fn run_run(
         }
 
         // Check surface policy violations
-        let violations = tesaki_agent::check_surface_violations(
+        let violations = check_surface_violations(
             &changes.changed_files,
             &surface_definitions.spec.patterns,
             &surface_definitions.tests_bindings.patterns,
@@ -2434,7 +2435,7 @@ pub(crate) fn log_mission_executed(
     logger: &logging::JsonlLogger,
     mission_id: &str,
     runner: &str,
-    outcome: &tesaki_agent::runner::RunnerOutcome,
+    outcome: &runner::RunnerOutcome,
 ) {
     logger.log_event(logging::LogEvent::MissionExecuted {
         mission_id: mission_id.to_string(),
@@ -2456,8 +2457,8 @@ pub(crate) fn log_post_gate(
 
 pub(crate) fn log_runner_command_result(
     logger: &logging::JsonlLogger,
-    invocation: &tesaki_agent::runner::RunnerInvocation,
-    outcome: &tesaki_agent::runner::RunnerOutcome,
+    invocation: &runner::RunnerInvocation,
+    outcome: &runner::RunnerOutcome,
 ) {
     let stdout = outcome
         .stdout_path
@@ -2740,7 +2741,7 @@ fn should_run_pre_gate_build_for_policy(
 }
 
 fn scan_runner_policy_violations(
-    outcome: &tesaki_agent::runner::RunnerOutcome,
+    outcome: &runner::RunnerOutcome,
 ) -> Option<policy_violation::PolicyViolationsReport> {
     let mut combined = String::new();
     let mut has_output = false;
@@ -3313,7 +3314,7 @@ mod tests {
     /// Test surface violation detection
     #[test]
     fn test_surface_violation_triggers_rollback() {
-        use tesaki_agent::check_surface_violations;
+        use check_surface_violations;
 
         let changed = vec!["features/test.feature".to_string()];
         let spec_patterns = vec!["features/**/*.feature".to_string()];

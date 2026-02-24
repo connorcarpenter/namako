@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub use servling::{Servling, LLMRequest, LLMResponse};
+pub use servling::{Servling, LLMRequest};
 
 /// A single allowlisted command request from the chat planner.
 #[derive(Debug, Clone, Serialize, Deserialize)]

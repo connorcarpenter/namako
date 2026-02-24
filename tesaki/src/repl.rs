@@ -1,28 +1,28 @@
 //! Interactive REPL session for Tesaki v1.8.
 
-use anyhow::Result;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use tesaki_agent::{
-    ChatPlan, ChatTurnInput, MissionProposal,
-    SurfaceLock as PlanSurfaceLock, SurfacePolicy as PlanSurfacePolicy,
+use anyhow::Result;
+
+use servling::{agent_candidates, describe_candidates, MissionTokenStats, TokenUsage};
+
+use crate::{
+    surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy},
+    stop_reason::StopReason,
+    stage::{detect_stage, Stage, StageConstraint},
+    session::{PendingMission, SessionState},
+    repo_state::RepoState,
+    packet_parser::{parse_gate_json, parse_review_json, parse_status_json},
+    mission_type::MissionType,
+    lessons::{self, LessonsDatabase},
+    escalation,
+    diagnosis::StallDiagnosis,
+    config::{self, ConfigDiscoveryResult},
+    chat_planner::{build_planner, ChatPlan, ChatPlanner, MockChatPlanner}
 };
-use tesaki_agent::{ChatPlanner, MockChatPlanner};
-use tesaki_agent::{agent_candidates, describe_candidates};
-use crate::config::{self, ConfigDiscoveryResult};
-use crate::diagnosis::StallDiagnosis;
-use crate::escalation;
-use crate::lessons::{self, LessonsDatabase};
-use crate::mission_type::MissionType;
-use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
-use crate::repo_state::RepoState;
-use crate::session::{PendingMission, SessionState};
-use crate::stage::{detect_stage, Stage, StageConstraint};
-use crate::stop_reason::StopReason;
-use crate::surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy};
-use tesaki_agent::{MissionTokenStats, TokenUsage};
+use crate::chat_planner::{ChatTurnInput, MissionProposal, SurfaceLock, SurfacePolicy};
 
 /// Run the autonomous loop directly without REPL (headless mode).
 /// Usage: `tesaki --loop 10` or `tesaki -l 10`
@@ -152,7 +152,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
             done: true,
         }))
     } else {
-        tesaki_agent::build_planner(planner_candidates)?
+        build_planner(planner_candidates)?
     };
 
     let mut session = SessionState::default();
@@ -516,7 +516,7 @@ fn restore_feature_snapshot(spec_root: &Path, feature_path: &str, snapshot: &str
     Ok(())
 }
 
-fn convert_surface_policy(input: &PlanSurfacePolicy) -> RepoSurfacePolicy {
+fn convert_surface_policy(input: &SurfacePolicy) -> RepoSurfacePolicy {
     RepoSurfacePolicy {
         spec: convert_lock(input.spec),
         tests_bindings: convert_lock(input.tests),
@@ -524,10 +524,10 @@ fn convert_surface_policy(input: &PlanSurfacePolicy) -> RepoSurfacePolicy {
     }
 }
 
-fn convert_lock(lock: PlanSurfaceLock) -> RepoSurfaceLock {
+fn convert_lock(lock: SurfaceLock) -> RepoSurfaceLock {
     match lock {
-        PlanSurfaceLock::Locked => RepoSurfaceLock::Locked,
-        PlanSurfaceLock::Unlocked => RepoSurfaceLock::Unlocked,
+        SurfaceLock::Locked => RepoSurfaceLock::Locked,
+        SurfaceLock::Unlocked => RepoSurfaceLock::Unlocked,
     }
 }
 
@@ -564,7 +564,7 @@ fn handle_mission_proposal(plan: &ChatPlan, session: &mut SessionState) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tesaki_agent::{ChatPlan, MissionProposal, SurfaceLock, SurfacePolicy};
+    use {ChatPlan, MissionProposal, SurfaceLock, SurfacePolicy};
 
     #[test]
     fn repl_sets_pending_mission_from_plan() {

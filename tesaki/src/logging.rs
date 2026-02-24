@@ -14,6 +14,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::runner::RunnerOutcome;
+
 /// Initialize logging with env_logger.
 ///
 /// Call this once at program startup.
@@ -171,7 +173,7 @@ pub enum LogEvent {
     MissionExecuted {
         mission_id: String,
         runner: String,
-        outcome: tesaki_agent::runner::RunnerOutcome,
+        outcome: RunnerOutcome,
     },
     PostGate {
         outcome: String,

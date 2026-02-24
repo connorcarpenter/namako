@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 pub use servling::OutcomeClassification;
 pub use servling::token_usage::TokenUsage;
-pub use servling::{Servling, LLMRequest, LLMResponse, run_cli_runner, CliRunnerConfig, CliRunnerOutcome};
+pub use servling::{Servling, LLMRequest, LLMResponse};
 
 /// Configuration for mission execution.
 #[derive(Debug, Clone)]
