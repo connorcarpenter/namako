@@ -18,7 +18,7 @@ For day-to-day use, prefer `namako/_WORKSPACE/RUNBOOK.md` and `namako/_WORKSPACE
     - [2.7 First CONSUMPTION Mission Template](#27-first-consumption-mission-template-normative)
 3. [Canonical Repo & Crate Architecture](#part-3-canonical-repo--crate-architecture)
 4. [Step Macro UX and Binding Identity](#part-4-step-macro-ux-and-binding-identity)
-5. [Namako CLI Commands](#part-5-namako-cli-commands)
+5. [Namako CLI Commands](#part-5-namako_cli-commands)
 6. [NPA: Adapter Protocol](#part-6-npa-adapter-protocol)
     - [6.4.3 Scenario Key Derivation](#643-scenario-key-derivation-normative)
 7. [Hashing & Identity Contract](#part-7-hashing--identity-contract)

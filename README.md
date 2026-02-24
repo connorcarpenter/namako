@@ -44,7 +44,7 @@ tesaki --loop 10
 ```
 namako/
 ├── src/              # Namako core library
-├── cli/              # namako-cli binary
+├── cli/              # namako_cli binary
 ├── codegen/          # Step macros (#[given], #[when], #[then])
 ├── tesaki/           # Tesaki AI orchestrator
 │   ├── src/          # Rust source
@@ -75,7 +75,7 @@ tesaki diagnose ID  # Debug a specific mission
 ```bash
 cargo test              # All tests (~222 tests)
 cargo test -p tesaki    # Tesaki only
-cargo test -p namako-cli
+cargo test -p namako_cli
 ```
 
 ## Documentation Map

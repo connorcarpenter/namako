@@ -10,7 +10,7 @@ Handles:
 
 ## Usage
 
-This crate is used internally by `namako-cli`. See the root README for user-facing documentation.
+This crate is used internally by `namako_cli`. See the root README for user-facing documentation.
 
 ## Testing
 

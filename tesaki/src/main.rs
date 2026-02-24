@@ -2275,7 +2275,7 @@ fn resolve_namako_cli(
         PathBuf::from("/home/ccarpenter/Personal/specops/namako")
     };
     let command = format!(
-        "cargo run -p namako-cli --manifest-path {}/Cargo.toml -q --",
+        "cargo run -p namako_cli --manifest-path {}/Cargo.toml -q --",
         namako_root.display()
     );
     NamakoCliResolution {

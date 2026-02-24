@@ -53,7 +53,7 @@ select mission → execute (via AI runner) → validate (via namako gate) → re
 ```
 namako/
 ├── src/                    # Namako core library (parsing, execution)
-├── cli/                    # namako-cli binary
+├── cli/                    # namako_cli binary
 ├── codegen/                # Step macros (#[given], #[when], #[then])
 ├── tesaki/                 # Tesaki AI orchestrator
 │   ├── src/
@@ -116,7 +116,7 @@ Surface violations trigger automatic rollback.
 cd /path/to/namako
 
 # Build
-cargo build -p tesaki -p namako-cli
+cargo build -p tesaki -p namako_cli
 
 # Test (222 tests)
 cargo test -p tesaki
