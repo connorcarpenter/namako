@@ -287,6 +287,58 @@ impl Runner for MockRunner {
     }
 }
 
+/// Helper to convert a Result error into a generic EnvironmentError outcome.
+pub fn outcome_from_error(err: anyhow::Error) -> RunnerOutcome {
+    RunnerOutcome {
+        exit_code: None,
+        classification: OutcomeClassification::EnvironmentError,
+        elapsed_seconds: 0.0,
+        stdout_path: None,
+        stderr_path: None,
+        error_message: Some(err.to_string()),
+        token_usage: None,
+    }
+}
+
+impl From<anyhow::Error> for RunnerOutcome {
+    fn from(err: anyhow::Error) -> Self {
+        outcome_from_error(err)
+    }
+}
+
+/// Factory to build a Runner from agent candidates.
+pub fn build_runner(candidates: Vec<servling::AgentCandidate>) -> anyhow::Result<Box<dyn Runner>> {
+    let agent = servling::build_coding_agent(candidates)?;
+    // Use a manual wrap to force dyn Runner coercion
+    struct RunnerWrap(Box<dyn Servling>);
+    impl Runner for RunnerWrap {
+        fn run(&self, mission_dir: &std::path::Path, config: &RunnerConfig) -> anyhow::Result<RunnerOutcome> {
+            self.0.run(mission_dir, config)
+        }
+        fn name(&self) -> &'static str {
+            Servling::name(&*self.0)
+        }
+        fn planned_invocation(&self, mission_dir: &std::path::Path, config: &RunnerConfig) -> Option<RunnerInvocation> {
+            // Create a temporary LLMRequest for planned_invocation
+            let request = LLMRequest {
+                prompt: String::new(),
+                model: config.model.clone(),
+                working_dir: config.working_dir.clone(),
+                max_runtime_seconds: config.max_runtime_seconds,
+                stream_output: config.stream_output,
+                input_file: Some(mission_dir.join("MISSION.md")),
+            };
+            Servling::planned_invocation(&*self.0, &request).map(|inv| RunnerInvocation {
+                program: inv.program,
+                args: inv.args,
+                working_dir: inv.working_dir,
+                env: inv.env,
+            })
+        }
+    }
+    Ok(Box::new(RunnerWrap(agent)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

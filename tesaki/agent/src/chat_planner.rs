@@ -212,6 +212,21 @@ pub fn strip_markdown_code_fences(text: &str) -> String {
     trimmed.to_string()
 }
 
+/// Factory to build a ChatPlanner from agent candidates.
+pub fn build_planner(candidates: Vec<servling::AgentCandidate>) -> anyhow::Result<Box<dyn ChatPlanner>> {
+    let agent = servling::build_coding_agent(candidates)?;
+    struct PlannerWrap(Box<dyn Servling>);
+    impl ChatPlanner for PlannerWrap {
+        fn plan_turn(&self, input: &ChatTurnInput) -> anyhow::Result<ChatPlan> {
+            self.0.plan_turn(input)
+        }
+        fn name(&self) -> &'static str {
+            Servling::name(&*self.0)
+        }
+    }
+    Ok(Box::new(PlannerWrap(agent)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
