@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::token_usage::TokenUsage;
+use crate::claude_agent::ClaudeAgent;
+use crate::codex_agent::CodexAgent;
+use crate::copilot_agent::CopilotAgent;
 
 /// The core trait for any AI agent provider.
 pub trait Servling: Send + Sync {
@@ -102,4 +105,23 @@ pub fn normalize_model(backend_name: &str, model: Option<String>) -> Option<Stri
 fn is_claude_tier(model: &str) -> bool {
     let lower = model.to_lowercase();
     matches!(lower.as_str(), "haiku" | "sonnet" | "opus") || lower.contains("claude-")
+}
+
+/// Build a single Servling backend.
+pub fn build_servling(name: &str, command: Option<String>) -> Result<Box<dyn Servling>> {
+    match name {
+        "claude" => {
+            ClaudeAgent::check_available()?;
+            Ok(Box::new(ClaudeAgent::new(command, true)))
+        }
+        "codex" => {
+            CodexAgent::check_available()?;
+            Ok(Box::new(CodexAgent::new(command)))
+        }
+        "copilot" => {
+            CopilotAgent::check_available()?;
+            Ok(Box::new(CopilotAgent::new(command)))
+        }
+        other => anyhow::bail!("Unknown agent backend: {}", other),
+    }
 }

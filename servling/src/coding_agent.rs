@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 use anyhow::{bail, Result};
 
-use crate::core::{Servling, LLMRequest, LLMResponse, RunnerInvocation, OutcomeClassification};
+use crate::core::{Servling, LLMRequest, LLMResponse, RunnerInvocation, OutcomeClassification, build_servling};
 
 const AI_BACKENDS: [&str; 3] = ["claude", "copilot", "codex"];
 
@@ -144,4 +144,30 @@ impl Servling for CodingAgent {
         let idx = *self.current_index.lock().unwrap();
         self.backends.get(idx).and_then(|b| b.planned_invocation(request))
     }
+}
+
+/// Build a CodingAgent (with fallbacks) from a list of candidates.
+pub fn build_coding_agent(candidates: Vec<AgentCandidate>) -> Result<Box<dyn Servling>> {
+    if candidates.len() == 1 {
+        return build_servling(&candidates[0].name, candidates[0].command.clone());
+    }
+
+    let mut builder = CodingAgent::builder();
+    let mut count = 0;
+    
+    for candidate in candidates {
+        match build_servling(&candidate.name, candidate.command.clone()) {
+            Ok(s) => {
+                builder = builder.register(s);
+                count += 1;
+            }
+            Err(e) => log::warn!("Agent candidate {} unavailable: {}", candidate.name, e),
+        }
+    }
+    
+    if count == 0 {
+        anyhow::bail!("No agent candidates available");
+    }
+    
+    Ok(Box::new(builder.build()?))
 }
