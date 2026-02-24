@@ -1,4 +1,4 @@
-# namako-codegen
+# namako_codegen
 
 Procedural macros for Namako step bindings.
 
@@ -26,5 +26,5 @@ async fn verify(world: &mut MyWorld) {
 ## Testing
 
 ```bash
-cargo test -p namako-codegen
+cargo test -p namako_codegen
 ```

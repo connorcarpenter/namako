@@ -26,7 +26,7 @@ libtest = ["dep:serde", "dep:serde_json", "timestamps"]
 # Enables step attributes and auto-wiring.
 macros = [
     "dep:anyhow",
-    "dep:namako-codegen",
+    "dep:namako_codegen",
     "dep:cucumber-expressions",
     "dep:inventory",
 ]
@@ -60,7 +60,7 @@ unicode-normalization = { version = "0.1", optional = true }
 
 # "macros" feature dependencies.
 anyhow = { version = "1.0.58", optional = true }
-namako-codegen = { version = "=0.1.0", path = "../codegen", optional = true }
+namako_codegen = { version = "=0.1.0", path = "../codegen", optional = true }
 cucumber-expressions = { version = "0.5", features = ["into-regex"], optional = true }
 inventory = { version = "0.3", optional = true }
 
