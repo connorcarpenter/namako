@@ -4,7 +4,6 @@ use anyhow::Result;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
-use crate::outcome::OutcomeClassification;
 use crate::token_usage::TokenUsage;
 
 /// The core trait for any AI agent provider.
@@ -66,4 +65,15 @@ pub struct RunnerInvocation {
     pub args: Vec<String>,
     pub working_dir: String,
     pub env: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum OutcomeClassification {
+    Ok,
+    Failed,
+    Timeout,
+    EnvironmentError,
+    /// Rate limited by the AI provider (Claude, Codex, etc.)
+    RateLimited,
 }

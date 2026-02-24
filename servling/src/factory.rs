@@ -1,12 +1,11 @@
 //! Factory and selection policy for Servling agents.
 
 use anyhow::{bail, Result};
-use crate::core::{Servling};
+use crate::core::{OutcomeClassification, Servling};
 use crate::coding_agent::CodingAgent;
 use crate::claude_agent::ClaudeAgent;
 use crate::codex_agent::CodexAgent;
 use crate::copilot_agent::CopilotAgent;
-use crate::outcome::OutcomeClassification;
 
 const AI_BACKENDS: [&str; 3] = ["claude", "copilot", "codex"];
 

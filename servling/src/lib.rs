@@ -1,6 +1,5 @@
 //! Core AI agent trait and CLI engine.
 
-pub mod outcome;
 pub mod token_usage;
 pub mod core;
 pub mod cli_backend;
@@ -11,9 +10,8 @@ pub mod codex_agent;
 pub mod copilot_agent;
 pub mod factory;
 
-pub use outcome::OutcomeClassification;
 pub use token_usage::{TokenUsage, MissionTokenStats, SessionTokenStats, MissionTypeStats, EfficiencyRating};
-pub use crate::core::{Servling, LLMRequest, LLMResponse, RunnerInvocation};
+pub use crate::core::{Servling, OutcomeClassification, LLMRequest, LLMResponse, RunnerInvocation};
 pub use cli_backend::CliBackend;
 pub use coding_agent::{CodingAgent, CodingAgentBuilder};
 pub use runner::{run_cli_runner, CliRunnerConfig, CliRunnerOutcome};

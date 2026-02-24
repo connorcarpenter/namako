@@ -1,7 +1,5 @@
 //! CLI execution logic for LLM backends.
 
-use anyhow::Result;
-use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -9,7 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::outcome::OutcomeClassification;
+use anyhow::Result;
+use serde_json::Value;
+
+use crate::core::OutcomeClassification;
 use crate::token_usage::TokenUsage;
 
 struct StreamLine {

@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use servling::outcome::OutcomeClassification;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+
+pub use servling::core::OutcomeClassification;
 pub use servling::token_usage::TokenUsage;
 pub use servling::{Servling, LLMRequest, LLMResponse, run_cli_runner, CliRunnerConfig, CliRunnerOutcome};
 
