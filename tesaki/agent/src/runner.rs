@@ -1,8 +1,11 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use crate::token_usage::TokenUsage;
+pub use servling::outcome::OutcomeClassification;
+pub use servling::token_usage::TokenUsage;
+pub use servling::{Servling, LLMRequest, LLMResponse};
 
 /// Configuration for mission execution.
 #[derive(Debug, Clone)]
@@ -37,17 +40,6 @@ pub struct RunnerOutcome {
     pub token_usage: Option<TokenUsage>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum OutcomeClassification {
-    Ok,
-    Failed,
-    Timeout,
-    EnvironmentError,
-    /// Rate limited by the AI provider (Claude, Codex, etc.)
-    RateLimited,
-}
-
 /// Mission execution interface.
 pub trait Runner: Send + Sync {
     fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome>;
@@ -63,4 +55,189 @@ pub struct RunnerInvocation {
     pub args: Vec<String>,
     pub working_dir: String,
     pub env: Vec<(String, String)>,
+}
+
+/// Blanket implementation: Every Servling is a Runner.
+impl<T: Servling> Runner for T {
+    fn name(&self) -> &'static str {
+        self.name()
+    }
+
+    fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome> {
+        let mission_path = mission_dir.join("MISSION.md");
+        let prompt = std::fs::read_to_string(&mission_path)
+            .with_context(|| format!("Failed to read mission at {}", mission_path.display()))?;
+
+        let request = LLMRequest {
+            prompt,
+            model: config.model.clone(),
+            working_dir: config.working_dir.clone(),
+            max_runtime_seconds: config.max_runtime_seconds,
+            stream_output: config.stream_output,
+            input_file: Some(mission_path),
+        };
+
+        let resp = self.execute(&request)?;
+        Ok(RunnerOutcome {
+            exit_code: resp.exit_code,
+            classification: resp.classification,
+            elapsed_seconds: resp.elapsed_seconds,
+            stdout_path: resp.stdout_path,
+            stderr_path: resp.stderr_path,
+            error_message: None,
+            token_usage: resp.token_usage,
+        })
+    }
+
+    fn planned_invocation(&self, mission_dir: &Path, config: &RunnerConfig) -> Option<RunnerInvocation> {
+        let mission_path = mission_dir.join("MISSION.md");
+        let request = LLMRequest {
+            prompt: String::new(),
+            model: config.model.clone(),
+            working_dir: config.working_dir.clone(),
+            max_runtime_seconds: config.max_runtime_seconds,
+            stream_output: config.stream_output,
+            input_file: Some(mission_path),
+        };
+        
+        self.planned_invocation(&request).map(|inv| RunnerInvocation {
+            program: inv.program,
+            args: inv.args,
+            working_dir: inv.working_dir,
+            env: inv.env,
+        })
+    }
+}
+
+/// Mock runner for testing.
+pub struct MockRunner {
+    pub should_succeed: bool,
+    pub write_attempt_report: bool,
+    pub create_file: Option<(String, String)>,
+    pub simulated_time: f64,
+}
+
+impl Default for MockRunner {
+    fn default() -> Self {
+        Self {
+            should_succeed: true,
+            write_attempt_report: true,
+            create_file: None,
+            simulated_time: 0.5,
+        }
+    }
+}
+
+impl MockRunner {
+    pub fn success() -> Self {
+        Self::default()
+    }
+
+    #[allow(dead_code)]
+    pub fn failure() -> Self {
+        Self {
+            should_succeed: false,
+            ..Default::default()
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_file(mut self, path: impl Into<String>, content: impl Into<String>) -> Self {
+        self.create_file = Some((path.into(), content.into()));
+        self
+    }
+}
+
+impl Runner for MockRunner {
+    fn run(&self, mission_dir: &Path, _config: &RunnerConfig) -> Result<RunnerOutcome> {
+        std::thread::sleep(Duration::from_secs_f64(self.simulated_time));
+
+        if self.write_attempt_report {
+            let report_path = mission_dir.join("RUNNER_OUTPUT/attempt_report.md");
+            let content = if self.should_succeed {
+                "# Attempt Report\n\nMission completed successfully (mock).\n"
+            } else {
+                "# Attempt Report\n\nMission failed (mock).\n"
+            };
+            std::fs::write(&report_path, content)
+                .context("Failed to write mock attempt report")?;
+        }
+
+        if let Some((path, content)) = &self.create_file {
+            std::fs::write(path, content)
+                .context("Failed to create mock file")?;
+        }
+
+        let (exit_code, classification) = if self.should_succeed {
+            (Some(0), OutcomeClassification::Ok)
+        } else {
+            (Some(1), OutcomeClassification::Failed)
+        };
+
+        Ok(RunnerOutcome {
+            exit_code,
+            classification,
+            elapsed_seconds: self.simulated_time,
+            stdout_path: None,
+            stderr_path: None,
+            error_message: None,
+            token_usage: None,
+        })
+    }
+
+    fn name(&self) -> &'static str {
+        "mock"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use servling::MockAgent;
+
+    #[test]
+    fn test_mock_runner_success() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mission_dir = temp_dir.path().join("mission");
+        std::fs::create_dir_all(mission_dir.join("RUNNER_OUTPUT")).unwrap();
+
+        let runner = MockRunner::success();
+        let config = RunnerConfig {
+            max_runtime_seconds: 60,
+            working_dir: temp_dir.path().to_path_buf(),
+            model: None,
+            stream_output: true,
+        };
+
+        let outcome = runner.run(&mission_dir, &config).unwrap();
+        assert_eq!(outcome.classification, OutcomeClassification::Ok);
+        assert_eq!(outcome.exit_code, Some(0));
+        assert!(mission_dir.join("RUNNER_OUTPUT/attempt_report.md").exists());
+    }
+
+    #[test]
+    fn test_blanket_runner_impl() {
+        let agent = MockAgent::success();
+        let mission_dir = tempfile::tempdir().unwrap();
+        let mission_path = mission_dir.path().join("MISSION.md");
+        std::fs::write(&mission_path, "test mission").unwrap();
+        
+        let config = RunnerConfig {
+            working_dir: PathBuf::from("."),
+            max_runtime_seconds: 30,
+            model: None,
+            stream_output: false,
+        };
+        
+        let outcome = Runner::run(&agent, mission_dir.path(), &config).unwrap();
+        assert_eq!(outcome.classification, OutcomeClassification::Ok);
+    }
+
+    #[test]
+    fn test_outcome_classification_serialization() {
+        assert_eq!(
+            serde_json::to_string(&OutcomeClassification::Ok).unwrap(),
+            "\"OK\""
+        );
+    }
 }

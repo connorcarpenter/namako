@@ -2,8 +2,7 @@
 
 use anyhow::{bail, Result};
 use std::process::{Command, Stdio};
-use crate::llm_backend::{LLMBackend, LLMRequest, LLMResponse, CliBackend};
-use crate::runner::RunnerInvocation;
+use crate::backend::{Servling, LLMRequest, LLMResponse, CliBackend, RunnerInvocation};
 
 pub struct CodexAgent {
     cli: CliBackend,
@@ -18,7 +17,6 @@ impl CodexAgent {
             cli: CliBackend {
                 name: "codex",
                 command_template: template,
-                extract_error: false,
             },
         }
     }
@@ -41,16 +39,36 @@ impl CodexAgent {
     }
 }
 
-impl LLMBackend for CodexAgent {
+impl Servling for CodexAgent {
     fn name(&self) -> &'static str {
         self.cli.name
     }
 
     fn execute(&self, request: &LLMRequest) -> Result<LLMResponse> {
-        self.cli.execute_with_expansion(request, None)
+        self.cli.execute_with_expansion(request, false, None)
     }
 
     fn planned_invocation(&self, request: &LLMRequest) -> Option<RunnerInvocation> {
-        self.cli.planned_invocation(request, None)
+        let cmd = self.cli.expand_command(
+            &self.cli.command_template,
+            &request.working_dir,
+            request.input_file.as_deref(),
+            None,
+            request.model.as_deref()
+        );
+        let parts: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
+        if parts.is_empty() { return None; }
+
+        let mission_dir = request.input_file.as_ref()
+            .and_then(|p| p.parent())
+            .unwrap_or(&request.working_dir);
+        let mission_dir_abs = std::fs::canonicalize(mission_dir).unwrap_or_else(|_| mission_dir.to_path_buf());
+
+        Some(RunnerInvocation {
+            program: parts[0].clone(),
+            args: parts[1..].to_vec(),
+            working_dir: request.working_dir.display().to_string(),
+            env: vec![("TESAKI_MISSION_DIR".to_string(), mission_dir_abs.display().to_string())],
+        })
     }
 }

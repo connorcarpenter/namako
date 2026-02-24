@@ -1,13 +1,41 @@
 //! Plan-only chat planner implementations.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::path::PathBuf;
 
+pub use servling::{Servling, LLMRequest, LLMResponse};
 use crate::chat_plan::{ChatPlan, ChatTurnInput};
 
 /// Plan-only chat interface.
 pub trait ChatPlanner: Send + Sync {
     fn plan_turn(&self, input: &ChatTurnInput) -> Result<ChatPlan>;
     fn name(&self) -> &'static str;
+}
+
+/// Blanket implementation: Every Servling is a ChatPlanner.
+impl<T: Servling> ChatPlanner for T {
+    fn name(&self) -> &'static str {
+        self.name()
+    }
+
+    fn plan_turn(&self, input: &ChatTurnInput) -> Result<ChatPlan> {
+        let prompt = format_planner_prompt(input);
+        let request = LLMRequest {
+            prompt,
+            model: None,
+            working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            max_runtime_seconds: 60,
+            stream_output: false,
+            input_file: None,
+        };
+
+        let resp = self.execute(&request)?;
+        let json_text = strip_markdown_code_fences(&resp.text);
+        
+        let plan: ChatPlan = serde_json::from_str(&json_text)
+            .with_context(|| format!("LLM returned invalid JSON for plan: {}", resp.text))?;
+        Ok(plan)
+    }
 }
 
 /// Mock chat planner for tests and offline usage.
@@ -112,4 +140,25 @@ pub fn strip_markdown_code_fences(text: &str) -> String {
         }
     }
     trimmed.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use servling::MockAgent;
+
+    #[test]
+    fn test_blanket_planner_impl() {
+        let agent = MockAgent::success();
+        let input = ChatTurnInput {
+            user_message: "hi".to_string(),
+            session_state_json: serde_json::json!({}),
+            recent_command_results: vec![],
+            planner_hint: None,
+            system_prompt: None,
+        };
+        
+        let plan = ChatPlanner::plan_turn(&agent, &input).unwrap();
+        assert_eq!(plan.say, "Mock success");
+    }
 }

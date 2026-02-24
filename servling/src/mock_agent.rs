@@ -1,8 +1,8 @@
 //! Mock agent for testing.
 
 use anyhow::Result;
-use crate::llm_backend::{LLMBackend, LLMRequest, LLMResponse};
-use crate::runner::OutcomeClassification;
+use crate::backend::{Servling, LLMRequest, LLMResponse};
+use crate::outcome::OutcomeClassification;
 
 pub struct MockAgent {
     pub response_text: String,
@@ -16,7 +16,7 @@ impl MockAgent {
     }
 }
 
-impl LLMBackend for MockAgent {
+impl Servling for MockAgent {
     fn name(&self) -> &'static str {
         "mock"
     }
