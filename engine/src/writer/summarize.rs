@@ -1,5 +1,3 @@
-
-
 //! [`Writer`]-wrapper for collecting a summary of execution.
 
 use std::{borrow::Cow, collections::HashMap};
@@ -56,8 +54,7 @@ impl Stats {
 ///
 /// [`Failed`]: event::Step::Failed
 /// [`Skipped`]: event::Step::Skipped
-pub type SkipFn =
-    fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool;
+pub type SkipFn = fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool;
 
 /// Indicator of a [`Failed`], [`Skipped`] or retried [`Scenario`].
 ///
@@ -139,8 +136,6 @@ pub struct Summarize<Writer> {
     /// [`Parser`]: crate::Parser
     parsing_errors: usize,
 
-
-
     /// Current [`State`] of this [`Writer`].
     state: State,
 
@@ -179,7 +174,7 @@ where
         event: parser::Result<Event<event::Namako<W>>>,
         cli: &Self::Cli,
     ) {
-        use event::{Namako, Feature, Rule};
+        use event::{Feature, Namako, Rule};
 
         // Once `Namako::Finished` is emitted, we just pass events through,
         // without collecting `Stats`.
@@ -194,20 +189,10 @@ where
                         self.rules += 1;
                     }
                     Feature::Rule(rule, Rule::Scenario(sc, ev)) => {
-                        self.handle_scenario(
-                            feat.clone(),
-                            Some(rule.clone()),
-                            sc.clone(),
-                            ev,
-                        );
+                        self.handle_scenario(feat.clone(), Some(rule.clone()), sc.clone(), ev);
                     }
                     Feature::Scenario(sc, ev) => {
-                        self.handle_scenario(
-                            feat.clone(),
-                            None,
-                            sc.clone(),
-                            ev,
-                        );
+                        self.handle_scenario(feat.clone(), None, sc.clone(), ev);
                     }
                     Feature::Finished | Feature::Rule(..) => {}
                 },
@@ -276,8 +261,16 @@ impl<Writer> From<Writer> for Summarize<Writer> {
             writer,
             features: 0,
             rules: 0,
-            scenarios: Stats { passed: 0, skipped: 0, failed: 0 },
-            steps: Stats { passed: 0, skipped: 0, failed: 0 },
+            scenarios: Stats {
+                passed: 0,
+                skipped: 0,
+                failed: 0,
+            },
+            steps: Stats {
+                passed: 0,
+                skipped: 0,
+                failed: 0,
+            },
             parsing_errors: 0,
             state: State::InProgress,
             handled_scenarios: HashMap::new(),
@@ -307,9 +300,7 @@ impl<Writer> Summarize<Writer> {
             Step::Passed(..) => {
                 self.steps.passed += 1;
                 if scenario.steps.last().filter(|s| *s == step).is_some() {
-                    _ = self
-                        .handled_scenarios
-                        .remove(&(feature, rule, scenario));
+                    _ = self.handled_scenarios.remove(&(feature, rule, scenario));
                 }
             }
             Step::Skipped => {
@@ -345,8 +336,7 @@ impl<Writer> Summarize<Writer> {
         let path = (feature, rule, scenario);
 
         match ev {
-            Scenario::Started
-            | Scenario::Log(_) => {}
+            Scenario::Started | Scenario::Log(_) => {}
             Scenario::Background(st, ev) | Scenario::Step(st, ev) => {
                 self.handle_step(path.0, path.1, path.2, st.as_ref(), ev);
             }
@@ -469,8 +459,7 @@ impl Styles {
             String::new()
         };
 
-        let scenarios =
-            self.maybe_plural("scenario", summary.scenarios.total());
+        let scenarios = self.maybe_plural("scenario", summary.scenarios.total());
         let scenarios_stats = self.format_stats(summary.scenarios);
 
         let steps = self.maybe_plural("step", summary.steps.total());
@@ -518,11 +507,7 @@ impl Styles {
         if formatted.is_empty() {
             "".into()
         } else {
-            self.bold(format!(
-                " {}{formatted}{}",
-                self.bold("("),
-                self.bold(")"),
-            ))
+            self.bold(format!(" {}{formatted}{}", self.bold("("), self.bold(")"),))
         }
     }
 

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use gherkin::{Feature, GherkinEnv, Rule, Scenario};
 use serde::Serialize;
@@ -228,8 +228,8 @@ pub struct BundleStepInfo {
 pub fn run(args: ReviewArgs) -> Result<()> {
     let output = compute_review(&args)?;
 
-    let json = serde_json::to_string_pretty(&output)
-        .context("Failed to serialize review output")?;
+    let json =
+        serde_json::to_string_pretty(&output).context("Failed to serialize review output")?;
 
     if let Some(ref out_path) = args.out {
         // Ensure parent directory exists
@@ -249,16 +249,27 @@ pub fn run(args: ReviewArgs) -> Result<()> {
             eprintln!("✓ Review written to: {}", out_path.display());
         }
         eprintln!("  Features: {}", output.features.len());
-        eprintln!("  Executable scenarios: {}", output.coverage_summary.executable_scenarios_total);
-        eprintln!("  Deferred items: {}", output.coverage_summary.deferred_items_total);
-        eprintln!("  Promotion candidates: {}", output.promotion_candidates.len());
+        eprintln!(
+            "  Executable scenarios: {}",
+            output.coverage_summary.executable_scenarios_total
+        );
+        eprintln!(
+            "  Deferred items: {}",
+            output.coverage_summary.deferred_items_total
+        );
+        eprintln!(
+            "  Promotion candidates: {}",
+            output.promotion_candidates.len()
+        );
     }
 
     Ok(())
 }
 
 fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
-    let spec_root = args.specs_dir.canonicalize()
+    let spec_root = args
+        .specs_dir
+        .canonicalize()
         .unwrap_or_else(|_| args.specs_dir.clone())
         .to_string_lossy()
         .to_string();
@@ -295,7 +306,8 @@ fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
         }
     } else {
         // Compute partial identity
-        let feature_hash = namako_engine::npap::compute_feature_fingerprint(feature_refs.into_iter());
+        let feature_hash =
+            namako_engine::npap::compute_feature_fingerprint(feature_refs.into_iter());
         IdentityCurrent {
             hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
             feature_fingerprint_hash: feature_hash,
@@ -305,7 +317,9 @@ fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
     };
 
     // Build set of existing step expressions for reuse detection
-    let existing_expressions: BTreeSet<(String, String)> = registry.bindings.iter()
+    let existing_expressions: BTreeSet<(String, String)> = registry
+        .bindings
+        .iter()
         .map(|b| (b.kind.clone(), b.expression.clone()))
         .collect();
 
@@ -341,14 +355,14 @@ fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
     feature_reviews.sort_by(|a, b| a.feature_path.cmp(&b.feature_path));
 
     // Compute coverage summary
-    let rules_total: u32 = feature_reviews.iter()
-        .map(|f| f.rules.len() as u32)
-        .sum();
-    let rules_with_zero_executable: u32 = feature_reviews.iter()
+    let rules_total: u32 = feature_reviews.iter().map(|f| f.rules.len() as u32).sum();
+    let rules_with_zero_executable: u32 = feature_reviews
+        .iter()
         .flat_map(|f| &f.rules)
         .filter(|r| r.executable_scenarios.is_empty())
         .count() as u32;
-    let executable_scenarios_total: u32 = feature_reviews.iter()
+    let executable_scenarios_total: u32 = feature_reviews
+        .iter()
         .flat_map(|f| &f.rules)
         .map(|r| r.executable_scenarios.len() as u32)
         .sum();
@@ -365,7 +379,8 @@ fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
     // Ranking: highest reuse_score first, then lowest new_step_texts_estimate
     // Tie-breaker: feature_path, rule_name, scenario_name
     promotion_candidates.sort_by(|a, b| {
-        b.reuse_score.cmp(&a.reuse_score)
+        b.reuse_score
+            .cmp(&a.reuse_score)
             .then_with(|| a.new_step_texts_estimate.cmp(&b.new_step_texts_estimate))
             .then_with(|| a.feature_path.cmp(&b.feature_path))
             .then_with(|| a.rule_name.cmp(&b.rule_name))
@@ -420,7 +435,9 @@ fn analyze_feature(
     // Check if feature has rules or just scenarios at the top level
     if feature.rules.is_empty() {
         // Top-level scenarios go into a synthetic "default" rule
-        let scenarios: Vec<ScenarioReview> = feature.scenarios.iter()
+        let scenarios: Vec<ScenarioReview> = feature
+            .scenarios
+            .iter()
             .filter(|s| !is_deferred_scenario(s, &lines))
             .map(|s| scenario_to_review(s, &lines))
             .collect();
@@ -496,7 +513,9 @@ fn analyze_rule(
     existing_expressions: &BTreeSet<(String, String)>,
     include_deferred: bool,
 ) -> (RuleReview, Vec<DeferredItem>, Vec<PromotionCandidate>) {
-    let scenarios: Vec<ScenarioReview> = rule.scenarios.iter()
+    let scenarios: Vec<ScenarioReview> = rule
+        .scenarios
+        .iter()
         .filter(|s| !is_deferred_scenario(s, lines))
         .map(|s| scenario_to_review(s, lines))
         .collect();
@@ -613,28 +632,44 @@ fn scenario_to_review(scenario: &Scenario, lines: &[&str]) -> ScenarioReview {
 
     ScenarioReview {
         name: scenario.name.clone(),
-        source_span: SourceSpan { start_line, end_line },
+        source_span: SourceSpan {
+            start_line,
+            end_line,
+        },
         steps: scenario_steps_to_info(scenario, lines),
     }
 }
 
 fn scenario_steps_to_info(scenario: &Scenario, _lines: &[&str]) -> Vec<StepInfo> {
     let mut last_keyword = "Given";
-    scenario.steps.iter().map(|step| {
-        let kind = normalize_step_kind(&step.keyword, &mut last_keyword);
-        StepInfo {
-            kind: kind.to_string(),
-            text: step.value.clone(),
-        }
-    }).collect()
+    scenario
+        .steps
+        .iter()
+        .map(|step| {
+            let kind = normalize_step_kind(&step.keyword, &mut last_keyword);
+            StepInfo {
+                kind: kind.to_string(),
+                text: step.value.clone(),
+            }
+        })
+        .collect()
 }
 
 fn normalize_step_kind<'a>(keyword: &str, last_keyword: &mut &'a str) -> &'a str {
     let kw = keyword.trim();
     match kw {
-        "Given" => { *last_keyword = "Given"; "Given" }
-        "When" => { *last_keyword = "When"; "When" }
-        "Then" => { *last_keyword = "Then"; "Then" }
+        "Given" => {
+            *last_keyword = "Given";
+            "Given"
+        }
+        "When" => {
+            *last_keyword = "When";
+            "When"
+        }
+        "Then" => {
+            *last_keyword = "Then";
+            "Then"
+        }
         "And" | "But" | "*" => *last_keyword,
         _ => *last_keyword,
     }
@@ -679,16 +714,19 @@ fn extract_deferred_section(source: &str) -> Vec<DeferredItem> {
 
         // Check for DEFERRED TESTS section header
         if trimmed.to_uppercase().contains("DEFERRED TESTS")
-            || trimmed.to_uppercase().contains("# DEFERRED") {
+            || trimmed.to_uppercase().contains("# DEFERRED")
+        {
             in_deferred = true;
             continue;
         }
 
         // Check for end of deferred section (next rule, next scenario, etc.)
-        if in_deferred && (trimmed.starts_with("Rule:")
-            || trimmed.starts_with("Scenario:")
-            || trimmed.starts_with("Feature:")
-            || trimmed.starts_with("@")) {
+        if in_deferred
+            && (trimmed.starts_with("Rule:")
+                || trimmed.starts_with("Scenario:")
+                || trimmed.starts_with("Feature:")
+                || trimmed.starts_with("@"))
+        {
             // Flush current item
             if !current_item_lines.is_empty() {
                 items.push(DeferredItem {
@@ -751,7 +789,8 @@ fn compute_reuse_metrics(
         // Check if this step text matches any existing expression exactly
         // (simplified check - just look for exact text match)
         let matches = existing_expressions.iter().any(|(kind, expr)| {
-            kind == &step.kind && (expr == &step.text || expr.contains(&step.text) || step.text.contains(expr))
+            kind == &step.kind
+                && (expr == &step.text || expr.contains(&step.text) || step.text.contains(expr))
         });
 
         if matches {
@@ -768,21 +807,26 @@ fn compute_missing_bindings(
     candidates: &[PromotionCandidate],
     existing_expressions: &BTreeSet<(String, String)>,
 ) -> Vec<MissingBindingInfo> {
-    candidates.iter().map(|candidate| {
-        let missing: Vec<String> = candidate.steps.iter()
-            .filter(|step| {
-                !existing_expressions.iter().any(|(kind, expr)| {
-                    kind == &step.kind && (expr == &step.text || expr.contains(&step.text))
+    candidates
+        .iter()
+        .map(|candidate| {
+            let missing: Vec<String> = candidate
+                .steps
+                .iter()
+                .filter(|step| {
+                    !existing_expressions.iter().any(|(kind, expr)| {
+                        kind == &step.kind && (expr == &step.text || expr.contains(&step.text))
+                    })
                 })
-            })
-            .map(|step| format!("{} {}", step.kind, step.text))
-            .collect();
+                .map(|step| format!("{} {}", step.kind, step.text))
+                .collect();
 
-        MissingBindingInfo {
-            candidate_name: candidate.scenario_name.clone(),
-            missing_step_texts: missing,
-        }
-    }).collect()
+            MissingBindingInfo {
+                candidate_name: candidate.scenario_name.clone(),
+                missing_step_texts: missing,
+            }
+        })
+        .collect()
 }
 
 /// Compute a suggested binding bundle from top N promotion candidates.
@@ -818,9 +862,9 @@ fn compute_binding_bundle(
                     "Then" => 2,
                     _ => 3,
                 };
-                kind_order(&a.0.0).cmp(&kind_order(&b.0.0))
+                kind_order(&a.0 .0).cmp(&kind_order(&b.0 .0))
             })
-            .then_with(|| a.0.1.cmp(&b.0.1)) // text asc
+            .then_with(|| a.0 .1.cmp(&b.0 .1)) // text asc
     });
 
     let total_steps = steps.len();
@@ -829,7 +873,11 @@ fn compute_binding_bundle(
     let bundle_steps: Vec<BundleStepInfo> = steps
         .into_iter()
         .take(15) // Limit to top 15 most common missing steps
-        .map(|((kind, text), frequency)| BundleStepInfo { kind, text, frequency })
+        .map(|((kind, text), frequency)| BundleStepInfo {
+            kind,
+            text,
+            frequency,
+        })
         .collect();
 
     // Generate rationale
@@ -863,7 +911,8 @@ fn build_deferred_items_section(candidates: &[PromotionCandidate]) -> Vec<Deferr
         .map(|(i, c)| {
             // Generate a synthetic scenario key for deferred scenarios
             // Format: <feature_name>:<rule>:Scenario(<n>)
-            let feature_name = c.feature_path
+            let feature_name = c
+                .feature_path
                 .split('/')
                 .last()
                 .unwrap_or(&c.feature_path)
@@ -878,12 +927,7 @@ fn build_deferred_items_section(candidates: &[PromotionCandidate]) -> Vec<Deferr
                 format!(":Rule({:02})", 1) // Simplified - would need actual rule ID
             };
 
-            let scenario_key = format!(
-                "{}{}:Scenario({:02})",
-                feature_name,
-                rule_part,
-                i + 1
-            );
+            let scenario_key = format!("{}{}:Scenario({:02})", feature_name, rule_part, i + 1);
 
             DeferredScenarioItem {
                 scenario_key,
@@ -908,7 +952,9 @@ fn build_harness_gaps_section(candidates: &[PromotionCandidate]) -> Vec<HarnessG
     for candidate in candidates {
         if candidate.blocker == BlockerType::HarnessOnly {
             // Default capability for HARNESS_ONLY scenarios
-            *gap_counts.entry("test_harness_capability".to_string()).or_insert(0) += 1;
+            *gap_counts
+                .entry("test_harness_capability".to_string())
+                .or_insert(0) += 1;
         }
         // TODO: Parse @HarnessGap(capability) tags when implemented
     }
@@ -923,7 +969,8 @@ fn build_harness_gaps_section(candidates: &[PromotionCandidate]) -> Vec<HarnessG
         .collect();
 
     gaps.sort_by(|a, b| {
-        b.blocked_count.cmp(&a.blocked_count)
+        b.blocked_count
+            .cmp(&a.blocked_count)
             .then_with(|| a.capability.cmp(&b.capability))
     });
 
@@ -952,10 +999,7 @@ fn discover_features(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Read feature files and return (relative_path, content) pairs.
-fn read_features(
-    specs_dir: &std::path::Path,
-    paths: &[PathBuf],
-) -> Result<Vec<(String, String)>> {
+fn read_features(specs_dir: &std::path::Path, paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
     let mut features = Vec::with_capacity(paths.len());
 
     for path in paths {
@@ -997,8 +1041,7 @@ fn fetch_adapter_manifest(adapter_cmd: &str) -> Result<SemanticStepRegistry> {
         bail!("Adapter command failed: {}", stderr);
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("Adapter output is not valid UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("Adapter output is not valid UTF-8")?;
 
     serde_json::from_str(&stdout).context("Failed to parse adapter manifest JSON")
 }
@@ -1047,7 +1090,10 @@ Feature: Test
             span: Default::default(),
             position: gherkin::LineCol { line: 1, col: 1 },
         };
-        assert!(is_stub_scenario(&scenario), "Scenario with @Stub tag should be detected as stub");
+        assert!(
+            is_stub_scenario(&scenario),
+            "Scenario with @Stub tag should be detected as stub"
+        );
     }
 
     #[test]
@@ -1063,7 +1109,10 @@ Feature: Test
             span: Default::default(),
             position: gherkin::LineCol { line: 1, col: 1 },
         };
-        assert!(is_stub_scenario(&scenario), "Scenario with @@Stub tag should be detected as stub");
+        assert!(
+            is_stub_scenario(&scenario),
+            "Scenario with @@Stub tag should be detected as stub"
+        );
     }
 
     #[test]
@@ -1079,7 +1128,10 @@ Feature: Test
             span: Default::default(),
             position: gherkin::LineCol { line: 1, col: 1 },
         };
-        assert!(!is_stub_scenario(&scenario), "Regular deferred scenario should NOT be detected as stub");
+        assert!(
+            !is_stub_scenario(&scenario),
+            "Regular deferred scenario should NOT be detected as stub"
+        );
     }
 
     #[test]

@@ -1,5 +1,3 @@
-
-
 //! Wrappers providing no-op implementations.
 
 use derive_more::with_trait::{Deref, DerefMut};
@@ -19,11 +17,7 @@ pub struct Arbitrary<Wr: ?Sized>(Wr);
 impl<W: World, Wr: Writer<W> + ?Sized> Writer<W> for Arbitrary<Wr> {
     type Cli = Wr::Cli;
 
-    async fn handle_event(
-        &mut self,
-        event: parser::Result<Event<Namako<W>>>,
-        cli: &Self::Cli,
-    ) {
+    async fn handle_event(&mut self, event: parser::Result<Event<Namako<W>>>, cli: &Self::Cli) {
         self.0.handle_event(event, cli).await;
     }
 }
@@ -96,11 +90,7 @@ pub struct Stats<Wr: ?Sized>(Wr);
 impl<W: World, Wr: Writer<W> + ?Sized> Writer<W> for Stats<Wr> {
     type Cli = Wr::Cli;
 
-    async fn handle_event(
-        &mut self,
-        event: parser::Result<Event<Namako<W>>>,
-        cli: &Self::Cli,
-    ) {
+    async fn handle_event(&mut self, event: parser::Result<Event<Namako<W>>>, cli: &Self::Cli) {
         self.0.handle_event(event, cli).await;
     }
 }

@@ -1,5 +1,3 @@
-
-
 //! Default [`Writer`] implementation.
 
 use std::{
@@ -134,17 +132,13 @@ where
         event: parser::Result<Event<event::Namako<W>>>,
         cli: &Self::Cli,
     ) {
-        use event::{Namako, Feature};
+        use event::{Feature, Namako};
 
         self.apply_cli(*cli);
 
         match event.map(Event::into_inner) {
             Err(err) => self.parsing_failed(&err),
-            Ok(
-                Namako::Started
-                | Namako::ParsingFinished { .. }
-                | Namako::Finished,
-            ) => Ok(()),
+            Ok(Namako::Started | Namako::ParsingFinished { .. } | Namako::Finished) => Ok(()),
             Ok(Namako::Feature(f, ev)) => match ev {
                 Feature::Started => self.feature_started(&f),
                 Feature::Scenario(sc, ev) => self.scenario(&f, &sc, &ev),
@@ -204,11 +198,7 @@ impl<Out: io::Write> Basic<Out> {
     ///
     /// [`Normalized`]: writer::Normalized
     #[must_use]
-    pub fn raw(
-        output: Out,
-        color: Coloring,
-        verbosity: impl Into<Verbosity>,
-    ) -> Self {
+    pub fn raw(output: Out, color: Coloring, verbosity: impl Into<Verbosity>) -> Self {
         let mut basic = Self {
             output,
             styles: Styles::new(),
@@ -217,7 +207,10 @@ impl<Out: io::Write> Basic<Out> {
             re_output_after_clear: String::new(),
             verbosity: verbosity.into(),
         };
-        basic.apply_cli(Cli { verbose: u8::from(basic.verbosity) + 1, color });
+        basic.apply_cli(Cli {
+            verbose: u8::from(basic.verbosity) + 1,
+            color,
+        });
         basic
     }
 
@@ -246,10 +239,7 @@ impl<Out: io::Write> Basic<Out> {
     /// Outputs the parsing `error` encountered while parsing some [`Feature`].
     ///
     /// [`Feature`]: gherkin::Feature
-    pub(crate) fn parsing_failed(
-        &mut self,
-        error: impl Display,
-    ) -> io::Result<()> {
+    pub(crate) fn parsing_failed(&mut self, error: impl Display) -> io::Result<()> {
         self.output
             .write_line(self.styles.err(format!("Failed to parse: {error}")))
     }
@@ -258,10 +248,7 @@ impl<Out: io::Write> Basic<Out> {
     ///
     /// [started]: event::Feature::Started
     /// [`Feature`]: gherkin::Feature
-    pub(crate) fn feature_started(
-        &mut self,
-        feature: &gherkin::Feature,
-    ) -> io::Result<()> {
+    pub(crate) fn feature_started(&mut self, feature: &gherkin::Feature) -> io::Result<()> {
         let out = format!("{}: {}", feature.keyword, feature.name);
         self.output.write_line(self.styles.ok(out))
     }
@@ -298,10 +285,7 @@ impl<Out: io::Write> Basic<Out> {
     ///
     /// [started]: event::Rule::Started
     /// [`Rule`]: gherkin::Rule
-    pub(crate) fn rule_started(
-        &mut self,
-        rule: &gherkin::Rule,
-    ) -> io::Result<()> {
+    pub(crate) fn rule_started(&mut self, rule: &gherkin::Rule) -> io::Result<()> {
         let out = format!(
             "{indent}{}: {}",
             rule.keyword,
@@ -356,15 +340,11 @@ impl<Out: io::Write> Basic<Out> {
     /// [failed]: event::Hook::Failed
     /// [`Scenario`]: gherkin::Scenario
 
-
     /// Outputs the [started] [`Scenario`].
     ///
     /// [started]: event::Scenario::Started
     /// [`Scenario`]: gherkin::Scenario
-    pub(crate) fn scenario_started(
-        &mut self,
-        scenario: &gherkin::Scenario,
-    ) -> io::Result<()> {
+    pub(crate) fn scenario_started(&mut self, scenario: &gherkin::Scenario) -> io::Result<()> {
         self.indent += 2;
 
         let out = format!(
@@ -405,14 +385,7 @@ impl<Out: io::Write> Basic<Out> {
                 self.indent = self.indent.saturating_sub(4);
             }
             Step::Failed(c, loc, w, i) => {
-                self.step_failed(
-                    feat,
-                    step,
-                    c.as_ref(),
-                    *loc,
-                    w.as_ref(),
-                    i,
-                )?;
+                self.step_failed(feat, step, c.as_ref(), *loc, w.as_ref(), i)?;
                 self.indent = self.indent.saturating_sub(4);
             }
         }
@@ -429,10 +402,7 @@ impl<Out: io::Write> Basic<Out> {
     /// [skipped]: event::Step::Skipped
     /// [started]: event::Step::Started
     /// [`Step`]: gherkin::Step
-    pub(crate) fn step_started(
-        &mut self,
-        step: &gherkin::Step,
-    ) -> io::Result<()> {
+    pub(crate) fn step_started(&mut self, step: &gherkin::Step) -> io::Result<()> {
         self.indent += 4;
         if self.styles.is_present {
             let out = format!(
@@ -441,14 +411,9 @@ impl<Out: io::Write> Basic<Out> {
                 step.value,
                 step.docstring
                     .as_ref()
-                    .and_then(|doc| self.verbosity.shows_docstring().then(
-                        || {
-                            format_str_with_indent(
-                                doc,
-                                self.indent.saturating_sub(3) + 3,
-                            )
-                        }
-                    ))
+                    .and_then(|doc| self.verbosity.shows_docstring().then(|| {
+                        format_str_with_indent(doc, self.indent.saturating_sub(3) + 3)
+                    }))
                     .unwrap_or_default(),
                 step.table
                     .as_ref()
@@ -488,12 +453,9 @@ impl<Out: io::Write> Basic<Out> {
             step.docstring
                 .as_ref()
                 .and_then(|doc| {
-                    self.verbosity.shows_docstring().then(|| {
-                        format_str_with_indent(
-                            doc,
-                            self.indent.saturating_sub(3) + 3,
-                        )
-                    })
+                    self.verbosity
+                        .shows_docstring()
+                        .then(|| format_str_with_indent(doc, self.indent.saturating_sub(3) + 3))
                 })
                 .unwrap_or_default(),
         );
@@ -569,7 +531,6 @@ impl<Out: io::Write> Basic<Out> {
 
         let indent = " ".repeat(self.indent.saturating_sub(3));
 
-
         let step_keyword = style(format!("{indent}✘  {}", step.keyword));
         let step_value = captures.map_or_else(
             || style(step.value.clone()),
@@ -590,12 +551,10 @@ impl<Out: io::Write> Basic<Out> {
              {indent}   Defined: {}:{}:{}{}{}{}",
             step.docstring
                 .as_ref()
-                .and_then(|doc| self.verbosity.shows_docstring().then(|| {
-                    format_str_with_indent(
-                        doc,
-                        self.indent.saturating_sub(3) + 3,
-                    )
-                }))
+                .and_then(|doc| self
+                    .verbosity
+                    .shows_docstring()
+                    .then(|| { format_str_with_indent(doc, self.indent.saturating_sub(3) + 3,) }))
                 .unwrap_or_default(),
             step.table
                 .as_ref()
@@ -607,15 +566,9 @@ impl<Out: io::Write> Basic<Out> {
                 .unwrap_or(&feat.name),
             step.position.line,
             step.position.col,
-            loc.map(|l| format!(
-                "\n{indent}   Matched: {}:{}:{}",
-                l.path, l.line, l.column,
-            ))
-            .unwrap_or_default(),
-            format_str_with_indent(
-                err.to_string(),
-                self.indent.saturating_sub(3) + 3,
-            ),
+            loc.map(|l| format!("\n{indent}   Matched: {}:{}:{}", l.path, l.line, l.column,))
+                .unwrap_or_default(),
+            format_str_with_indent(err.to_string(), self.indent.saturating_sub(3) + 3,),
             world
                 .map(|w| format_str_with_indent(
                     format!("{w:#?}"),
@@ -660,14 +613,7 @@ impl<Out: io::Write> Basic<Out> {
                 self.indent = self.indent.saturating_sub(4);
             }
             Step::Failed(c, loc, w, i) => {
-                self.bg_step_failed(
-                    feat,
-                    bg,
-                    c.as_ref(),
-                    *loc,
-                    w.as_ref(),
-                    i,
-                )?;
+                self.bg_step_failed(feat, bg, c.as_ref(), *loc, w.as_ref(), i)?;
                 self.indent = self.indent.saturating_sub(4);
             }
         }
@@ -685,10 +631,7 @@ impl<Out: io::Write> Basic<Out> {
     /// [started]: event::Step::Started
     /// [`Background`]: gherkin::Background
     /// [`Step`]: gherkin::Step
-    pub(crate) fn bg_step_started(
-        &mut self,
-        step: &gherkin::Step,
-    ) -> io::Result<()> {
+    pub(crate) fn bg_step_started(&mut self, step: &gherkin::Step) -> io::Result<()> {
         self.indent += 4;
         if self.styles.is_present {
             let out = format!(
@@ -697,14 +640,9 @@ impl<Out: io::Write> Basic<Out> {
                 step.value,
                 step.docstring
                     .as_ref()
-                    .and_then(|doc| self.verbosity.shows_docstring().then(
-                        || {
-                            format_str_with_indent(
-                                doc,
-                                self.indent.saturating_sub(3) + 3,
-                            )
-                        }
-                    ))
+                    .and_then(|doc| self.verbosity.shows_docstring().then(|| {
+                        format_str_with_indent(doc, self.indent.saturating_sub(3) + 3)
+                    }))
                     .unwrap_or_default(),
                 step.table
                     .as_ref()
@@ -735,7 +673,6 @@ impl<Out: io::Write> Basic<Out> {
 
         let indent = " ".repeat(self.indent.saturating_sub(3));
 
-
         let step_keyword = style(format!("{indent}✔> {}", step.keyword));
         let step_value = format_captures(
             &step.value,
@@ -747,12 +684,9 @@ impl<Out: io::Write> Basic<Out> {
             step.docstring
                 .as_ref()
                 .and_then(|doc| {
-                    self.verbosity.shows_docstring().then(|| {
-                        format_str_with_indent(
-                            doc,
-                            self.indent.saturating_sub(3) + 3,
-                        )
-                    })
+                    self.verbosity
+                        .shows_docstring()
+                        .then(|| format_str_with_indent(doc, self.indent.saturating_sub(3) + 3))
                 })
                 .unwrap_or_default(),
         );
@@ -849,12 +783,10 @@ impl<Out: io::Write> Basic<Out> {
              {indent}   Defined: {}:{}:{}{}{}{}",
             step.docstring
                 .as_ref()
-                .and_then(|doc| self.verbosity.shows_docstring().then(|| {
-                    format_str_with_indent(
-                        doc,
-                        self.indent.saturating_sub(3) + 3,
-                    )
-                }))
+                .and_then(|doc| self
+                    .verbosity
+                    .shows_docstring()
+                    .then(|| { format_str_with_indent(doc, self.indent.saturating_sub(3) + 3,) }))
                 .unwrap_or_default(),
             step.table
                 .as_ref()
@@ -866,15 +798,9 @@ impl<Out: io::Write> Basic<Out> {
                 .unwrap_or(&feat.name),
             step.position.line,
             step.position.col,
-            loc.map(|l| format!(
-                "\n{indent}   Matched: {}:{}:{}",
-                l.path, l.line, l.column,
-            ))
-            .unwrap_or_default(),
-            format_str_with_indent(
-                err.to_string(),
-                self.indent.saturating_sub(3) + 3,
-            ),
+            loc.map(|l| format!("\n{indent}   Matched: {}:{}:{}", l.path, l.line, l.column,))
+                .unwrap_or_default(),
+            format_str_with_indent(err.to_string(), self.indent.saturating_sub(3) + 3,),
             world
                 .map(|w| format_str_with_indent(
                     format!("{w:#?}"),
@@ -909,7 +835,11 @@ fn format_str_with_indent(str: impl AsRef<str>, indent: usize) -> String {
         .lines()
         .map(|line| format!("{}{line}", " ".repeat(indent)))
         .join("\n");
-    if str.is_empty() { String::new() } else { format!("\n{str}") }
+    if str.is_empty() {
+        String::new()
+    } else {
+        format!("\n{str}")
+    }
 }
 
 /// Formats the given [`gherkin::Table`] and adds `indent`s to each line to
@@ -936,13 +866,12 @@ fn format_table(table: &gherkin::Table, indent: usize) -> String {
         .rows
         .iter()
         .map(|row| {
-            row.iter().zip(&max_row_len).fold(
-                String::new(),
-                |mut out, (cell, len)| {
+            row.iter()
+                .zip(&max_row_len)
+                .fold(String::new(), |mut out, (cell, len)| {
                     _ = write!(out, "| {cell:len$} ");
                     out
-                },
-            )
+                })
         })
         .map(|row| format!("{}{row}", " ".repeat(indent + 1)))
         .join("|\n");
@@ -974,8 +903,9 @@ where
 
     let value = value.as_ref();
 
-    let (mut formatted, end) =
-        (1..captures.len()).filter_map(|group| captures.get(group)).fold(
+    let (mut formatted, end) = (1..captures.len())
+        .filter_map(|group| captures.get(group))
+        .fold(
             (String::with_capacity(value.len()), 0),
             |(mut str, old), (start, end)| {
                 // Ignore nested groups.

@@ -1,5 +1,3 @@
-
-
 //! Passing events to multiple terminating [`Writer`]s simultaneously.
 
 use std::cmp;

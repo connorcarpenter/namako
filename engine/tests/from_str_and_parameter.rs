@@ -2,10 +2,7 @@ mod test_utils;
 
 use std::{convert::Infallible, str::FromStr};
 
-use namako_engine::{
-    Parameter, StatsWriter as _, World as _,
-    given, then,
-};
+use namako_engine::{Parameter, StatsWriter as _, World as _, given, then};
 
 use test_utils::{World, WorldMut, WorldRef};
 

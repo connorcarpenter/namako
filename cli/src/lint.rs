@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use walkdir::WalkDir;
 
@@ -84,12 +84,8 @@ pub fn run(args: LintArgs) -> Result<()> {
     }
 
     // Step 4: Build resolution engine
-    let engine = ResolutionEngine::new(&registry).map_err(|errs| {
-        anyhow::anyhow!(
-            "Failed to build resolution engine: {:?}",
-            errs
-        )
-    })?;
+    let engine = ResolutionEngine::new(&registry)
+        .map_err(|errs| anyhow::anyhow!("Failed to build resolution engine: {:?}", errs))?;
 
     // Step 5: Resolve features - engine expects (relative_path, source) pairs
     let feature_refs: Vec<(&str, &str)> = features
@@ -150,8 +146,7 @@ pub fn run(args: LintArgs) -> Result<()> {
     }
 
     // Write resolved_plan.json
-    let json = serde_json::to_string_pretty(&plan)
-        .context("Failed to serialize resolved plan")?;
+    let json = serde_json::to_string_pretty(&plan).context("Failed to serialize resolved plan")?;
     std::fs::write(&args.output, &json)
         .with_context(|| format!("Failed to write {}", args.output.display()))?;
 
@@ -245,18 +240,16 @@ fn fetch_adapter_manifest(adapter_cmd: &str) -> Result<SemanticStepRegistry> {
         );
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("Adapter output is not valid UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("Adapter output is not valid UTF-8")?;
 
-    serde_json::from_str(&stdout)
-        .context("Failed to parse adapter manifest JSON")
+    serde_json::from_str(&stdout).context("Failed to parse adapter manifest JSON")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_discover_features() {

@@ -13,9 +13,11 @@ pub fn select_mission_type(state: &RepoState) -> Option<MissionType> {
         });
     }
 
-    if let Some(issue) = state.binding_issues.iter().find(|i| {
-        matches!(i.kind, BindingIssueKind::MissingBinding) && i.scenario_key.is_some()
-    }) {
+    if let Some(issue) = state
+        .binding_issues
+        .iter()
+        .find(|i| matches!(i.kind, BindingIssueKind::MissingBinding) && i.scenario_key.is_some())
+    {
         return Some(MissionType::CreateMissingBindings {
             scenario_key: issue.scenario_key.clone().unwrap(),
             missing_steps: issue.step_text.clone().into_iter().collect(),
@@ -46,12 +48,16 @@ pub fn select_mission_type(state: &RepoState) -> Option<MissionType> {
 
     if let Some(issue) = select_spec_issue_for_add_scenario(state) {
         // Check if this is a zero-coverage rule
-        let rule_has_zero_scenarios = issue.rule_name.as_ref()
+        let rule_has_zero_scenarios = issue
+            .rule_name
+            .as_ref()
             .map(|r| state.scenario_count_for_rule(&issue.feature_path, r) == Some(0))
             .unwrap_or(false);
 
         // Check for deferred scenarios that could be promoted
-        let deferred = issue.rule_name.as_ref()
+        let deferred = issue
+            .rule_name
+            .as_ref()
             .map(|r| state.deferred_scenarios_for_rule(&issue.feature_path, r))
             .unwrap_or_default();
 
@@ -88,7 +94,10 @@ pub fn select_mission_type_for_stage(
     let stage = stage?;
 
     if let Some(candidate) = select_mission_type(state) {
-        if stage.applicable_mission_types().contains(&candidate.category()) {
+        if stage
+            .applicable_mission_types()
+            .contains(&candidate.category())
+        {
             Some(candidate)
         } else {
             select_alternative_for_stage(state, stage)
@@ -121,9 +130,11 @@ fn select_alternative_for_stage(state: &RepoState, stage: Stage) -> Option<Missi
     }
 
     if category.contains(&MissionTypeCategory::Structure) {
-        if let Some(issue) = state.structure_issues.iter().find(|i| {
-            matches!(i.kind, StructureIssueKind::MissingIdentityTag)
-        }) {
+        if let Some(issue) = state
+            .structure_issues
+            .iter()
+            .find(|i| matches!(i.kind, StructureIssueKind::MissingIdentityTag))
+        {
             let missing_tags = extract_tags_from_description(&issue.description);
             return Some(MissionType::NormalizeIdentityTags {
                 feature_path: issue.location.clone(),
@@ -147,12 +158,16 @@ fn select_alternative_for_stage(state: &RepoState, stage: Stage) -> Option<Missi
 
         if let Some(issue) = select_spec_issue_for_add_scenario(state) {
             // Check if this is a zero-coverage rule
-            let rule_has_zero_scenarios = issue.rule_name.as_ref()
+            let rule_has_zero_scenarios = issue
+                .rule_name
+                .as_ref()
                 .map(|r| state.scenario_count_for_rule(&issue.feature_path, r) == Some(0))
                 .unwrap_or(false);
 
             // Check for deferred scenarios that could be promoted
-            let deferred = issue.rule_name.as_ref()
+            let deferred = issue
+                .rule_name
+                .as_ref()
                 .map(|r| state.deferred_scenarios_for_rule(&issue.feature_path, r))
                 .unwrap_or_default();
 
@@ -255,7 +270,10 @@ fn extract_tags_from_description(description: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repo_state::{BindingIssue, BindingIssueKind, CoverageAmbiguity, RuleCoverageInfo, SpecIssue, SpecIssueKind, StructureIssueKind};
+    use crate::repo_state::{
+        BindingIssue, BindingIssueKind, CoverageAmbiguity, RuleCoverageInfo, SpecIssue,
+        SpecIssueKind, StructureIssueKind,
+    };
 
     #[test]
     fn selects_binding_issue_before_spec_issue() {
@@ -484,7 +502,9 @@ mod tests {
 
     #[test]
     fn selects_promote_when_deferred_exists() {
-        use crate::packet_parser::{ReviewPacket, DeferredScenarioItem, BlockerType, IdentityFields, CoverageSummary};
+        use crate::packet_parser::{
+            BlockerType, CoverageSummary, DeferredScenarioItem, IdentityFields, ReviewPacket,
+        };
 
         let state = RepoState {
             spec_issues: vec![SpecIssue {
@@ -510,7 +530,8 @@ mod tests {
                     deferred_items_total: 1,
                 },
                 deferred_items: vec![DeferredScenarioItem {
-                    scenario_key: "features/a.feature::Deferred Rule::Deferred scenario".to_string(),
+                    scenario_key: "features/a.feature::Deferred Rule::Deferred scenario"
+                        .to_string(),
                     scenario_name: "Deferred scenario".to_string(),
                     feature_path: "features/a.feature".to_string(),
                     rule_name: "Deferred Rule".to_string(),
@@ -525,6 +546,9 @@ mod tests {
         };
 
         let mission = select_mission_type(&state).unwrap();
-        assert!(matches!(mission, MissionType::PromoteScenariosToExecutable { .. }));
+        assert!(matches!(
+            mission,
+            MissionType::PromoteScenariosToExecutable { .. }
+        ));
     }
 }

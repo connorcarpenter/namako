@@ -362,29 +362,24 @@ pub struct ExplainStep {
 // =============================================================================
 
 pub fn parse_status_json(content: &str) -> Result<StatusPacket> {
-    serde_json::from_str::<StatusPacket>(content)
-        .context("Failed to parse status.json")
+    serde_json::from_str::<StatusPacket>(content).context("Failed to parse status.json")
 }
 
 pub fn parse_review_json(content: &str) -> Result<ReviewPacket> {
-    serde_json::from_str::<ReviewPacket>(content)
-        .context("Failed to parse review.json")
+    serde_json::from_str::<ReviewPacket>(content).context("Failed to parse review.json")
 }
 
 pub fn parse_gate_json(content: &str) -> Result<GatePacket> {
-    serde_json::from_str::<GatePacket>(content)
-        .context("Failed to parse gate.json")
+    serde_json::from_str::<GatePacket>(content).context("Failed to parse gate.json")
 }
 
 pub fn parse_run_report_json(content: &str) -> Result<RunReport> {
-    serde_json::from_str::<RunReport>(content)
-        .context("Failed to parse run_report.json")
+    serde_json::from_str::<RunReport>(content).context("Failed to parse run_report.json")
 }
 
 #[allow(dead_code)]
 pub fn parse_explain_json(content: &str) -> Result<ExplainPacket> {
-    serde_json::from_str::<ExplainPacket>(content)
-        .context("Failed to parse explain.json")
+    serde_json::from_str::<ExplainPacket>(content).context("Failed to parse explain.json")
 }
 
 /// Extract failure records from a run_report.json payload.

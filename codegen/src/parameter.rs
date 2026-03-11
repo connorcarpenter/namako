@@ -60,7 +60,12 @@ impl TryFrom<syn::DeriveInput> for Definition {
             syn::LitStr::value,
         );
 
-        Ok(Self { ident: input.ident, generics: input.generics, regex, name })
+        Ok(Self {
+            ident: input.ident,
+            generics: input.generics,
+            regex,
+            name,
+        })
     }
 }
 

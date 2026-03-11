@@ -1,5 +1,3 @@
-
-
 //! Extension of a [`TagOperation`].
 
 use gherkin::tagexpr::TagOperation;

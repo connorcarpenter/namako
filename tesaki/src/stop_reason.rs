@@ -209,7 +209,10 @@ mod tests {
             .with_mission_path(".tesaki/failed/001-test");
         assert!(!result.reason.is_success());
         assert_eq!(result.details, Some("lint phase failed".to_string()));
-        assert_eq!(result.last_mission_path, Some(".tesaki/failed/001-test".to_string()));
+        assert_eq!(
+            result.last_mission_path,
+            Some(".tesaki/failed/001-test".to_string())
+        );
     }
 
     /// Per TODO.md §B1: test is_retryable for all stop reasons.

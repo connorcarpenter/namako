@@ -412,9 +412,16 @@ impl RepoState {
         gate: &GatePacket,
         _explain: Option<&ExplainPacket>,
     ) -> anyhow::Result<Self> {
-        let lint_status = gate_status_from_packet(&status.lint_status, gate.lint.status == GatePhaseStatus::Pass);
-        let run_status = gate_status_from_packet(&status.run_status, gate.run.status == GatePhaseStatus::Pass);
-        let verify_status = gate_status_from_packet(&status.verify_status, gate.verify.status == GatePhaseStatus::Pass);
+        let lint_status = gate_status_from_packet(
+            &status.lint_status,
+            gate.lint.status == GatePhaseStatus::Pass,
+        );
+        let run_status =
+            gate_status_from_packet(&status.run_status, gate.run.status == GatePhaseStatus::Pass);
+        let verify_status = gate_status_from_packet(
+            &status.verify_status,
+            gate.verify.status == GatePhaseStatus::Pass,
+        );
 
         let drift = status.drift.as_ref().and_then(map_drift_info);
         let last_run_failures = status
@@ -464,10 +471,8 @@ impl RepoState {
                 for issue in spec_issues.iter_mut() {
                     if issue.kind == SpecIssueKind::Ambiguous {
                         issue.kind = SpecIssueKind::MissingCoverage;
-                        issue.description = format!(
-                            "Coverage judge: INADEQUATE. {}",
-                            issue.description
-                        );
+                        issue.description =
+                            format!("Coverage judge: INADEQUATE. {}", issue.description);
                     }
                 }
             }
@@ -580,7 +585,9 @@ impl RepoState {
 
     /// Lookup scenario count for a specific rule in a feature, if available.
     pub fn scenario_count_for_rule(&self, feature_path: &str, rule_name: &str) -> Option<usize> {
-        self.scenarios_per_rule.get(&rule_key(feature_path, rule_name)).copied()
+        self.scenarios_per_rule
+            .get(&rule_key(feature_path, rule_name))
+            .copied()
     }
 
     /// Lookup rule count for a feature, if available.
@@ -605,7 +612,6 @@ impl RepoState {
             })
             .unwrap_or_default()
     }
-
 }
 
 #[derive(Debug, Default)]
@@ -1248,7 +1254,10 @@ mod tests {
                 feature_name: "A".to_string(),
                 rules: vec![crate::packet_parser::RuleReview {
                     rule_name: "Rule(01)".to_string(),
-                    source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 10 },
+                    source_span: crate::packet_parser::SourceSpan {
+                        start_line: 1,
+                        end_line: 10,
+                    },
                     executable_scenarios: vec![],
                     deferred_items: vec![],
                 }],
@@ -1269,9 +1278,18 @@ mod tests {
 
     fn gate_stub() -> GatePacket {
         GatePacket {
-            lint: crate::packet_parser::GatePhase { status: GatePhaseStatus::Pass, reason: None },
-            run: crate::packet_parser::GatePhase { status: GatePhaseStatus::Pass, reason: None },
-            verify: crate::packet_parser::GatePhase { status: GatePhaseStatus::Pass, reason: None },
+            lint: crate::packet_parser::GatePhase {
+                status: GatePhaseStatus::Pass,
+                reason: None,
+            },
+            run: crate::packet_parser::GatePhase {
+                status: GatePhaseStatus::Pass,
+                reason: None,
+            },
+            verify: crate::packet_parser::GatePhase {
+                status: GatePhaseStatus::Pass,
+                reason: None,
+            },
             determinism: None,
         }
     }
@@ -1350,13 +1368,19 @@ Feature: Example
                 rules: vec![
                     crate::packet_parser::RuleReview {
                         rule_name: "First rule".to_string(),
-                        source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 10 },
+                        source_span: crate::packet_parser::SourceSpan {
+                            start_line: 1,
+                            end_line: 10,
+                        },
                         executable_scenarios: vec![],
                         deferred_items: vec![],
                     },
                     crate::packet_parser::RuleReview {
                         rule_name: "Second rule".to_string(),
-                        source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 10 },
+                        source_span: crate::packet_parser::SourceSpan {
+                            start_line: 1,
+                            end_line: 10,
+                        },
                         executable_scenarios: vec![],
                         deferred_items: vec![],
                     },
@@ -1393,7 +1417,10 @@ Feature: Example
         };
 
         let state = RepoState::compute(&status, &review, &gate_stub(), None).unwrap();
-        assert_eq!(state.scenario_count_for_feature("features/a.feature"), Some(3));
+        assert_eq!(
+            state.scenario_count_for_feature("features/a.feature"),
+            Some(3)
+        );
         assert_eq!(state.rule_count_for_feature("features/a.feature"), Some(2));
 
         let first_rule_key = super::rule_key("features/a.feature", "First rule");
@@ -1454,7 +1481,10 @@ Feature: Example
                 feature_name: "Example".to_string(),
                 rules: vec![crate::packet_parser::RuleReview {
                     rule_name: "First rule".to_string(),
-                    source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 10 },
+                    source_span: crate::packet_parser::SourceSpan {
+                        start_line: 1,
+                        end_line: 10,
+                    },
                     executable_scenarios: vec![],
                     deferred_items: vec![],
                 }],
@@ -1490,7 +1520,10 @@ Feature: Example
         };
 
         let state = RepoState::compute(&status, &review, &gate_stub(), None).unwrap();
-        assert_eq!(state.scenario_count_for_feature("features/b.feature"), Some(2));
+        assert_eq!(
+            state.scenario_count_for_feature("features/b.feature"),
+            Some(2)
+        );
 
         let first_rule_key = super::rule_key("features/b.feature", "First rule");
         assert_eq!(state.scenarios_per_rule.get(&first_rule_key), Some(&2));
@@ -1535,7 +1568,10 @@ Feature: Example
                 feature_name: "Example".to_string(),
                 rules: vec![crate::packet_parser::RuleReview {
                     rule_name: "First rule".to_string(),
-                    source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 10 },
+                    source_span: crate::packet_parser::SourceSpan {
+                        start_line: 1,
+                        end_line: 10,
+                    },
                     executable_scenarios: vec![],
                     deferred_items: vec![],
                 }],
@@ -1571,7 +1607,10 @@ Feature: Example
         };
 
         let state_before = RepoState::compute(&status, &review, &gate_stub(), None).unwrap();
-        assert_eq!(state_before.rule_count_for_feature("features/a.feature"), Some(1));
+        assert_eq!(
+            state_before.rule_count_for_feature("features/a.feature"),
+            Some(1)
+        );
 
         fs::write(
             &feature_path,
@@ -1600,18 +1639,29 @@ Feature: Example
         .unwrap();
 
         let state_after = RepoState::compute(&status, &review, &gate_stub(), None).unwrap();
-        assert_eq!(state_after.rule_count_for_feature("features/a.feature"), Some(2));
+        assert_eq!(
+            state_after.rule_count_for_feature("features/a.feature"),
+            Some(2)
+        );
     }
 
     #[test]
     fn test_coverage_ambiguity_detects_one_scenario() {
         let mut review = review_stub();
-        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
-            rule.executable_scenarios.push(crate::packet_parser::ScenarioReview {
-                name: "Scenario A".to_string(),
-                source_span: crate::packet_parser::SourceSpan { start_line: 1, end_line: 5 },
-                steps: vec![],
-            });
+        if let Some(rule) = review
+            .features
+            .first_mut()
+            .and_then(|f| f.rules.first_mut())
+        {
+            rule.executable_scenarios
+                .push(crate::packet_parser::ScenarioReview {
+                    name: "Scenario A".to_string(),
+                    source_span: crate::packet_parser::SourceSpan {
+                        start_line: 1,
+                        end_line: 5,
+                    },
+                    steps: vec![],
+                });
         }
 
         let state = RepoState::compute(&status_stub(), &review, &gate_stub(), None).unwrap();

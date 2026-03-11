@@ -1,5 +1,3 @@
-
-
 //! Default [`Runner`] implementation.
 
 use std::{
@@ -20,8 +18,7 @@ use std::{
 use crossbeam_utils::atomic::AtomicCell;
 use derive_more::with_trait::{Debug, Display, FromStr};
 use futures::{
-    FutureExt as _, Stream, StreamExt as _, TryFutureExt as _,
-    TryStreamExt as _,
+    FutureExt as _, Stream, StreamExt as _, TryFutureExt as _, TryStreamExt as _,
     channel::{mpsc, oneshot},
     future::{self, Either},
     lock::Mutex,
@@ -78,13 +75,8 @@ pub enum ScenarioType {
 /// [`Concurrent`]: ScenarioType::Concurrent
 /// [`Serial`]: ScenarioType::Serial
 /// [`Scenario`]: gherkin::Scenario
-pub type WhichScenarioFn = fn(
-    &gherkin::Feature,
-    Option<&gherkin::Rule>,
-    &gherkin::Scenario,
-) -> ScenarioType;
-
-
+pub type WhichScenarioFn =
+    fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> ScenarioType;
 
 /// Alias for a failed [`Scenario`].
 ///
@@ -101,10 +93,7 @@ type IsFailed = bool;
 /// [1]: Runner#order-guarantees
 /// [`Scenario`]: gherkin::Scenario
 #[derive(Debug)]
-pub struct Basic<
-    World,
-    F = WhichScenarioFn,
-> {
+pub struct Basic<World, F = WhichScenarioFn> {
     /// Optional number of concurrently executed [`Scenario`]s.
     ///
     /// [`Scenario`]: gherkin::Scenario
@@ -178,10 +167,7 @@ impl<World, Which> Basic<World, Which> {
     ///
     /// [`Scenario`]: gherkin::Scenario
     #[must_use]
-    pub fn max_concurrent_scenarios(
-        mut self,
-        max: impl Into<Option<usize>>,
-    ) -> Self {
+    pub fn max_concurrent_scenarios(mut self, max: impl Into<Option<usize>>) -> Self {
         self.max_concurrent_scenarios = max.into();
         self
     }
@@ -208,11 +194,7 @@ impl<World, Which> Basic<World, Which> {
     #[must_use]
     pub fn which_scenario<F>(self, func: F) -> Basic<World, F>
     where
-        F: Fn(
-                &gherkin::Feature,
-                Option<&gherkin::Rule>,
-                &gherkin::Scenario,
-            ) -> ScenarioType
+        F: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> ScenarioType
             + 'static,
     {
         let Self {
@@ -273,17 +255,12 @@ impl<World, Which> Basic<World, Which> {
 impl<W, Which> Runner<W> for Basic<W, Which>
 where
     W: World,
-    Which: Fn(
-            &gherkin::Feature,
-            Option<&gherkin::Rule>,
-            &gherkin::Scenario,
-        ) -> ScenarioType
-        + 'static,
+    Which:
+        Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> ScenarioType + 'static,
 {
     type Cli = Cli;
 
-    type EventStream =
-        LocalBoxStream<'static, parser::Result<Event<event::Namako<W>>>>;
+    type EventStream = LocalBoxStream<'static, parser::Result<Event<event::Namako<W>>>>;
 
     fn run<S>(self, features: S, cli: Cli) -> Self::EventStream
     where
@@ -325,7 +302,9 @@ where
 
         stream::select(
             receiver.map(Either::Left),
-            future::join(insert, execute).into_stream().map(Either::Right),
+            future::join(insert, execute)
+                .into_stream()
+                .map(Either::Right),
         )
         .filter_map(async |r| match r {
             Either::Left(ev) => Some(ev),
@@ -347,12 +326,7 @@ async fn insert_features<W, S, F>(
     fail_fast: bool,
 ) where
     S: Stream<Item = parser::Result<gherkin::Feature>> + 'static,
-    F: Fn(
-            &gherkin::Feature,
-            Option<&gherkin::Rule>,
-            &gherkin::Scenario,
-        ) -> ScenarioType
-        + 'static,
+    F: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> ScenarioType + 'static,
 {
     let mut features = 0;
     let mut rules = 0;
@@ -383,15 +357,15 @@ async fn insert_features<W, S, F>(
         }
     }
 
-    drop(sender.unbounded_send(Ok(Event::new(
-        event::Namako::ParsingFinished {
+    drop(
+        sender.unbounded_send(Ok(Event::new(event::Namako::ParsingFinished {
             features,
             rules,
             scenarios,
             steps,
             parser_errors,
-        },
-    ))));
+        }))),
+    );
 
     into.finish();
 }
@@ -417,9 +391,7 @@ async fn execute<W>(
     features: Features,
     max_concurrent_scenarios: Option<usize>,
     collection: step::Collection<W>,
-    event_sender: mpsc::UnboundedSender<
-        parser::Result<Event<event::Namako<W>>>,
-    >,
+    event_sender: mpsc::UnboundedSender<parser::Result<Event<event::Namako<W>>>>,
     fail_fast: bool,
     #[cfg(feature = "tracing")] mut logs_collector: Option<TracingCollector>,
 ) where
@@ -438,11 +410,7 @@ async fn execute<W>(
 
     let (finished_sender, finished_receiver) = mpsc::unbounded();
     let mut storage = FinishedRulesAndFeatures::new(finished_receiver);
-    let executor = Executor::new(
-        collection,
-        event_sender,
-        finished_sender,
-    );
+    let executor = Executor::new(collection, event_sender, finished_sender);
 
     executor.send_event(event::Namako::Started);
 
@@ -537,12 +505,10 @@ async fn execute<W>(
             }
         }
 
-        while let Ok(Some((id, feat, rule, scenario_failed))) =
-            storage.finished_receiver.try_next()
+        while let Ok(Some((id, feat, rule, scenario_failed))) = storage.finished_receiver.try_next()
         {
             if let Some(rule) = rule
-                && let Some(f) =
-                    storage.rule_scenario_finished(feat.clone(), rule)
+                && let Some(f) = storage.rule_scenario_finished(feat.clone(), rule)
             {
                 executor.send_event(f);
             }
@@ -586,8 +552,7 @@ struct Executor<W> {
     ///
     /// [`Scenario`]: gherkin::Scenario
     /// [1]: event::Scenario
-    event_sender:
-        mpsc::UnboundedSender<parser::Result<Event<event::Namako<W>>>>,
+    event_sender: mpsc::UnboundedSender<parser::Result<Event<event::Namako<W>>>>,
 
     /// Sender for notifying of [`Scenario`]s completion.
     ///
@@ -599,9 +564,7 @@ impl<W: World> Executor<W> {
     /// Creates a new [`Executor`].
     const fn new(
         collection: step::Collection<W>,
-        event_sender: mpsc::UnboundedSender<
-            parser::Result<Event<event::Namako<W>>>,
-        >,
+        event_sender: mpsc::UnboundedSender<parser::Result<Event<event::Namako<W>>>>,
         finished_sender: FinishedFeaturesSender,
     ) -> Self {
         Self {
@@ -652,9 +615,7 @@ impl<W: World> Executor<W> {
             }
         };
 
-        let compose = |started, passed, skipped| {
-            (ok(started), ok_capt(passed), ok(skipped))
-        };
+        let compose = |started, passed, skipped| (ok(started), ok_capt(passed), ok(skipped));
         let into_bg_step_ev = compose(
             event::Scenario::background_step_started,
             event::Scenario::background_step_passed,
@@ -680,8 +641,8 @@ impl<W: World> Executor<W> {
                     .await;
 
                 let world = match world_res {
-                     Ok(Ok(w)) => Some(w),
-                     Ok(Err(e)) => {
+                    Ok(Ok(w)) => Some(w),
+                    Ok(Err(e)) => {
                         let step = gherkin::Step {
                             keyword: "World".into(),
                             value: "Initialization".into(),
@@ -696,12 +657,14 @@ impl<W: World> Executor<W> {
                             step: Source::new(step),
                             captures: None,
                             loc: None,
-                            err: event::StepError::Panic(Arc::new(format!("World Init Error: {e}"))),
+                            err: event::StepError::Panic(Arc::new(format!(
+                                "World Init Error: {e}"
+                            ))),
                             meta: event::Metadata::new(()),
                             is_background: false,
                         });
-                     }
-                     Err(p) => {
+                    }
+                    Err(p) => {
                         let step = gherkin::Step {
                             keyword: "World".into(),
                             value: "Initialization".into(),
@@ -720,7 +683,7 @@ impl<W: World> Executor<W> {
                             meta: event::Metadata::new(()),
                             is_background: false,
                         });
-                     }
+                    }
                 };
 
                 let before_hook = world;
@@ -753,9 +716,7 @@ impl<W: World> Executor<W> {
                     .map(|r| {
                         r.background
                             .as_ref()
-                            .map(|b| {
-                                b.steps.iter().map(|s| Source::new(s.clone()))
-                            })
+                            .map(|b| b.steps.iter().map(|s| Source::new(s.clone())))
                             .into_iter()
                             .flatten()
                     })
@@ -778,33 +739,27 @@ impl<W: World> Executor<W> {
                     })
                     .await?;
 
-                stream::iter(
-                    scenario.steps.iter().map(|s| Source::new(s.clone())),
-                )
-                .map(Ok)
-                .try_fold(rule_background, |world, step| {
-                    self.run_step(
-                        world,
-                        step,
-                        false,
-                        into_step_ev,
-                        id,
-                        #[cfg(feature = "tracing")]
-                        waiter,
-                    )
-                    .map_ok(Some)
-                })
-                .await
+                stream::iter(scenario.steps.iter().map(|s| Source::new(s.clone())))
+                    .map(Ok)
+                    .try_fold(rule_background, |world, step| {
+                        self.run_step(
+                            world,
+                            step,
+                            false,
+                            into_step_ev,
+                            id,
+                            #[cfg(feature = "tracing")]
+                            waiter,
+                        )
+                        .map_ok(Some)
+                    })
+                    .await
             }
             .await;
 
             let world = match &mut result {
-                Ok(world) => {
-                    world.take()
-                }
-                Err(exec_err) => {
-                    exec_err.take_world()
-                },
+                Ok(world) => world.take(),
+                Err(exec_err) => exec_err.take_world(),
             };
 
             let world = world.map(Arc::new);
@@ -848,12 +803,7 @@ impl<W: World> Executor<W> {
             event::Scenario::Finished,
         ));
 
-        self.scenario_finished(
-            id,
-            feature,
-            rule,
-            is_failed,
-        );
+        self.scenario_finished(id, feature, rule, is_failed);
     }
 
     /// Runs a [`Step`].
@@ -886,15 +836,14 @@ impl<W: World> Executor<W> {
         self.send_event(started(step.clone()));
 
         let run = async {
-            let (step_fn, captures, loc, ctx) =
-                match self.collection.find(&step) {
-                    Ok(Some(f)) => f,
-                    Ok(None) => return Ok((None, None, world_opt)),
-                    Err(e) => {
-                        let e = event::StepError::AmbiguousMatch(e);
-                        return Err((e, None, None, world_opt));
-                    }
-                };
+            let (step_fn, captures, loc, ctx) = match self.collection.find(&step) {
+                Ok(Some(f)) => f,
+                Ok(None) => return Ok((None, None, world_opt)),
+                Err(e) => {
+                    let e = event::StepError::AmbiguousMatch(e);
+                    return Err((e, None, None, world_opt));
+                }
+            };
 
             let mut world = if let Some(w) = world_opt {
                 w
@@ -906,9 +855,9 @@ impl<W: World> Executor<W> {
                 {
                     Ok(Ok(w)) => w,
                     Ok(Err(e)) => {
-                        let e = event::StepError::Panic(coerce_into_info(
-                            format!("failed to initialize `World`: {e}"),
-                        ));
+                        let e = event::StepError::Panic(coerce_into_info(format!(
+                            "failed to initialize `World`: {e}"
+                        )));
                         return Err((e, None, loc, None));
                     }
                     Err(e) => {
@@ -955,17 +904,15 @@ impl<W: World> Executor<W> {
                 self.send_event(skipped(step));
                 Err(ExecutionFailure::StepSkipped(world))
             }
-            Err((err, captures, loc, world)) => {
-                Err(ExecutionFailure::StepPanicked {
-                    world,
-                    step,
-                    captures,
-                    loc,
-                    err,
-                    meta: event::Metadata::new(()),
-                    is_background,
-                })
-            }
+            Err((err, captures, loc, world)) => Err(ExecutionFailure::StepPanicked {
+                world,
+                step,
+                captures,
+                loc,
+                err,
+                meta: event::Metadata::new(()),
+                is_background,
+            }),
         }
     }
 
@@ -996,9 +943,7 @@ impl<W: World> Executor<W> {
                     feature,
                     rule,
                     scenario,
-                    event::Scenario::background_step_failed(
-                        step, captures, loc, world, error,
-                    ),
+                    event::Scenario::background_step_failed(step, captures, loc, world, error),
                 ),
                 meta,
             ),
@@ -1015,9 +960,7 @@ impl<W: World> Executor<W> {
                     feature,
                     rule,
                     scenario,
-                    event::Scenario::step_failed(
-                        step, captures, loc, world, error,
-                    ),
+                    event::Scenario::step_failed(step, captures, loc, world, error),
                 ),
                 meta,
             ),
@@ -1057,11 +1000,7 @@ impl<W: World> Executor<W> {
     ///
     /// [`Namako`]: event::Namako
     /// [`Metadata`]: event::Metadata
-    fn send_event_with_meta(
-        &self,
-        event: event::Namako<W>,
-        meta: event::Metadata,
-    ) {
+    fn send_event_with_meta(&self, event: event::Namako<W>, meta: event::Metadata) {
         // If the receiver end is dropped, then no one listens for events,
         // so we can just ignore it.
         drop(self.event_sender.unbounded_send(Ok(meta.wrap(event))));
@@ -1070,10 +1009,7 @@ impl<W: World> Executor<W> {
     /// Notifies with the given [`Namako`] events.
     ///
     /// [`Namako`]: event::Namako
-    fn send_all_events(
-        &self,
-        events: impl IntoIterator<Item = event::Namako<W>>,
-    ) {
+    fn send_all_events(&self, events: impl IntoIterator<Item = event::Namako<W>>) {
         for v in events {
             // If the receiver end is dropped, then no one listens for events,
             // so we can just stop from here.
@@ -1126,8 +1062,7 @@ struct FinishedRulesAndFeatures {
     /// [`Feature`]: gherkin::Feature
     /// [`Rule`]: gherkin::Rule
     /// [`Scenario`]: gherkin::Scenario
-    rule_scenarios_count:
-        HashMap<(Source<gherkin::Feature>, Source<gherkin::Rule>), usize>,
+    rule_scenarios_count: HashMap<(Source<gherkin::Feature>, Source<gherkin::Rule>), usize>,
 
     /// Receiver for notifying state of [`Scenario`]s completion.
     ///
@@ -1178,7 +1113,6 @@ impl FinishedRulesAndFeatures {
         feature: Source<gherkin::Feature>,
         rule: Source<gherkin::Rule>,
     ) -> Option<event::Namako<W>> {
-
         let finished_scenarios = self
             .rule_scenarios_count
             .get_mut(&(feature.clone(), rule.clone()))
@@ -1202,7 +1136,6 @@ impl FinishedRulesAndFeatures {
         &mut self,
         feature: Source<gherkin::Feature>,
     ) -> Option<event::Namako<W>> {
-
         let finished_scenarios = self
             .features_scenarios_count
             .get_mut(&feature)
@@ -1220,9 +1153,7 @@ impl FinishedRulesAndFeatures {
     ///
     /// [`Feature`]: gherkin::Feature
     /// [`Rule`]: gherkin::Rule
-    fn finish_all_rules_and_features<W>(
-        &mut self,
-    ) -> impl Iterator<Item = event::Namako<W>> {
+    fn finish_all_rules_and_features<W>(&mut self) -> impl Iterator<Item = event::Namako<W>> {
         self.rule_scenarios_count
             .drain()
             .map(|((feat, rule), _)| event::Namako::rule_finished(feat, rule))
@@ -1273,9 +1204,7 @@ impl FinishedRulesAndFeatures {
         let mut started_rules = Vec::new();
         for (feat, rule) in runnable
             .iter()
-            .filter_map(|(_, feat, rule, _, _)| {
-                rule.clone().map(|r| (feat.clone(), r))
-            })
+            .filter_map(|(_, feat, rule, _, _)| rule.clone().map(|r| (feat.clone(), r)))
             .dedup()
         {
             _ = self
@@ -1343,17 +1272,9 @@ impl Features {
     ///
     /// [`Feature`]: gherkin::Feature
     /// [`Scenario`]: gherkin::Scenario
-    async fn insert<Which>(
-        &self,
-        feature: gherkin::Feature,
-        which_scenario: &Which,
-        _cli: &Cli,
-    ) where
-        Which: Fn(
-                &gherkin::Feature,
-                Option<&gherkin::Rule>,
-                &gherkin::Scenario,
-            ) -> ScenarioType
+    async fn insert<Which>(&self, feature: gherkin::Feature, which_scenario: &Which, _cli: &Cli)
+    where
+        Which: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> ScenarioType
             + 'static,
     {
         let feature = Source::new(feature);
@@ -1377,9 +1298,7 @@ impl Features {
                     Source::new(scenario.clone()),
                 )
             })
-            .into_group_map_by(|(_, f, r, s)| {
-                which_scenario(f, r.as_ref().map(AsRef::as_ref), s)
-            });
+            .into_group_map_by(|(_, f, r, s)| which_scenario(f, r.as_ref().map(AsRef::as_ref), s));
 
         self.insert_scenarios(local).await;
     }
@@ -1406,10 +1325,7 @@ impl Features {
             // Scenarios in front.
             // This is done to execute them closely to one another, so the
             // output wouldn't hang on executing other Concurrent Scenarios.
-            #[expect(
-                clippy::iter_over_hash_type,
-                reason = "order doesn't matter"
-            )]
+            #[expect(clippy::iter_over_hash_type, reason = "order doesn't matter")]
             for (which, mut values) in without_retries {
                 let old = mem::take(storage.entry(which).or_default());
                 values.extend(old);
@@ -1418,10 +1334,7 @@ impl Features {
         } else {
             // If there are no Serial Scenarios, we just extend already existing
             // Concurrent Scenarios.
-            #[expect(
-                clippy::iter_over_hash_type,
-                reason = "order doesn't matter"
-            )]
+            #[expect(clippy::iter_over_hash_type, reason = "order doesn't matter")]
             for (which, values) in without_retries {
                 storage.entry(which).or_default().extend(values);
             }
@@ -1452,37 +1365,32 @@ impl Features {
         }
 
         let min_dur = None;
-        let drain =
-            |storage: &mut Vec<(_, _, _, _)>,
-             ty,
-             count: Option<usize>| {
-                let mut i = 0;
-                let drained = storage
-                    .extract_if(.., |(_, _, _, _)| {
-                        // Because of retries involved, we cannot just specify
-                        // `..count` range to `.extract_if()`.
-                        if count.filter(|c| i >= *c).is_some() {
-                            return false;
-                        }
+        let drain = |storage: &mut Vec<(_, _, _, _)>, ty, count: Option<usize>| {
+            let mut i = 0;
+            let drained = storage
+                .extract_if(.., |(_, _, _, _)| {
+                    // Because of retries involved, we cannot just specify
+                    // `..count` range to `.extract_if()`.
+                    if count.filter(|c| i >= *c).is_some() {
+                        return false;
+                    }
 
-                        i += 1;
-                        true
-                    })
-                    .map(|(id, f, r, s)| {
-                        (id, f, r, s, ty)
-                    })
-                    .collect::<Vec<_>>();
-                (!drained.is_empty()).then_some(drained)
-            };
+                    i += 1;
+                    true
+                })
+                .map(|(id, f, r, s)| (id, f, r, s, ty))
+                .collect::<Vec<_>>();
+            (!drained.is_empty()).then_some(drained)
+        };
 
         let mut guard = self.scenarios.lock().await;
         let scenarios = guard
             .get_mut(&Serial)
             .and_then(|storage| drain(storage, Serial, Some(1)))
             .or_else(|| {
-                guard.get_mut(&Concurrent).and_then(|storage| {
-                    drain(storage, Concurrent, max_concurrent_scenarios)
-                })
+                guard
+                    .get_mut(&Concurrent)
+                    .and_then(|storage| drain(storage, Concurrent, max_concurrent_scenarios))
             })
             .unwrap_or_default();
 
@@ -1504,8 +1412,7 @@ impl Features {
     /// [`Feature`]: gherkin::Feature
     async fn is_finished(&self, fail_fast: bool) -> bool {
         self.finished.load(Ordering::SeqCst)
-            && (fail_fast
-                || self.scenarios.lock().await.values().all(Vec::is_empty))
+            && (fail_fast || self.scenarios.lock().await.values().all(Vec::is_empty))
     }
 }
 
@@ -1568,14 +1475,11 @@ enum ExecutionFailure<World> {
     },
 }
 
-
-
 impl<W> ExecutionFailure<W> {
     /// Takes the [`World`] leaving a [`None`] in its place.
     const fn take_world(&mut self) -> Option<W> {
         match self {
-            Self::StepSkipped(world)
-            | Self::StepPanicked { world, .. } => world.take(),
+            Self::StepSkipped(world) | Self::StepPanicked { world, .. } => world.take(),
         }
     }
 }

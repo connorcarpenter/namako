@@ -99,7 +99,10 @@ impl SurfacePolicy {
         content.push_str("| Surface | Policy |\n");
         content.push_str("|---------|--------|\n");
         content.push_str(&format!("| Spec | {} |\n", lock_label(self.spec)));
-        content.push_str(&format!("| Tests/Bindings | {} |\n", lock_label(self.tests_bindings)));
+        content.push_str(&format!(
+            "| Tests/Bindings | {} |\n",
+            lock_label(self.tests_bindings)
+        ));
         content.push_str(&format!("| SUT | {} |\n", lock_label(self.sut)));
         content
     }
@@ -121,7 +124,10 @@ mod tests {
     fn default_policies_match_expectations() {
         assert_eq!(SurfacePolicy::for_refine_spec().spec, SurfaceLock::Unlocked);
         assert_eq!(SurfacePolicy::for_refine_spec().sut, SurfaceLock::Locked);
-        assert_eq!(SurfacePolicy::for_implement_sut().sut, SurfaceLock::Unlocked);
+        assert_eq!(
+            SurfacePolicy::for_implement_sut().sut,
+            SurfaceLock::Unlocked
+        );
     }
 
     #[test]

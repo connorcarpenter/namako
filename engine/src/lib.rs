@@ -1,5 +1,3 @@
-
-
 #![doc(
     html_logo_url = "https://avatars.githubusercontent.com/u/91469139?s=128",
     html_favicon_url = "https://avatars.githubusercontent.com/u/91469139?s=256"
@@ -151,10 +149,10 @@
 )]
 
 pub mod cli;
-mod namako;
 pub mod event;
 pub mod feature;
 pub(crate) mod future;
+mod namako;
 pub mod parser;
 pub mod runner;
 pub mod step;
@@ -184,10 +182,10 @@ use std::fmt::Display;
 #[cfg(feature = "macros")]
 use std::{fmt::Debug, path::Path};
 
+pub use gherkin;
 #[cfg(feature = "macros")]
 #[doc(inline)]
 pub use namako_codegen::{Parameter, World, given, then, when};
-pub use gherkin;
 
 #[cfg(feature = "macros")]
 #[doc(inline)]
@@ -199,15 +197,12 @@ use self::{
 };
 #[doc(inline)]
 pub use self::{
-    namako::Namako,
     event::Event,
+    namako::Namako,
     parser::Parser,
     runner::{Runner, ScenarioType},
     step::Step,
-    writer::{
-        Arbitrary as ArbitraryWriter, Ext as WriterExt, Stats as StatsWriter,
-        Writer,
-    },
+    writer::{Arbitrary as ArbitraryWriter, Ext as WriterExt, Stats as StatsWriter, Writer},
 };
 
 /// Represents a shared user-defined state for a [Namako] run.
@@ -230,13 +225,17 @@ pub trait World: Sized + 'static {
     ///
     /// This context provides mutable access to test state and MUST only
     /// expose mutation operations (no assertions/expects).
-    type MutCtx<'a> where Self: 'a;
+    type MutCtx<'a>
+    where
+        Self: 'a;
 
     /// Context type for Then steps (read/assertion API).
     ///
     /// This context provides read/assertion access and MUST only expose
     /// assertion/expect operations (no mutation API exposed to step authors).
-    type RefCtx<'a> where Self: 'a;
+    type RefCtx<'a>
+    where
+        Self: 'a;
 
     /// Creates a new [`World`] instance.
     fn new() -> impl Future<Output = Result<Self, Self::Error>>;
@@ -280,9 +279,7 @@ pub trait World: Sized + 'static {
             match f(&ctx) {
                 codegen::AssertOutcome::Passed(v) => return v,
                 codegen::AssertOutcome::Pending => {
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        POLL_INTERVAL_MS,
-                    ));
+                    std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
                 }
                 codegen::AssertOutcome::Failed(msg) => panic!("{msg}"),
             }
@@ -369,12 +366,7 @@ pub trait World: Sized + 'static {
     where
         Self: Debug + WorldInventory,
         I: AsRef<Path>,
-        F: Fn(
-                &gherkin::Feature,
-                Option<&gherkin::Rule>,
-                &gherkin::Scenario,
-            ) -> bool
-            + 'static,
+        F: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool + 'static,
     {
         Self::namako().filter_run_and_exit(input, filter)
     }

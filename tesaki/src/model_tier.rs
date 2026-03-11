@@ -157,8 +157,14 @@ mod tests {
             overrides: std::collections::HashMap::new(),
         };
         // Force model ignores recommended and escalation
-        assert_eq!(select_model_for_attempt(&mission, 1, false, Some(&overrides)), "opus");
-        assert_eq!(select_model_for_attempt(&mission, 2, true, Some(&overrides)), "opus");
+        assert_eq!(
+            select_model_for_attempt(&mission, 1, false, Some(&overrides)),
+            "opus"
+        );
+        assert_eq!(
+            select_model_for_attempt(&mission, 2, true, Some(&overrides)),
+            "opus"
+        );
     }
 
     #[test]
@@ -168,10 +174,15 @@ mod tests {
             missing_steps: vec![],
         };
         let mut overrides = ModelOverrides::default();
-        overrides.overrides.insert("CreateMissingBindings".to_string(), "opus".to_string());
+        overrides
+            .overrides
+            .insert("CreateMissingBindings".to_string(), "opus".to_string());
 
         // Override to opus
-        assert_eq!(select_model_for_attempt(&mission, 1, false, Some(&overrides)), "opus");
+        assert_eq!(
+            select_model_for_attempt(&mission, 1, false, Some(&overrides)),
+            "opus"
+        );
     }
 
     #[test]

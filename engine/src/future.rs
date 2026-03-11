@@ -24,10 +24,7 @@ pub(crate) struct YieldNow(bool);
 impl Future for YieldNow {
     type Output = ();
 
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> task::Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         if self.0 {
             task::Poll::Ready(())
         } else {
@@ -67,20 +64,22 @@ pub(crate) struct YieldThenReturn<V> {
 impl<V> YieldThenReturn<V> {
     /// Creates a new [`YieldThenReturn`] [`Future`].
     const fn new(v: V) -> Self {
-        Self { value: Some(v), r#yield: yield_now() }
+        Self {
+            value: Some(v),
+            r#yield: yield_now(),
+        }
     }
 }
 
 impl<V> Future for YieldThenReturn<V> {
     type Output = V;
 
-    fn poll(
-        self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         let this = self.project();
         task::ready!(this.r#yield.poll_unpin(cx));
-        this.value.take().map_or(task::Poll::Pending, task::Poll::Ready)
+        this.value
+            .take()
+            .map_or(task::Poll::Pending, task::Poll::Ready)
     }
 }
 
@@ -100,7 +99,9 @@ where
     A: Future + Unpin,
     B: Future + Unpin,
 {
-    SelectWithBiasedFirst { inner: Some((biased, regular)) }
+    SelectWithBiasedFirst {
+        inner: Some((biased, regular)),
+    }
 }
 
 /// [`Future`] returned by a [`select_with_biased_first()`] function.
@@ -116,10 +117,7 @@ where
 {
     type Output = Either<(A::Output, B), (B::Output, A)>;
 
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> task::Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         #[expect(clippy::expect_used, reason = "should not happen normally")]
         let (mut a, mut b) = self
             .inner

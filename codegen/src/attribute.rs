@@ -6,7 +6,12 @@ use cucumber_expressions::{Expression, Parameter, SingleExpression, Spanned};
 use inflections::case::to_pascal_case;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse::{Parse, ParseStream}, parse_quote, spanned::Spanned as _, Signature};
+use syn::{
+    Signature,
+    parse::{Parse, ParseStream},
+    parse_quote,
+    spanned::Spanned as _,
+};
 
 /// Names of default [`Parameter`]s.
 const DEFAULT_PARAMETERS: [&str; 5] = ["int", "float", "word", "string", ""];
@@ -43,17 +48,12 @@ struct Step {
 
 impl Step {
     /// Parses [`Step`] definition from the attribute macro input.
-    fn parse(
-        attr_name: &'static str,
-        attr: TokenStream,
-        body: TokenStream,
-    ) -> syn::Result<Self> {
+    fn parse(attr_name: &'static str, attr: TokenStream, body: TokenStream) -> syn::Result<Self> {
         let attr_arg = syn::parse2::<AttributeArgument>(attr)?;
         let mut func = syn::parse2::<syn::ItemFn>(body)?;
 
         let step_arg_name = {
-            let (arg_marked_as_step, _) =
-                remove_all_attrs_if_needed("step", &mut func);
+            let (arg_marked_as_step, _) = remove_all_attrs_if_needed("step", &mut func);
 
             match arg_marked_as_step.len() {
                 0 => Ok(None),
@@ -92,7 +92,8 @@ impl Step {
         // Two patterns are supported:
         // 1. Reference types: `&mut World` or `&World` - blanket impl handles these
         // 2. Wrapper types: `TestWorldMut` - needs lifetime injection to become `TestWorldMut<'__ctx>`
-        let (ctx_type, needs_lifetime) = parse_context_type_and_mode(&self.func.sig, self.attr_name)?;
+        let (ctx_type, needs_lifetime) =
+            parse_context_type_and_mode(&self.func.sig, self.attr_name)?;
 
         // Rewrite the function signature to inject the lifetime (only for wrapper types)
         rewrite_signature_with_lifetime(&mut self.func, needs_lifetime)?;
@@ -100,8 +101,7 @@ impl Step {
         let func = &self.func;
         let func_name = &func.sig.ident;
         let step_type = self.step_type();
-        let (func_args, addon_parsing) =
-            self.fn_arguments_and_additional_parsing()?;
+        let (func_args, addon_parsing) = self.fn_arguments_and_additional_parsing()?;
         let call_args = quote! { #( #func_args, )* };
         let polling_args = func_args
             .iter()
@@ -151,7 +151,11 @@ impl Step {
 
         // Pass context as first arg to user function
         // Respects whether the user function asks for &mut Ctx, &Ctx, or Ctx (value)
-        let first_arg = func.sig.inputs.first().expect("step function must have at least one argument");
+        let first_arg = func
+            .sig
+            .inputs
+            .first()
+            .expect("step function must have at least one argument");
         let (is_reference, is_mutable) = if let syn::FnArg::Typed(pat_type) = first_arg {
             if let syn::Type::Reference(r) = pat_type.ty.as_ref() {
                 (true, r.mutability.is_some())
@@ -165,9 +169,9 @@ impl Step {
         let ctx_arg = if self.attr_name == "then" {
             // For Then steps, the closure arg `__namako_ctx_arg` is ALREADY `&Ctx`.
             if is_reference {
-                 quote! { __namako_ctx_arg }
+                quote! { __namako_ctx_arg }
             } else {
-                 quote! { *__namako_ctx_arg }
+                quote! { *__namako_ctx_arg }
             }
         } else {
             // For Given/When, `__namako_ctx_arg` is `Ctx` (value).
@@ -395,10 +399,7 @@ impl Step {
     fn fn_arguments_and_additional_parsing(
         &self,
     ) -> syn::Result<(Vec<TokenStream>, Option<TokenStream>)> {
-        let is_regex_or_expr = matches!(
-            self.attr_arg,
-            AttributeArgument::Expression(_),
-        );
+        let is_regex_or_expr = matches!(self.attr_arg, AttributeArgument::Expression(_),);
         let func = &self.func;
 
         if is_regex_or_expr {
@@ -471,15 +472,14 @@ impl Step {
 
                 Ok((func_args, addon_parsing))
             } else {
-                let (idents, parsings): (Vec<_>, Vec<_>) =
-                    itertools::process_results(
-                        func.sig
-                            .inputs
-                            .iter()
-                            .skip(1)
-                            .map(|arg| self.arg_ident_and_parse_code(arg)),
-                        |i| i.unzip(),
-                    )?;
+                let (idents, parsings): (Vec<_>, Vec<_>) = itertools::process_results(
+                    func.sig
+                        .inputs
+                        .iter()
+                        .skip(1)
+                        .map(|arg| self.arg_ident_and_parse_code(arg)),
+                    |i| i.unzip(),
+                )?;
 
                 let addon_parsing = Some(quote! {
                     let mut __namako_iter = __namako_ctx
@@ -523,8 +523,10 @@ impl Step {
     ) -> syn::Result<(&'a syn::Ident, TokenStream)> {
         let (ident, ty) = parse_fn_arg(arg)?;
 
-        let is_ctx_arg =
-            self.arg_name_of_step_context.as_ref().is_some_and(|i| i == ident);
+        let is_ctx_arg = self
+            .arg_name_of_step_context
+            .as_ref()
+            .is_some_and(|i| i == ident);
 
         let decl = if is_ctx_arg {
             quote! {
@@ -542,9 +544,7 @@ impl Step {
                 ty.path
                     .segments
                     .last()
-                    .ok_or_else(|| {
-                        syn::Error::new(ty.path.span(), "type path expected")
-                    })?
+                    .ok_or_else(|| { syn::Error::new(ty.path.span(), "type path expected") })?
                     .ident,
             );
 
@@ -601,10 +601,7 @@ impl Step {
     /// `arg` matches `step_arg_name`, or else borrows parsed slice.
     ///
     /// [`gherkin::Step`]: https://bit.ly/3j42hcd
-    fn borrow_step_or_slice(
-        &self,
-        arg: &syn::FnArg,
-    ) -> syn::Result<TokenStream> {
+    fn borrow_step_or_slice(&self, arg: &syn::FnArg) -> syn::Result<TokenStream> {
         if let Some(name) = &self.arg_name_of_step_context {
             let (ident, _) = parse_fn_arg(arg)?;
             if name == ident {
@@ -640,19 +637,11 @@ impl Step {
     /// # Errors
     ///
     /// If [`Parameters::new()`] errors.
-    fn gen_expression_regex(
-        &self,
-        expr: &syn::LitStr,
-    ) -> syn::Result<TokenStream> {
+    fn gen_expression_regex(&self, expr: &syn::LitStr) -> syn::Result<TokenStream> {
         let expr = expr.value();
-        let params = Parameters::new(
-            &expr,
-            &self.func,
-            self.arg_name_of_step_context.as_ref(),
-        )?;
+        let params = Parameters::new(&expr, &self.func, self.arg_name_of_step_context.as_ref())?;
 
-        let provider_impl =
-            params.gen_provider_impl(&parse_quote! { Provider });
+        let provider_impl = params.gen_provider_impl(&parse_quote! { Provider });
         let const_assertions = params.gen_const_assertions();
 
         Ok(quote! {{
@@ -702,16 +691,9 @@ impl<'p> Parameters<'p> {
     /// - If [`parse_fn_arg()`] on one of the `func`'s arguments errors.
     /// - If non-default [`Parameter`] doesn't have the corresponding `func`'s
     ///   argument.
-    fn new(
-        expr: &'p str,
-        func: &syn::ItemFn,
-        step: Option<&syn::Ident>,
-    ) -> syn::Result<Self> {
+    fn new(expr: &'p str, func: &syn::ItemFn, step: Option<&syn::Ident>) -> syn::Result<Self> {
         let expr = Expression::parse(expr).map_err(|e| {
-            syn::Error::new(
-                expr.span(),
-                format!("invalid Cucumber Expression: {e}"),
-            )
+            syn::Error::new(expr.span(), format!("invalid Cucumber Expression: {e}"))
         })?;
 
         let param_tys = func
@@ -792,10 +774,8 @@ impl<'p> Parameters<'p> {
                     // purpose of better errors reporting when the assertion
                     // fails.
 
-                    let trait_with_hint = format_ident!(
-                        "UseParameterNameInsteadOf{}",
-                        to_pascal_case(name),
-                    );
+                    let trait_with_hint =
+                        format_ident!("UseParameterNameInsteadOf{}", to_pascal_case(name),);
 
                     quote! {
                         // In case we encounter default parameter, we should
@@ -920,7 +900,9 @@ fn remove_all_attrs_if_needed<'a>(
 ) -> (Vec<&'a syn::FnArg>, Vec<syn::Attribute>) {
     let has_other_step_arguments = func.attrs.iter().any(|attr| {
         attr.meta.path().segments.last().is_some_and(|segment| {
-            ["given", "when", "then"].iter().any(|step| segment.ident == step)
+            ["given", "when", "then"]
+                .iter()
+                .any(|step| segment.ident == step)
         })
     });
 
@@ -963,15 +945,14 @@ fn remove_attr(attr_arg: &str, arg: &mut syn::FnArg) -> Option<syn::Attribute> {
     if let syn::FnArg::Typed(typed_arg) = arg {
         let attrs = mem::take(&mut typed_arg.attrs);
 
-        let (mut other, mut removed): (Vec<_>, Vec<_>) =
-            attrs.into_iter().partition_map(|attr| {
-                if let Some(ident) = attr.meta.path().get_ident()
-                    && ident == attr_arg
-                {
-                    return Either::Right(attr);
-                }
-                Either::Left(attr)
-            });
+        let (mut other, mut removed): (Vec<_>, Vec<_>) = attrs.into_iter().partition_map(|attr| {
+            if let Some(ident) = attr.meta.path().get_ident()
+                && ident == attr_arg
+            {
+                return Either::Right(attr);
+            }
+            Either::Left(attr)
+        });
 
         if removed.len() == 1 {
             typed_arg.attrs = other;
@@ -1042,10 +1023,7 @@ fn find_first_slice(sig: &syn::Signature) -> Option<&syn::TypePath> {
 /// Returns `(ctx_type, needs_lifetime)` where:
 /// - `ctx_type`: The type to use for `StepContext` trait lookup
 /// - `needs_lifetime`: Whether the macro should inject a lifetime parameter
-fn parse_context_type_and_mode(
-    sig: &Signature,
-    attr_name: &str,
-) -> syn::Result<(syn::Type, bool)> {
+fn parse_context_type_and_mode(sig: &Signature, attr_name: &str) -> syn::Result<(syn::Type, bool)> {
     let first_arg = sig.inputs.first().ok_or_else(|| {
         syn::Error::new(
             sig.ident.span(),
@@ -1157,8 +1135,8 @@ fn parse_context_type_and_mode(
             let ctx_type_with_lifetime = {
                 let mut path = p.path.clone();
                 if let Some(last_seg) = path.segments.last_mut() {
-                    last_seg.arguments = syn::PathArguments::AngleBracketed(
-                        syn::AngleBracketedGenericArguments {
+                    last_seg.arguments =
+                        syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
                             colon2_token: None,
                             lt_token: Default::default(),
                             args: std::iter::once(syn::GenericArgument::Lifetime(
@@ -1166,8 +1144,7 @@ fn parse_context_type_and_mode(
                             ))
                             .collect(),
                             gt_token: Default::default(),
-                        },
-                    );
+                        });
                 }
                 syn::Type::Path(syn::TypePath {
                     qself: p.qself.clone(),
@@ -1191,7 +1168,10 @@ fn parse_context_type_and_mode(
 
 // Keep the old function for backward compatibility with other code that may use it
 #[allow(dead_code)]
-fn parse_context_type_from_args<'a>(sig: &'a Signature, attr_name: &str) -> syn::Result<&'a syn::TypePath> {
+fn parse_context_type_from_args<'a>(
+    sig: &'a Signature,
+    attr_name: &str,
+) -> syn::Result<&'a syn::TypePath> {
     let first_arg = sig.inputs.first().ok_or_else(|| {
         let msg = if attr_name == "then" {
             "first function argument expected to be `TestWorldRef` (no generics) for `Then` steps"
@@ -1301,7 +1281,10 @@ fn parse_context_type_from_args<'a>(sig: &'a Signature, attr_name: &str) -> syn:
 /// the signature is left unchanged - no lifetime injection is needed.
 ///
 /// This provides ergonomic step authoring without requiring explicit lifetimes.
-fn rewrite_signature_with_lifetime(func: &mut syn::ItemFn, needs_lifetime: bool) -> syn::Result<()> {
+fn rewrite_signature_with_lifetime(
+    func: &mut syn::ItemFn,
+    needs_lifetime: bool,
+) -> syn::Result<()> {
     // Only inject lifetime if the context type needs it
     if !needs_lifetime {
         return Ok(());
@@ -1309,7 +1292,10 @@ fn rewrite_signature_with_lifetime(func: &mut syn::ItemFn, needs_lifetime: bool)
 
     // Get the first argument type
     let first_arg = func.sig.inputs.first_mut().ok_or_else(|| {
-        syn::Error::new(func.sig.ident.span(), "step function must have at least one argument")
+        syn::Error::new(
+            func.sig.ident.span(),
+            "step function must have at least one argument",
+        )
     })?;
 
     let typed_arg = match first_arg {
@@ -1362,9 +1348,12 @@ fn rewrite_signature_with_lifetime(func: &mut syn::ItemFn, needs_lifetime: bool)
 
     // Add the fresh lifetime to the function generics (only if not already present)
     let ctx_lifetime: syn::Lifetime = syn::parse_quote!('__ctx);
-    let has_ctx_lifetime = func.sig.generics.params.iter().any(|p| {
-        matches!(p, syn::GenericParam::Lifetime(lt) if lt.lifetime.ident == "__ctx")
-    });
+    let has_ctx_lifetime = func
+        .sig
+        .generics
+        .params
+        .iter()
+        .any(|p| matches!(p, syn::GenericParam::Lifetime(lt) if lt.lifetime.ident == "__ctx"));
     if !has_ctx_lifetime {
         func.sig.generics.params.insert(
             0,
@@ -1373,15 +1362,13 @@ fn rewrite_signature_with_lifetime(func: &mut syn::ItemFn, needs_lifetime: bool)
     }
 
     // Rewrite the type to include the lifetime: TestWorldMut -> TestWorldMut<'__ctx>
-    last_segment.arguments = syn::PathArguments::AngleBracketed(
-        syn::AngleBracketedGenericArguments {
+    last_segment.arguments =
+        syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
             colon2_token: None,
             lt_token: syn::token::Lt::default(),
-            args: std::iter::once(syn::GenericArgument::Lifetime(ctx_lifetime))
-                .collect(),
+            args: std::iter::once(syn::GenericArgument::Lifetime(ctx_lifetime)).collect(),
             gt_token: syn::token::Gt::default(),
-        },
-    );
+        });
 
     Ok(())
 }
@@ -1414,8 +1401,7 @@ fn is_docstring_type(ty: &syn::Type) -> bool {
                     {
                         if let Some(inner_seg) = inner.path.segments.last() {
                             // Option<String> or Option<DocString>
-                            return inner_seg.ident == "String"
-                                || inner_seg.ident == "DocString";
+                            return inner_seg.ident == "String" || inner_seg.ident == "DocString";
                         }
                     }
                 }

@@ -1,5 +1,3 @@
-
-
 //! Tools for parsing [Gherkin] files.
 //!
 //! [Gherkin]: https://cucumber.io/docs/gherkin/reference

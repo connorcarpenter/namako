@@ -9,14 +9,14 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use walkdir::WalkDir;
 
 use namako_engine::engine::ResolutionEngine;
 use namako_engine::npap::{
-    Certification, CertificationIdentity, RunReport, SemanticStepRegistry,
-    ScenarioStatus, HASH_CONTRACT_VERSION,
+    Certification, CertificationIdentity, RunReport, ScenarioStatus, SemanticStepRegistry,
+    HASH_CONTRACT_VERSION,
 };
 
 /// Arguments for the verify command.
@@ -55,8 +55,8 @@ pub fn run(args: VerifyArgs) -> Result<()> {
     // Step 1: Read the run report
     let run_report_json = std::fs::read_to_string(&args.run_report)
         .with_context(|| format!("Failed to read run report: {}", args.run_report.display()))?;
-    let run_report: RunReport = serde_json::from_str(&run_report_json)
-        .context("Failed to parse run report JSON")?;
+    let run_report: RunReport =
+        serde_json::from_str(&run_report_json).context("Failed to parse run report JSON")?;
 
     // Step 1.5: Check that all scenarios passed in the run report
     for scenario in &run_report.scenarios {
@@ -76,16 +76,23 @@ pub fn run(args: VerifyArgs) -> Result<()> {
     }
 
     // Step 2: Read the certification baseline
-    let cert_json = std::fs::read_to_string(&args.certification)
-        .with_context(|| format!("Failed to read certification: {}", args.certification.display()))?;
-    let certification: Certification = serde_json::from_str(&cert_json)
-        .context("Failed to parse certification JSON")?;
+    let cert_json = std::fs::read_to_string(&args.certification).with_context(|| {
+        format!(
+            "Failed to read certification: {}",
+            args.certification.display()
+        )
+    })?;
+    let certification: Certification =
+        serde_json::from_str(&cert_json).context("Failed to parse certification JSON")?;
 
     // Step 3: Recompute from current sources
     let recomputed = recompute_identity(&args)?;
     if args.verbose {
         eprintln!("Recomputed identity from current sources");
-        eprintln!("  feature_fingerprint_hash: {}", recomputed.feature_fingerprint_hash);
+        eprintln!(
+            "  feature_fingerprint_hash: {}",
+            recomputed.feature_fingerprint_hash
+        );
         eprintln!("  step_registry_hash: {}", recomputed.step_registry_hash);
         eprintln!("  resolved_plan_hash: {}", recomputed.resolved_plan_hash);
     }
@@ -251,10 +258,7 @@ fn discover_features(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Read feature files and return (relative_path, content) pairs.
-fn read_features(
-    specs_dir: &std::path::Path,
-    paths: &[PathBuf],
-) -> Result<Vec<(String, String)>> {
+fn read_features(specs_dir: &std::path::Path, paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
     let mut features = Vec::with_capacity(paths.len());
 
     for path in paths {
@@ -296,8 +300,7 @@ fn fetch_adapter_manifest(adapter_cmd: &str) -> Result<SemanticStepRegistry> {
         bail!("Adapter command failed: {}", stderr);
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("Adapter output is not valid UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("Adapter output is not valid UTF-8")?;
 
     serde_json::from_str(&stdout).context("Failed to parse adapter manifest JSON")
 }

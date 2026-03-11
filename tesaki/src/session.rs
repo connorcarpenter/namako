@@ -48,8 +48,11 @@ impl SessionIntent {
                 .map(|s| s.default_surface_policy())
                 .unwrap_or_else(SurfacePolicy::for_finalize)
         } else {
-            self.surface_overrides.clone()
-                .unwrap_or_else(|| self.stage.map(|s| s.default_surface_policy()).unwrap_or_else(SurfacePolicy::for_finalize))
+            self.surface_overrides.clone().unwrap_or_else(|| {
+                self.stage
+                    .map(|s| s.default_surface_policy())
+                    .unwrap_or_else(SurfacePolicy::for_finalize)
+            })
         };
 
         if msg.contains("lock spec") {

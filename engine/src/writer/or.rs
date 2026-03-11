@@ -1,5 +1,3 @@
-
-
 //! Passing events to one of two [`Writer`]s based on a predicate.
 
 use crate::{Event, World, Writer, cli, event, parser, writer};
@@ -26,7 +24,11 @@ impl<L, R, F> Or<L, R, F> {
     /// otherwise the `right` [`Writer`] is used on [`false`].
     #[must_use]
     pub const fn new(left: L, right: R, predicate: F) -> Self {
-        Self { left, right, predicate }
+        Self {
+            left,
+            right,
+            predicate,
+        }
     }
 
     /// Returns the left [`Writer`] of this [`Or`] one.
@@ -48,10 +50,7 @@ where
     W: World,
     L: Writer<W>,
     R: Writer<W>,
-    F: FnMut(
-        &parser::Result<Event<event::Namako<W>>>,
-        &cli::Compose<L::Cli, R::Cli>,
-    ) -> bool,
+    F: FnMut(&parser::Result<Event<event::Namako<W>>>, &cli::Compose<L::Cli, R::Cli>) -> bool,
 {
     type Cli = cli::Compose<L::Cli, R::Cli>;
 
@@ -72,10 +71,7 @@ impl<W, L, R, F> writer::Stats<W> for Or<L, R, F>
 where
     L: writer::Stats<W>,
     R: writer::Stats<W>,
-    F: FnMut(
-        &parser::Result<Event<event::Namako<W>>>,
-        &cli::Compose<L::Cli, R::Cli>,
-    ) -> bool,
+    F: FnMut(&parser::Result<Event<event::Namako<W>>>, &cli::Compose<L::Cli, R::Cli>) -> bool,
     Self: Writer<W>,
 {
     fn passed_steps(&self) -> usize {

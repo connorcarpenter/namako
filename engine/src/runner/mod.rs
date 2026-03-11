@@ -1,5 +1,3 @@
-
-
 //! Tools for executing [`Step`]s.
 //!
 //! [Gherkin]: https://cucumber.io/docs/gherkin/reference/
@@ -69,9 +67,7 @@ pub trait Runner<World> {
     type Cli: clap::Args;
 
     /// Output events [`Stream`].
-    type EventStream: Stream<
-        Item = parser::Result<Event<event::Namako<World>>>,
-    >;
+    type EventStream: Stream<Item = parser::Result<Event<event::Namako<World>>>>;
 
     /// Executes the given [`Stream`] of [`Feature`]s transforming it into
     /// a [`Stream`] of executed [`Namako`] events.

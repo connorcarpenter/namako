@@ -4,9 +4,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub use servling::OutcomeClassification;
 pub use servling::token_usage::TokenUsage;
-pub use servling::{Servling, LLMRequest, LLMResponse};
+pub use servling::OutcomeClassification;
+pub use servling::{LLMRequest, LLMResponse, Servling};
 
 /// Configuration for mission execution.
 #[derive(Debug, Clone)]
@@ -45,7 +45,11 @@ pub struct RunnerOutcome {
 pub trait Runner: Send + Sync {
     fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome>;
     fn name(&self) -> &'static str;
-    fn planned_invocation(&self, _mission_dir: &Path, _config: &RunnerConfig) -> Option<RunnerInvocation> {
+    fn planned_invocation(
+        &self,
+        _mission_dir: &Path,
+        _config: &RunnerConfig,
+    ) -> Option<RunnerInvocation> {
         None
     }
 }
@@ -91,7 +95,11 @@ impl<T: Servling + ?Sized> Runner for T {
         })
     }
 
-    fn planned_invocation(&self, mission_dir: &Path, config: &RunnerConfig) -> Option<RunnerInvocation> {
+    fn planned_invocation(
+        &self,
+        mission_dir: &Path,
+        config: &RunnerConfig,
+    ) -> Option<RunnerInvocation> {
         let mission_path = mission_dir.join("MISSION.md");
         let request = LLMRequest {
             prompt: String::new(),
@@ -101,13 +109,14 @@ impl<T: Servling + ?Sized> Runner for T {
             stream_output: config.stream_output,
             input_file: Some(mission_path),
         };
-        
-        self.planned_invocation(&request).map(|inv| RunnerInvocation {
-            program: inv.program,
-            args: inv.args,
-            working_dir: inv.working_dir,
-            env: inv.env,
-        })
+
+        self.planned_invocation(&request)
+            .map(|inv| RunnerInvocation {
+                program: inv.program,
+                args: inv.args,
+                working_dir: inv.working_dir,
+                env: inv.env,
+            })
     }
 }
 
@@ -117,9 +126,9 @@ pub fn check_surface_violations(
     spec_patterns: &[String],
     tests_patterns: &[String],
     sut_patterns: &[String],
-    policy_spec: bool,       // true = unlocked
-    policy_tests: bool,      // true = unlocked
-    policy_sut: bool,        // true = unlocked
+    policy_spec: bool,  // true = unlocked
+    policy_tests: bool, // true = unlocked
+    policy_sut: bool,   // true = unlocked
 ) -> Vec<String> {
     let mut violations = Vec::new();
     for file in changed_files {
@@ -158,9 +167,7 @@ fn glob_match_parts(pat: &[&str], path: &[&str]) -> bool {
             glob_match_parts(&pat[1..], path)
                 || (!path.is_empty() && glob_match_parts(pat, &path[1..]))
         }
-        (Some(p), Some(s)) => {
-            segment_match(p, s) && glob_match_parts(&pat[1..], &path[1..])
-        }
+        (Some(p), Some(s)) => segment_match(p, s) && glob_match_parts(&pat[1..], &path[1..]),
         _ => false,
     }
 }
@@ -256,13 +263,11 @@ impl Runner for MockRunner {
             } else {
                 "# Attempt Report\n\nMission failed (mock).\n"
             };
-            std::fs::write(&report_path, content)
-                .context("Failed to write mock attempt report")?;
+            std::fs::write(&report_path, content).context("Failed to write mock attempt report")?;
         }
 
         if let Some((path, content)) = &self.create_file {
-            std::fs::write(path, content)
-                .context("Failed to create mock file")?;
+            std::fs::write(path, content).context("Failed to create mock file")?;
         }
 
         let (exit_code, classification) = if self.should_succeed {
@@ -312,13 +317,21 @@ pub fn build_runner(candidates: Vec<servling::AgentCandidate>) -> anyhow::Result
     // Use a manual wrap to force dyn Runner coercion
     struct RunnerWrap(Box<dyn Servling>);
     impl Runner for RunnerWrap {
-        fn run(&self, mission_dir: &std::path::Path, config: &RunnerConfig) -> anyhow::Result<RunnerOutcome> {
+        fn run(
+            &self,
+            mission_dir: &std::path::Path,
+            config: &RunnerConfig,
+        ) -> anyhow::Result<RunnerOutcome> {
             self.0.run(mission_dir, config)
         }
         fn name(&self) -> &'static str {
             Servling::name(&*self.0)
         }
-        fn planned_invocation(&self, mission_dir: &std::path::Path, config: &RunnerConfig) -> Option<RunnerInvocation> {
+        fn planned_invocation(
+            &self,
+            mission_dir: &std::path::Path,
+            config: &RunnerConfig,
+        ) -> Option<RunnerInvocation> {
             // Create a temporary LLMRequest for planned_invocation
             let request = LLMRequest {
                 prompt: String::new(),
@@ -369,14 +382,14 @@ mod tests {
         let mission_dir = tempfile::tempdir().unwrap();
         let mission_path = mission_dir.path().join("MISSION.md");
         std::fs::write(&mission_path, "test mission").unwrap();
-        
+
         let config = RunnerConfig {
             working_dir: PathBuf::from("."),
             max_runtime_seconds: 30,
             model: None,
             stream_output: false,
         };
-        
+
         let outcome = Runner::run(&agent, mission_dir.path(), &config).unwrap();
         assert_eq!(outcome.classification, OutcomeClassification::Ok);
     }
@@ -397,7 +410,10 @@ mod tests {
         let sut_pats = vec!["src/**".to_string()];
 
         let violations = check_surface_violations(
-            &changed, &spec_pats, &tests_pats, &sut_pats,
+            &changed,
+            &spec_pats,
+            &tests_pats,
+            &sut_pats,
             false,
             true,
             true,
@@ -408,7 +424,10 @@ mod tests {
 
     #[test]
     fn test_glob_match_double_star() {
-        assert!(glob_match("test/specs/**/*.feature", "test/specs/features/a.feature"));
+        assert!(glob_match(
+            "test/specs/**/*.feature",
+            "test/specs/features/a.feature"
+        ));
         assert!(glob_match("src/**", "src/main.rs"));
         assert!(glob_match("src/**", "src/sub/deep/file.rs"));
         assert!(!glob_match("src/**", "test/main.rs"));

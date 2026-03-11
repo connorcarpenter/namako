@@ -1,5 +1,3 @@
-
-
 //! [`Writer`]-wrapper for transforming [`Skipped`] [`Step`]s into [`Failed`].
 //!
 //! [`Failed`]: event::Step::Failed
@@ -38,17 +36,12 @@ pub struct FailOnSkipped<W, F = SkipFn> {
 ///
 /// [`Failed`]: event::Step::Failed
 /// [`Skipped`]: event::Step::Skipped
-pub type SkipFn =
-    fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool;
+pub type SkipFn = fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool;
 
 impl<W, Wr, F> Writer<W> for FailOnSkipped<Wr, F>
 where
     W: World,
-    F: Fn(
-        &gherkin::Feature,
-        Option<&gherkin::Rule>,
-        &gherkin::Scenario,
-    ) -> bool,
+    F: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool,
     Wr: Writer<W>,
 {
     type Cli = Wr::Cli;
@@ -58,10 +51,7 @@ where
         event: parser::Result<Event<event::Namako<W>>>,
         cli: &Self::Cli,
     ) {
-        use event::{
-            Namako, Feature, Rule, Scenario, Step,
-            StepError::NotFound,
-        };
+        use event::{Feature, Namako, Rule, Scenario, Step, StepError::NotFound};
 
         let map_failed = |f: &Source<_>, r: &Option<_>, sc: &Source<_>| {
             if (self.should_fail)(f, r.as_deref(), sc) {
@@ -70,55 +60,34 @@ where
                 Step::Skipped
             }
         };
-        let map_failed_bg =
-            |f: Source<_>, r: Option<_>, sc: Source<_>, st: _| {
-                let ev = map_failed(&f, &r, &sc);
-                let ev = Scenario::Background(st, ev);
-                Namako::scenario(f, r, sc, ev)
-            };
-        let map_failed_step =
-            |f: Source<_>, r: Option<_>, sc: Source<_>, st: _| {
-                let ev = map_failed(&f, &r, &sc);
-                let ev = Scenario::Step(st, ev);
-                Namako::scenario(f, r, sc, ev)
-            };
+        let map_failed_bg = |f: Source<_>, r: Option<_>, sc: Source<_>, st: _| {
+            let ev = map_failed(&f, &r, &sc);
+            let ev = Scenario::Background(st, ev);
+            Namako::scenario(f, r, sc, ev)
+        };
+        let map_failed_step = |f: Source<_>, r: Option<_>, sc: Source<_>, st: _| {
+            let ev = map_failed(&f, &r, &sc);
+            let ev = Scenario::Step(st, ev);
+            Namako::scenario(f, r, sc, ev)
+        };
 
         let event = event.map(|outer| {
             outer.map(|ev| match ev {
                 Namako::Feature(
                     f,
-                    Feature::Rule(
-                        r,
-                        Rule::Scenario(
-                            sc,
-                            Scenario::Background(st, Step::Skipped),
-                        ),
-                    ),
+                    Feature::Rule(r, Rule::Scenario(sc, Scenario::Background(st, Step::Skipped))),
                 ) => map_failed_bg(f, Some(r), sc, st),
                 Namako::Feature(
                     f,
-                    Feature::Scenario(
-                        sc,
-                        Scenario::Background(st, Step::Skipped),
-                    ),
+                    Feature::Scenario(sc, Scenario::Background(st, Step::Skipped)),
                 ) => map_failed_bg(f, None, sc, st),
                 Namako::Feature(
                     f,
-                    Feature::Rule(
-                        r,
-                        Rule::Scenario(
-                            sc,
-                            Scenario::Step(st, Step::Skipped),
-                        ),
-                    ),
+                    Feature::Rule(r, Rule::Scenario(sc, Scenario::Step(st, Step::Skipped))),
                 ) => map_failed_step(f, Some(r), sc, st),
-                Namako::Feature(
-                    f,
-                    Feature::Scenario(
-                        sc,
-                        Scenario::Step(st, Step::Skipped),
-                    ),
-                ) => map_failed_step(f, None, sc, st),
+                Namako::Feature(f, Feature::Scenario(sc, Scenario::Step(st, Step::Skipped))) => {
+                    map_failed_step(f, None, sc, st)
+                }
                 Namako::Started
                 | Namako::Feature(..)
                 | Namako::ParsingFinished { .. }
@@ -196,18 +165,14 @@ impl<Writer> FailOnSkipped<Writer> {
     /// [`Skipped`]: event::Step::Skipped
     /// [`Step`]: gherkin::Step
     #[must_use]
-    pub const fn with<P>(
-        writer: Writer,
-        predicate: P,
-    ) -> FailOnSkipped<Writer, P>
+    pub const fn with<P>(writer: Writer, predicate: P) -> FailOnSkipped<Writer, P>
     where
-        P: Fn(
-            &gherkin::Feature,
-            Option<&gherkin::Rule>,
-            &gherkin::Scenario,
-        ) -> bool,
+        P: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool,
     {
-        FailOnSkipped { writer, should_fail: predicate }
+        FailOnSkipped {
+            writer,
+            should_fail: predicate,
+        }
     }
 
     /// Returns the original [`Writer`], wrapped by this [`FailOnSkipped`] one.

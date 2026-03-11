@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub use servling::{Servling, LLMRequest};
+pub use servling::{LLMRequest, Servling};
 
 /// A single allowlisted command request from the chat planner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,7 +101,7 @@ impl<T: Servling + ?Sized> ChatPlanner for T {
 
         let resp = self.execute(&request)?;
         let json_text = strip_markdown_code_fences(&resp.text);
-        
+
         let plan: ChatPlan = serde_json::from_str(&json_text)
             .with_context(|| format!("LLM returned invalid JSON for plan: {}", resp.text))?;
         Ok(plan)
@@ -131,14 +131,21 @@ impl ChatPlanner for MockChatPlanner {
 
 /// Format the ChatTurnInput as a compact prompt for LLM planners.
 pub fn format_planner_prompt(input: &ChatTurnInput) -> String {
-    let system_prompt = input.system_prompt.as_deref().unwrap_or(DEFAULT_SYSTEM_PROMPT);
-    
+    let system_prompt = input
+        .system_prompt
+        .as_deref()
+        .unwrap_or(DEFAULT_SYSTEM_PROMPT);
+
     let mut prompt = String::new();
     prompt.push_str(system_prompt);
     prompt.push_str("\n\n");
-    
+
     prompt.push_str("## Repository State\n");
-    if let Some(summary) = input.session_state_json.get("last_repo_state_summary").and_then(|v| v.as_str()) {
+    if let Some(summary) = input
+        .session_state_json
+        .get("last_repo_state_summary")
+        .and_then(|v| v.as_str())
+    {
         prompt.push_str(summary);
         prompt.push('\n');
     }
@@ -148,17 +155,17 @@ pub fn format_planner_prompt(input: &ChatTurnInput) -> String {
         }
     }
     prompt.push('\n');
-    
+
     if let Some(hint) = &input.planner_hint {
         prompt.push_str("Note: ");
         prompt.push_str(hint);
         prompt.push_str("\n\n");
     }
-    
+
     prompt.push_str("## User\n");
     prompt.push_str(&input.user_message);
     prompt.push_str("\n\n");
-    
+
     prompt.push_str("Respond with JSON only.\n");
     prompt
 }
@@ -199,7 +206,7 @@ Be concise. Focus on actionable next steps.
 pub fn strip_markdown_code_fences(text: &str) -> String {
     let trimmed = text.trim();
     let start_patterns = ["```json", "```JSON", "```"];
-    
+
     for pattern in &start_patterns {
         if let Some(start_pos) = trimmed.find(pattern) {
             let after_pattern = &trimmed[start_pos + pattern.len()..];
@@ -213,7 +220,9 @@ pub fn strip_markdown_code_fences(text: &str) -> String {
 }
 
 /// Factory to build a ChatPlanner from agent candidates.
-pub fn build_planner(candidates: Vec<servling::AgentCandidate>) -> anyhow::Result<Box<dyn ChatPlanner>> {
+pub fn build_planner(
+    candidates: Vec<servling::AgentCandidate>,
+) -> anyhow::Result<Box<dyn ChatPlanner>> {
     let agent = servling::build_coding_agent(candidates)?;
     struct PlannerWrap(Box<dyn Servling>);
     impl ChatPlanner for PlannerWrap {
@@ -242,7 +251,7 @@ mod tests {
             planner_hint: None,
             system_prompt: None,
         };
-        
+
         let plan = ChatPlanner::plan_turn(&agent, &input).unwrap();
         assert_eq!(plan.say, "Mock success");
     }

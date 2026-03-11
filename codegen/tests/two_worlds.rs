@@ -1,7 +1,4 @@
-use namako_engine::{
-    StatsWriter as _, World,
-    gherkin::Step, given, then, when, writer,
-};
+use namako_engine::{StatsWriter as _, World, gherkin::Step, given, then, when, writer};
 
 #[derive(Debug, Default, World)]
 #[world(mut_ctx = FirstWorldMut<'a>, ref_ctx = FirstWorldRef<'a>)]
@@ -23,11 +20,17 @@ pub struct FirstWorldMut<'a>(&'a mut FirstWorld);
 pub struct FirstWorldRef<'a>(&'a FirstWorld);
 
 impl<'a> FirstWorldMut<'a> {
-    fn new(world: &'a mut FirstWorld) -> Self { Self(world) }
+    fn new(world: &'a mut FirstWorld) -> Self {
+        Self(world)
+    }
 }
 impl<'a> FirstWorldRef<'a> {
-    fn new(world: &'a FirstWorld) -> Self { Self(world) }
-    fn world(&self) -> &FirstWorld { self.0 }
+    fn new(world: &'a FirstWorld) -> Self {
+        Self(world)
+    }
+    fn world(&self) -> &FirstWorld {
+        self.0
+    }
 }
 
 // Context wrapper types for SecondWorld
@@ -38,11 +41,17 @@ pub struct SecondWorldMut<'a>(&'a mut SecondWorld);
 pub struct SecondWorldRef<'a>(&'a SecondWorld);
 
 impl<'a> SecondWorldMut<'a> {
-    fn new(world: &'a mut SecondWorld) -> Self { Self(world) }
+    fn new(world: &'a mut SecondWorld) -> Self {
+        Self(world)
+    }
 }
 impl<'a> SecondWorldRef<'a> {
-    fn new(world: &'a SecondWorld) -> Self { Self(world) }
-    fn world(&self) -> &SecondWorld { self.0 }
+    fn new(world: &'a SecondWorld) -> Self {
+        Self(world)
+    }
+    fn world(&self) -> &SecondWorld {
+        self.0
+    }
 }
 
 #[given("{word} is sync {int}")]
@@ -56,12 +65,7 @@ fn test_regex_sync_slice_first(w: FirstWorldMut, step: &Step, matches: &[String]
 
 #[given("{word} is {int}")]
 #[when("{word} is {int}")]
-async fn test_regex_async_first(
-    w: FirstWorldMut,
-    step: String,
-    #[step] ctx: &Step,
-    num: usize,
-) {
+async fn test_regex_async_first(w: FirstWorldMut, step: String, #[step] ctx: &Step, num: usize) {
     assert_eq!(step, "foo");
     assert_eq!(num, 0);
     assert_eq!(ctx.value, "foo is 0");
@@ -87,12 +91,7 @@ fn test_read_slice_first(w: FirstWorldRef, _inputs: &[String]) {
 
 #[given("{word} is {int}")]
 #[when("{word} is {int}")]
-async fn test_regex_async_second(
-    w: SecondWorldMut,
-    step: String,
-    #[step] _ctx: &Step,
-    num: usize,
-) {
+async fn test_regex_async_second(w: SecondWorldMut, step: String, #[step] _ctx: &Step, num: usize) {
     assert_eq!(step, "foo");
     assert_eq!(num, 0);
 
@@ -123,7 +122,6 @@ fn test_read_second(w: SecondWorldRef, _inputs: &[String]) {
 fn test_read_slice_second(w: SecondWorldRef, _inputs: &[String]) {
     let _ = w.world();
 }
-
 
 #[tokio::main]
 async fn main() {

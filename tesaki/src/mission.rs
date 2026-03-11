@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use crate::mission_type::{MissionBrief, MissionType};
 use crate::prompts::{
     render_mission_md, render_policy_md, BudgetsContext, MissionContext, PolicyContext,
-    SurfaceDefinitionsContext, SurfacePolicyContext, TESAKI_VERSION, PreviousFailureContext,
+    PreviousFailureContext, SurfaceDefinitionsContext, SurfacePolicyContext, TESAKI_VERSION,
 };
 use crate::stage::Stage;
 use crate::surface_policy::{SurfaceDefinition, SurfacePolicy};
@@ -54,16 +54,15 @@ impl MissionId {
     /// - NNN = next integer by scanning `.tesaki/missions` and `.tesaki/failed`
     /// - task_slug = sanitized version of task name (max 20 chars)
     /// - short_hash = first 8 chars of blake3 hash of (task identity + packet hashes)
-    pub fn generate(
-        tesaki_root: &Path,
-        task_name: &str,
-        identity_data: &str,
-    ) -> Result<Self> {
+    pub fn generate(tesaki_root: &Path, task_name: &str, identity_data: &str) -> Result<Self> {
         let next_num = Self::find_next_number(tesaki_root)?;
         let slug = Self::slugify(task_name, 20);
         let short_hash = Self::compute_short_hash(identity_data);
 
-        Ok(MissionId(format!("{:03}-{}-{}", next_num, slug, short_hash)))
+        Ok(MissionId(format!(
+            "{:03}-{}-{}",
+            next_num, slug, short_hash
+        )))
     }
 
     /// Get the mission ID string.
@@ -80,7 +79,9 @@ impl MissionId {
 
         for dir in [&missions_dir, &failed_dir] {
             if dir.exists() {
-                for entry in fs::read_dir(dir).with_context(|| format!("Failed to read {}", dir.display()))? {
+                for entry in fs::read_dir(dir)
+                    .with_context(|| format!("Failed to read {}", dir.display()))?
+                {
                     let entry = entry?;
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
@@ -256,7 +257,8 @@ impl MissionBundle {
         fs::write(mission_dir.join("MISSION.md"), &mission_content)?;
 
         // Write POLICY.md
-        let policy_content = Self::generate_policy_content(&budgets, surface_policy, surface_definitions);
+        let policy_content =
+            Self::generate_policy_content(&budgets, surface_policy, surface_definitions);
         fs::write(mission_dir.join("POLICY.md"), &policy_content)?;
 
         // Write INPUTS
@@ -289,7 +291,9 @@ impl MissionBundle {
 
     /// Preserve a failed mission by moving it to .tesaki/failed/<mission_id>/.
     pub fn preserve_failed(self) -> Result<PathBuf> {
-        let tesaki_root = self.path.parent()
+        let tesaki_root = self
+            .path
+            .parent()
             .and_then(|p| p.parent())
             .context("Invalid mission path structure")?;
 
@@ -299,12 +303,13 @@ impl MissionBundle {
         let failed_path = failed_dir.join(self.id.as_str());
 
         // Move the directory
-        fs::rename(&self.path, &failed_path)
-            .with_context(|| format!(
+        fs::rename(&self.path, &failed_path).with_context(|| {
+            format!(
                 "Failed to move mission from {} to {}",
                 self.path.display(),
                 failed_path.display()
-            ))?;
+            )
+        })?;
 
         Ok(failed_path)
     }
@@ -319,7 +324,10 @@ impl MissionBundle {
     /// Check if the runner wrote an attempt report.
     #[allow(dead_code)]
     pub fn has_attempt_report(&self) -> bool {
-        self.path.join("RUNNER_OUTPUT").join("attempt_report.md").exists()
+        self.path
+            .join("RUNNER_OUTPUT")
+            .join("attempt_report.md")
+            .exists()
     }
 
     /// Generate MISSION.md content using templates.
@@ -354,7 +362,10 @@ impl MissionBundle {
             log::error!("Failed to render MISSION.md template: {}", e);
             format!(
                 "# Mission {}\n\n**Type:** {}\n**Stage:** {}\n\n## Objective\n\n{}\n",
-                id, mission_type.name(), stage.name(), brief.objective
+                id,
+                mission_type.name(),
+                stage.name(),
+                brief.objective
             )
         })
     }
@@ -392,7 +403,10 @@ mod tests {
         assert_eq!(MissionId::slugify("test_scenario_1", 20), "test-scenario-1");
         assert_eq!(MissionId::slugify("  spaces  ", 20), "spaces");
         assert_eq!(MissionId::slugify("a-b--c---d", 20), "a-b-c-d");
-        assert_eq!(MissionId::slugify("VeryLongScenarioNameThatExceedsLimit", 20), "verylongscenarioname");
+        assert_eq!(
+            MissionId::slugify("VeryLongScenarioNameThatExceedsLimit", 20),
+            "verylongscenarioname"
+        );
     }
 
     #[test]
@@ -459,7 +473,8 @@ mod tests {
             &inputs,
             MissionBudgets::default(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Verify directory structure
         assert!(bundle.path.exists());
@@ -515,7 +530,8 @@ mod tests {
             &inputs,
             MissionBudgets::default(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         let original_path = bundle.path.clone();
         let mission_id = bundle.id.as_str().to_string();
@@ -569,7 +585,8 @@ mod tests {
             &inputs,
             MissionBudgets::default(),
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         let gate_result = r#"{"lint": {"status": "pass"}, "run": {"status": "pass"}, "verify": {"status": "pass"}}"#;
         bundle.write_gate_result(gate_result).unwrap();

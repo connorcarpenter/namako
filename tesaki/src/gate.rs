@@ -173,11 +173,11 @@ impl GateFailureDetails {
     /// Extract failure details from a GateJson.
     pub fn from_gate(gate: &GateJson) -> Option<Self> {
         let outcome = GateOutcome::classify(gate);
-        
+
         if outcome == GateOutcome::Pass {
             return None;
         }
-        
+
         // Determine which phase failed
         let (failed_phase, phase_result) = if gate.lint.status == PhaseStatus::Fail {
             ("lint", &gate.lint)
@@ -188,12 +188,14 @@ impl GateFailureDetails {
         } else {
             return None;
         };
-        
-        let summary = phase_result.reason.clone()
+
+        let summary = phase_result
+            .reason
+            .clone()
             .unwrap_or_else(|| format!("{} phase failed", failed_phase));
-        
+
         let errors = phase_result.errors.clone().unwrap_or_default();
-        
+
         Some(GateFailureDetails {
             outcome,
             failed_phase: failed_phase.to_string(),
@@ -201,11 +203,14 @@ impl GateFailureDetails {
             errors,
         })
     }
-    
+
     /// Format as markdown for mission context.
     pub fn to_markdown(&self) -> String {
-        let mut md = format!("### Gate Failure: {} ({})\n\n", self.failed_phase, self.summary);
-        
+        let mut md = format!(
+            "### Gate Failure: {} ({})\n\n",
+            self.failed_phase, self.summary
+        );
+
         if !self.errors.is_empty() {
             md.push_str("**Specific errors:**\n");
             for (i, err) in self.errors.iter().take(10).enumerate() {
@@ -218,10 +223,13 @@ impl GateFailureDetails {
                 }
             }
             if self.errors.len() > 10 {
-                md.push_str(&format!("\n... and {} more errors\n", self.errors.len() - 10));
+                md.push_str(&format!(
+                    "\n... and {} more errors\n",
+                    self.errors.len() - 10
+                ));
             }
         }
-        
+
         md
     }
 }
@@ -430,9 +438,17 @@ impl UpdateCertInvoker for MockInvoker {
         *self.update_cert_calls.lock().unwrap() += 1;
         UpdateCertResult {
             success: self.update_cert_succeeds,
-            exit_status: if self.update_cert_succeeds { Some(0) } else { Some(1) },
+            exit_status: if self.update_cert_succeeds {
+                Some(0)
+            } else {
+                Some(1)
+            },
             stdout: "mock stdout".to_string(),
-            stderr: if self.update_cert_succeeds { String::new() } else { "mock error".to_string() },
+            stderr: if self.update_cert_succeeds {
+                String::new()
+            } else {
+                "mock error".to_string()
+            },
             elapsed_seconds: 0.1,
         }
     }
@@ -484,9 +500,21 @@ mod tests {
 
     fn make_gate_json(lint: PhaseStatus, run: PhaseStatus, verify: PhaseStatus) -> GateJson {
         GateJson {
-            lint: PhaseResult { status: lint, reason: None, errors: None },
-            run: PhaseResult { status: run, reason: None, errors: None },
-            verify: PhaseResult { status: verify, reason: None, errors: None },
+            lint: PhaseResult {
+                status: lint,
+                reason: None,
+                errors: None,
+            },
+            run: PhaseResult {
+                status: run,
+                reason: None,
+                errors: None,
+            },
+            verify: PhaseResult {
+                status: verify,
+                reason: None,
+                errors: None,
+            },
             determinism: None,
         }
     }
@@ -506,7 +534,11 @@ mod tests {
 
     #[test]
     fn test_classify_lint_fail() {
-        let gate = make_gate_json(PhaseStatus::Fail, PhaseStatus::Skipped, PhaseStatus::Skipped);
+        let gate = make_gate_json(
+            PhaseStatus::Fail,
+            PhaseStatus::Skipped,
+            PhaseStatus::Skipped,
+        );
         assert_eq!(GateOutcome::classify(&gate), GateOutcome::FailOther);
         assert!(!GateOutcome::FailOther.allows_update_cert());
     }
@@ -524,7 +556,10 @@ mod tests {
             "run": {"status": "pass"},
             "verify": {"status": "fail", "reason": "drift detected"}
         }"#;
-        assert_eq!(GateOutcome::from_json_str(json), GateOutcome::FailVerifyOnly);
+        assert_eq!(
+            GateOutcome::from_json_str(json),
+            GateOutcome::FailVerifyOnly
+        );
     }
 
     #[test]
@@ -557,21 +592,27 @@ mod tests {
     #[test]
     fn test_mock_invoker_gate_outcomes() {
         // Note: outcomes are consumed in reverse order (pop from end)
-        let invoker = MockInvoker::new(
-            vec![GateOutcome::Pass, GateOutcome::FailVerifyOnly],
-            true,
-        );
+        let invoker = MockInvoker::new(vec![GateOutcome::Pass, GateOutcome::FailVerifyOnly], true);
 
         // First call gets FailVerifyOnly (popped from end)
-        let json1 = invoker.run_gate_json("namako", "adapter", Path::new(".")).unwrap();
-        assert_eq!(GateOutcome::from_json_str(&json1), GateOutcome::FailVerifyOnly);
+        let json1 = invoker
+            .run_gate_json("namako", "adapter", Path::new("."))
+            .unwrap();
+        assert_eq!(
+            GateOutcome::from_json_str(&json1),
+            GateOutcome::FailVerifyOnly
+        );
 
         // Second call gets Pass
-        let json2 = invoker.run_gate_json("namako", "adapter", Path::new(".")).unwrap();
+        let json2 = invoker
+            .run_gate_json("namako", "adapter", Path::new("."))
+            .unwrap();
         assert_eq!(GateOutcome::from_json_str(&json2), GateOutcome::Pass);
 
         // Third call defaults to Pass (empty)
-        let json3 = invoker.run_gate_json("namako", "adapter", Path::new(".")).unwrap();
+        let json3 = invoker
+            .run_gate_json("namako", "adapter", Path::new("."))
+            .unwrap();
         assert_eq!(GateOutcome::from_json_str(&json3), GateOutcome::Pass);
 
         assert_eq!(*invoker.gate_calls.lock().unwrap(), 3);
@@ -637,21 +678,28 @@ mod tests {
         );
 
         // First gate call: FailVerifyOnly
-        let json1 = invoker.run_gate_json("namako", "adapter", Path::new(".")).unwrap();
+        let json1 = invoker
+            .run_gate_json("namako", "adapter", Path::new("."))
+            .unwrap();
         let outcome1 = GateOutcome::from_json_str(&json1);
         assert_eq!(outcome1, GateOutcome::FailVerifyOnly);
         assert!(outcome1.allows_update_cert());
 
         // Run update-cert
         let update_result = invoker.run_update_cert(
-            "namako", "adapter", Path::new("."),
-            Path::new("run_report.json"), Path::new("cert.json"),
+            "namako",
+            "adapter",
+            Path::new("."),
+            Path::new("run_report.json"),
+            Path::new("cert.json"),
         );
         assert!(update_result.success);
         assert_eq!(*invoker.update_cert_calls.lock().unwrap(), 1);
 
         // Re-gate: Pass
-        let json2 = invoker.run_gate_json("namako", "adapter", Path::new(".")).unwrap();
+        let json2 = invoker
+            .run_gate_json("namako", "adapter", Path::new("."))
+            .unwrap();
         let outcome2 = GateOutcome::from_json_str(&json2);
         assert_eq!(outcome2, GateOutcome::Pass);
     }
@@ -665,7 +713,9 @@ mod tests {
         );
 
         // Gate call: FailOther (lint or run failed)
-        let json = invoker.run_gate_json("namako", "adapter", Path::new(".")).unwrap();
+        let json = invoker
+            .run_gate_json("namako", "adapter", Path::new("."))
+            .unwrap();
         let outcome = GateOutcome::from_json_str(&json);
         assert_eq!(outcome, GateOutcome::FailOther);
         assert!(!outcome.allows_update_cert());
@@ -678,13 +728,12 @@ mod tests {
     /// Per TODO.md §A5: verify-only fail but max_cert_updates=0 → update-cert NOT invoked
     #[test]
     fn test_governance_verify_fail_zero_budget() {
-        let invoker = MockInvoker::new(
-            vec![GateOutcome::FailVerifyOnly],
-            true,
-        );
+        let invoker = MockInvoker::new(vec![GateOutcome::FailVerifyOnly], true);
 
         // Gate call: FailVerifyOnly
-        let json = invoker.run_gate_json("namako", "adapter", Path::new(".")).unwrap();
+        let json = invoker
+            .run_gate_json("namako", "adapter", Path::new("."))
+            .unwrap();
         let outcome = GateOutcome::from_json_str(&json);
         assert!(outcome.allows_update_cert());
 
@@ -707,14 +756,19 @@ mod tests {
             false, // update-cert fails
         );
 
-        let json = invoker.run_gate_json("namako", "adapter", Path::new(".")).unwrap();
+        let json = invoker
+            .run_gate_json("namako", "adapter", Path::new("."))
+            .unwrap();
         let outcome = GateOutcome::from_json_str(&json);
         assert!(outcome.allows_update_cert());
 
         // Run update-cert (fails)
         let update_result = invoker.run_update_cert(
-            "namako", "adapter", Path::new("."),
-            Path::new("run_report.json"), Path::new("cert.json"),
+            "namako",
+            "adapter",
+            Path::new("."),
+            Path::new("run_report.json"),
+            Path::new("cert.json"),
         );
         assert!(!update_result.success);
         assert_eq!(*invoker.update_cert_calls.lock().unwrap(), 1);

@@ -9,7 +9,7 @@
 //!
 //! The "workspace" for a mission is simply the git repository where specs live.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -87,8 +87,9 @@ impl Workspace {
         adapter_cmd: &str,
         budgets: crate::mission::MissionBudgets,
     ) -> Result<Self> {
-        let specs_dir = std::fs::canonicalize(specs_dir)
-            .with_context(|| format!("Failed to canonicalize specs dir: {}", specs_dir.display()))?;
+        let specs_dir = std::fs::canonicalize(specs_dir).with_context(|| {
+            format!("Failed to canonicalize specs dir: {}", specs_dir.display())
+        })?;
 
         // Find the repo root (specs repository)
         let repo_root = find_git_root(&specs_dir)?;
@@ -139,8 +140,7 @@ impl Workspace {
 
     /// Export workspace config as JSON for mission INPUTS.
     pub fn to_json(&self) -> Result<String> {
-        serde_json::to_string_pretty(&self.config)
-            .context("Failed to serialize workspace config")
+        serde_json::to_string_pretty(&self.config).context("Failed to serialize workspace config")
     }
 
     /// Get the working directory for the runner.
@@ -193,8 +193,7 @@ fn check_repo_clean(repo_root: &Path) -> Result<(bool, Vec<String>)> {
         );
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("Git output is not valid UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("Git output is not valid UTF-8")?;
 
     if stdout.trim().is_empty() {
         Ok((true, vec![]))

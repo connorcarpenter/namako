@@ -115,27 +115,27 @@ pub struct Config {
     /// Default: true
     #[serde(default = "default_quality_gates_enabled")]
     pub quality_gates_enabled: bool,
-    
+
     /// Enable failure memory across missions (Phase 2)
     /// Default: true
     #[serde(default = "default_true")]
     pub enable_failure_memory: bool,
-    
+
     /// Enable persistent lessons database (Phase 6)
     /// Default: true
     #[serde(default = "default_true")]
     pub enable_lessons: bool,
-    
+
     /// Enable cost tracking and efficiency alerts (Phase 5)
     /// Default: true
     #[serde(default = "default_true")]
     pub enable_cost_tracking: bool,
-    
+
     /// Cost alert threshold in USD (Phase 5)
     /// Default: 20.0
     #[serde(default = "default_cost_alert_threshold")]
     pub cost_alert_threshold_usd: f64,
-    
+
     /// Maximum consecutive failures before escalation (Phase 4)
     /// Default: 2
     #[serde(default = "default_max_consecutive_failures")]
@@ -345,7 +345,11 @@ pub fn load_config(path: &Path) -> Result<Config> {
 }
 
 /// Resolve a config with paths made absolute
-fn resolve_config(config: Config, config_root: &Path, config_path: &Path) -> Result<ResolvedConfig> {
+fn resolve_config(
+    config: Config,
+    config_root: &Path,
+    config_path: &Path,
+) -> Result<ResolvedConfig> {
     // Resolve specs_dir relative to config_root
     let specs_dir_raw = PathBuf::from(&config.specs_dir);
     let specs_dir = if specs_dir_raw.is_absolute() {
@@ -620,7 +624,10 @@ patterns = ["src/**"]
                 assert_eq!(config.runner, Some("claude".to_string()));
                 assert_eq!(config.runner_cmd, Some("my-cmd {mission_dir}".to_string()));
                 assert_eq!(config.planner, Some("codex".to_string()));
-                assert_eq!(config.planner_cmd, Some("my-planner {input_file}".to_string()));
+                assert_eq!(
+                    config.planner_cmd,
+                    Some("my-planner {input_file}".to_string())
+                );
                 assert_eq!(config.max_retries, Some(5));
                 assert_eq!(config.max_cert_updates, Some(10));
                 assert_eq!(config.max_runtime_seconds, Some(1200));
@@ -676,8 +683,14 @@ patterns = ["tests/**"]
         match result {
             ConfigDiscoveryResult::Found(config) => {
                 let surfaces = config.surfaces.unwrap();
-                assert_eq!(surfaces.spec.unwrap().patterns, vec!["specs/**/*.feature".to_string()]);
-                assert_eq!(surfaces.tests.unwrap().patterns, vec!["tests/**".to_string()]);
+                assert_eq!(
+                    surfaces.spec.unwrap().patterns,
+                    vec!["specs/**/*.feature".to_string()]
+                );
+                assert_eq!(
+                    surfaces.tests.unwrap().patterns,
+                    vec!["tests/**".to_string()]
+                );
             }
             ConfigDiscoveryResult::NotFound { .. } => panic!("Expected to find config"),
         }
@@ -705,7 +718,7 @@ patterns = ["tests/**"]
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.quality_gates_enabled);
     }
-    
+
     #[test]
     fn test_new_config_defaults() {
         let toml = r#"
@@ -719,7 +732,7 @@ patterns = ["tests/**"]
         assert_eq!(config.cost_alert_threshold_usd, 20.0);
         assert_eq!(config.max_consecutive_failures, 2);
     }
-    
+
     #[test]
     fn test_new_config_overrides() {
         let toml = r#"

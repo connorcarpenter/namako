@@ -132,7 +132,8 @@ pub fn detect_escalation(
                             EscalationOption {
                                 id: "hint".to_string(),
                                 label: "Provide a hint".to_string(),
-                                description: "Give the agent a hint about how to proceed".to_string(),
+                                description: "Give the agent a hint about how to proceed"
+                                    .to_string(),
                             },
                             EscalationOption {
                                 id: "skip".to_string(),
@@ -192,7 +193,9 @@ pub fn format_escalation_message(ctx: &EscalationContext) -> String {
     match ctx.escalation_type {
         EscalationType::SurfacePolicyBlocking => {
             message.push_str("## Situation\n\n");
-            message.push_str("The agent attempted to fix an issue but was blocked by surface policy.\n");
+            message.push_str(
+                "The agent attempted to fix an issue but was blocked by surface policy.\n",
+            );
             if let Some(ref blocked_by) = ctx.blocked_by {
                 message.push_str(&format!("**Blocker:** {}\n", blocked_by));
             }
@@ -216,7 +219,10 @@ pub fn format_escalation_message(ctx: &EscalationContext) -> String {
         }
         EscalationType::NoProgressMultipleAttempts => {
             message.push_str("## Situation\n\n");
-            message.push_str(&format!("Made {} attempts but no progress.\n", ctx.attempts));
+            message.push_str(&format!(
+                "Made {} attempts but no progress.\n",
+                ctx.attempts
+            ));
             if !ctx.tried_approaches.is_empty() {
                 message.push_str("\n**Recent attempts:**\n");
                 for approach in &ctx.tried_approaches {
@@ -272,7 +278,10 @@ mod tests {
 
         assert!(escalation.is_some());
         let ctx = escalation.unwrap();
-        assert!(matches!(ctx.escalation_type, EscalationType::SurfacePolicyBlocking));
+        assert!(matches!(
+            ctx.escalation_type,
+            EscalationType::SurfacePolicyBlocking
+        ));
         assert!(ctx.suggested_options.iter().any(|o| o.id == "unlock_spec"));
         assert!(ctx.suggested_options.iter().any(|o| o.id == "skip"));
     }

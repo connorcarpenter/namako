@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use serde::Serialize;
 use walkdir::WalkDir;
@@ -197,8 +197,8 @@ pub enum RecommendedAction {
 pub fn run(args: StatusArgs) -> Result<()> {
     let output = compute_status(&args)?;
 
-    let json = serde_json::to_string_pretty(&output)
-        .context("Failed to serialize status output")?;
+    let json =
+        serde_json::to_string_pretty(&output).context("Failed to serialize status output")?;
 
     if let Some(ref path) = args.out {
         // Ensure parent directory exists
@@ -222,7 +222,9 @@ pub fn run(args: StatusArgs) -> Result<()> {
 }
 
 fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
-    let spec_root = args.specs_dir.canonicalize()
+    let spec_root = args
+        .specs_dir
+        .canonicalize()
         .unwrap_or_else(|_| args.specs_dir.clone())
         .to_string_lossy()
         .to_string();
@@ -234,13 +236,20 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
 
     // Load baseline certification if it exists
     let baseline_result = load_baseline(&args.certification);
-    let identity_baseline = baseline_result.as_ref().ok().map(|c| IdentityFields::from(c.identity.clone()));
+    let identity_baseline = baseline_result
+        .as_ref()
+        .ok()
+        .map(|c| IdentityFields::from(c.identity.clone()));
 
     // Determine gates status
     let (gates, drift, base_action) = match &identity_result {
         Ok(identity) => {
             // Lint passed - we have a valid identity
-            let lint = GateResult { ok: true, code: 0, summary: lint_summary };
+            let lint = GateResult {
+                ok: true,
+                code: 0,
+                summary: lint_summary,
+            };
 
             // For run and verify, we check against baseline
             let (run, verify, drift, action) = match &baseline_result {
@@ -251,16 +260,32 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
                     if matches!(drift_info.kind, DriftKind::None) {
                         // Everything matches
                         (
-                            GateResult { ok: true, code: 0, summary: Some("All scenarios up-to-date".to_string()) },
-                            GateResult { ok: true, code: 0, summary: Some("Baseline matches current".to_string()) },
+                            GateResult {
+                                ok: true,
+                                code: 0,
+                                summary: Some("All scenarios up-to-date".to_string()),
+                            },
+                            GateResult {
+                                ok: true,
+                                code: 0,
+                                summary: Some("Baseline matches current".to_string()),
+                            },
                             drift_info,
                             RecommendedAction::Done,
                         )
                     } else {
                         // Drift detected - need update-cert approval
                         (
-                            GateResult { ok: true, code: 0, summary: Some("Run required after changes".to_string()) },
-                            GateResult { ok: false, code: 1, summary: Some("Drift detected".to_string()) },
+                            GateResult {
+                                ok: true,
+                                code: 0,
+                                summary: Some("Run required after changes".to_string()),
+                            },
+                            GateResult {
+                                ok: false,
+                                code: 1,
+                                summary: Some("Drift detected".to_string()),
+                            },
                             drift_info,
                             RecommendedAction::NeedsUpdateCertApproval,
                         )
@@ -273,8 +298,16 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
                         details: vec![],
                     };
                     (
-                        GateResult { ok: true, code: 0, summary: Some("Ready to run".to_string()) },
-                        GateResult { ok: false, code: 1, summary: Some("No baseline certification found".to_string()) },
+                        GateResult {
+                            ok: true,
+                            code: 0,
+                            summary: Some("Ready to run".to_string()),
+                        },
+                        GateResult {
+                            ok: false,
+                            code: 1,
+                            summary: Some("No baseline certification found".to_string()),
+                        },
                         drift_info,
                         RecommendedAction::Run,
                     )
@@ -289,17 +322,29 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
             let lint = GateResult {
                 ok: false,
                 code: 1,
-                summary: Some(format!("Resolution failed: {}", err))
+                summary: Some(format!("Resolution failed: {}", err)),
             };
-            let run = GateResult { ok: false, code: 1, summary: Some("Cannot run - lint failed".to_string()) };
-            let verify = GateResult { ok: false, code: 1, summary: Some("Cannot verify - lint failed".to_string()) };
+            let run = GateResult {
+                ok: false,
+                code: 1,
+                summary: Some("Cannot run - lint failed".to_string()),
+            };
+            let verify = GateResult {
+                ok: false,
+                code: 1,
+                summary: Some("Cannot verify - lint failed".to_string()),
+            };
 
             let drift = DriftInfo {
                 kind: DriftKind::Integrity,
                 details: vec![],
             };
 
-            (GateStatus { lint, run, verify }, drift, RecommendedAction::FixLint)
+            (
+                GateStatus { lint, run, verify },
+                drift,
+                RecommendedAction::FixLint,
+            )
         }
     };
 
@@ -314,23 +359,52 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
     let last_run_failures = load_run_failures(&args.run_report);
 
     // Convert gates to status values
-    let lint_status = if gates.lint.ok { StatusValue::Pass } else { StatusValue::Fail };
-    let run_status = if gates.run.ok { StatusValue::Pass } else if gates.run.summary.as_ref().map(|s| s.contains("Cannot run")).unwrap_or(false) { StatusValue::NotRun } else { StatusValue::Fail };
+    let lint_status = if gates.lint.ok {
+        StatusValue::Pass
+    } else {
+        StatusValue::Fail
+    };
+    let run_status = if gates.run.ok {
+        StatusValue::Pass
+    } else if gates
+        .run
+        .summary
+        .as_ref()
+        .map(|s| s.contains("Cannot run"))
+        .unwrap_or(false)
+    {
+        StatusValue::NotRun
+    } else {
+        StatusValue::Fail
+    };
     let verify_status = if gates.verify.ok {
         StatusValue::Pass
-    } else if gates.verify.summary.as_ref().map(|s| s.contains("Drift detected")).unwrap_or(false) {
+    } else if gates
+        .verify
+        .summary
+        .as_ref()
+        .map(|s| s.contains("Drift detected"))
+        .unwrap_or(false)
+    {
         StatusValue::Stale
-    } else if gates.verify.summary.as_ref().map(|s| s.contains("Cannot verify") || s.contains("No baseline")).unwrap_or(false) {
+    } else if gates
+        .verify
+        .summary
+        .as_ref()
+        .map(|s| s.contains("Cannot verify") || s.contains("No baseline"))
+        .unwrap_or(false)
+    {
         StatusValue::NotRun
     } else {
         StatusValue::Fail
     };
 
-    let recommended_action = if matches!(base_action, RecommendedAction::Done) && !last_run_failures.is_empty() {
-        RecommendedAction::FixRun
-    } else {
-        base_action
-    };
+    let recommended_action =
+        if matches!(base_action, RecommendedAction::Done) && !last_run_failures.is_empty() {
+            RecommendedAction::FixRun
+        } else {
+            base_action
+        };
 
     Ok(StatusOutput {
         version: 1,
@@ -353,7 +427,9 @@ fn compute_status(args: &StatusArgs) -> Result<StatusOutput> {
     })
 }
 
-fn compute_identity_with_diagnostics(args: &StatusArgs) -> (Result<IdentityFields>, bool, Option<String>) {
+fn compute_identity_with_diagnostics(
+    args: &StatusArgs,
+) -> (Result<IdentityFields>, bool, Option<String>) {
     match recompute_identity(args) {
         Ok(identity) => (Ok(identity), true, Some("All steps resolved".to_string())),
         Err(e) => (Err(e), false, None),
@@ -524,14 +600,12 @@ fn compute_drift(current: &IdentityFields, baseline: &CertificationIdentity) -> 
 
     let kind = match details.len() {
         0 => DriftKind::None,
-        1 => {
-            match details[0].field.as_str() {
-                "feature_fingerprint_hash" => DriftKind::Feature,
-                "step_registry_hash" => DriftKind::StepRegistry,
-                "resolved_plan_hash" => DriftKind::ResolvedPlan,
-                _ => DriftKind::Integrity,
-            }
-        }
+        1 => match details[0].field.as_str() {
+            "feature_fingerprint_hash" => DriftKind::Feature,
+            "step_registry_hash" => DriftKind::StepRegistry,
+            "resolved_plan_hash" => DriftKind::ResolvedPlan,
+            _ => DriftKind::Integrity,
+        },
         _ => DriftKind::Multiple,
     };
 
@@ -574,9 +648,18 @@ fn print_human_readable(status: &StatusOutput) {
         }
     } else {
         println!("(no baseline certification found)");
-        println!("  Current feature_fingerprint: {}", status.identity.current.feature_fingerprint_hash);
-        println!("  Current step_registry: {}", status.identity.current.step_registry_hash);
-        println!("  Current resolved_plan: {}", status.identity.current.resolved_plan_hash);
+        println!(
+            "  Current feature_fingerprint: {}",
+            status.identity.current.feature_fingerprint_hash
+        );
+        println!(
+            "  Current step_registry: {}",
+            status.identity.current.step_registry_hash
+        );
+        println!(
+            "  Current resolved_plan: {}",
+            status.identity.current.resolved_plan_hash
+        );
     }
 
     println!();
@@ -614,10 +697,7 @@ fn discover_features(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Read feature files and return (relative_path, content) pairs.
-fn read_features(
-    specs_dir: &std::path::Path,
-    paths: &[PathBuf],
-) -> Result<Vec<(String, String)>> {
+fn read_features(specs_dir: &std::path::Path, paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
     let mut features = Vec::with_capacity(paths.len());
 
     for path in paths {
@@ -659,8 +739,7 @@ fn fetch_adapter_manifest(adapter_cmd: &str) -> Result<SemanticStepRegistry> {
         bail!("Adapter command failed: {}", stderr);
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("Adapter output is not valid UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("Adapter output is not valid UTF-8")?;
 
     serde_json::from_str(&stdout).context("Failed to parse adapter manifest JSON")
 }
@@ -736,19 +815,31 @@ mod tests {
             extract_scenario_name("features/sub/test.feature:L15:E0:R2"),
             "test.feature:L15:E0:R2"
         );
-        assert_eq!(
-            extract_scenario_name("simple_key"),
-            "simple_key"
-        );
+        assert_eq!(extract_scenario_name("simple_key"), "simple_key");
     }
 
     #[test]
     fn test_classify_failure() {
-        assert_eq!(classify_failure(&Some("assertion failed: expected 1, got 2".to_string())), "assertion");
-        assert_eq!(classify_failure(&Some("thread panicked at 'explicit panic'".to_string())), "panic");
-        assert_eq!(classify_failure(&Some("binding not found".to_string())), "missing_binding");
-        assert_eq!(classify_failure(&Some("operation timed out".to_string())), "timeout");
-        assert_eq!(classify_failure(&Some("some other error".to_string())), "unknown");
+        assert_eq!(
+            classify_failure(&Some("assertion failed: expected 1, got 2".to_string())),
+            "assertion"
+        );
+        assert_eq!(
+            classify_failure(&Some("thread panicked at 'explicit panic'".to_string())),
+            "panic"
+        );
+        assert_eq!(
+            classify_failure(&Some("binding not found".to_string())),
+            "missing_binding"
+        );
+        assert_eq!(
+            classify_failure(&Some("operation timed out".to_string())),
+            "timeout"
+        );
+        assert_eq!(
+            classify_failure(&Some("some other error".to_string())),
+            "unknown"
+        );
         assert_eq!(classify_failure(&None), "unknown");
     }
 

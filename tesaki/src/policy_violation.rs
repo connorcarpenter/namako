@@ -59,10 +59,8 @@ impl PolicyViolationsReport {
 }
 
 pub fn scan_policy_violations(output: &str) -> PolicyViolationsReport {
-    let re = Regex::new(
-        r"(?i)(^|[\s>$])(?P<cmd>cargo|git|make|npm|pnpm|yarn|bun)(\s|$)",
-    )
-    .expect("invalid policy violation regex");
+    let re = Regex::new(r"(?i)(^|[\s>$])(?P<cmd>cargo|git|make|npm|pnpm|yarn|bun)(\s|$)")
+        .expect("invalid policy violation regex");
 
     let mut counts: HashMap<String, usize> = HashMap::new();
     let mut examples: HashMap<String, Vec<String>> = HashMap::new();

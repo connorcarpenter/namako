@@ -1,5 +1,3 @@
-
-
 //! Tools for outputting [`Namako`] events.
 //!
 //! [`Namako`]: crate::event::Namako
@@ -117,8 +115,7 @@ pub trait Stats<World>: Writer<World> {
     /// Indicates whether there were failures/errors during execution.
     #[must_use]
     fn execution_has_failed(&self) -> bool {
-        self.failed_steps() > 0
-            || self.parsing_errors() > 0
+        self.failed_steps() > 0 || self.parsing_errors() > 0
     }
 }
 
@@ -176,11 +173,7 @@ pub trait Ext: Sized {
     #[must_use]
     fn fail_on_skipped_with<F>(self, with: F) -> FailOnSkipped<Self, F>
     where
-        F: Fn(
-            &gherkin::Feature,
-            Option<&gherkin::Rule>,
-            &gherkin::Scenario,
-        ) -> bool;
+        F: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool;
 
     /// Wraps this [`Writer`] to re-output [`Skipped`] [`Step`]s at the end of
     /// an output.
@@ -254,11 +247,7 @@ impl<T> Ext for T {
 
     fn fail_on_skipped_with<F>(self, with: F) -> FailOnSkipped<Self, F>
     where
-        F: Fn(
-            &gherkin::Feature,
-            Option<&gherkin::Rule>,
-            &gherkin::Scenario,
-        ) -> bool,
+        F: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool,
     {
         FailOnSkipped::with(self, with)
     }

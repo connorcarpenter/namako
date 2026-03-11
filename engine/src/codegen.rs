@@ -1,5 +1,3 @@
-
-
 //! Helper type-level glue for [`namako_codegen`] crate.
 
 use std::convert::Infallible;

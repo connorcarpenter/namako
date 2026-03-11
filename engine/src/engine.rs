@@ -17,8 +17,8 @@ use gherkin::{Feature, GherkinEnv};
 use regex::Regex;
 
 use crate::npap::{
-    PlannedStep, ResolvedPlan, ResolvedScenario, SemanticBinding,
-    SemanticStepRegistry, compute_feature_fingerprint,
+    PlannedStep, ResolvedPlan, ResolvedScenario, SemanticBinding, SemanticStepRegistry,
+    compute_feature_fingerprint,
 };
 
 #[cfg(not(feature = "npap"))]
@@ -28,7 +28,6 @@ use crate::npap::derive_scenario_key;
 use crate::id_tags::{
     derive_scenario_key_from_ids, extract_feature_id, extract_rule_id, extract_scenario_id,
 };
-
 
 /// Errors that can occur during resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,10 +59,7 @@ pub enum ResolutionError {
         binding_accepts_datatable: bool,
     },
     /// Feature file parsing failed
-    ParseError {
-        path: String,
-        message: String,
-    },
+    ParseError { path: String, message: String },
     /// Cucumber expression is invalid
     InvalidExpression {
         binding_id: String,
@@ -104,10 +100,7 @@ pub enum ResolutionError {
         scenario_name: String,
     },
     /// Duplicate rule ID within a feature
-    DuplicateRuleId {
-        feature_path: String,
-        rule_id: u32,
-    },
+    DuplicateRuleId { feature_path: String, rule_id: u32 },
     /// Duplicate scenario ID within a rule or feature
     DuplicateScenarioId {
         feature_path: String,
@@ -257,10 +250,7 @@ impl std::fmt::Display for ResolutionError {
                 feature_path,
                 rule_id,
             } => {
-                write!(
-                    f,
-                    "Duplicate @Rule({rule_id:02}) tag in {feature_path}"
-                )
+                write!(f, "Duplicate @Rule({rule_id:02}) tag in {feature_path}")
             }
             Self::DuplicateScenarioId {
                 feature_path,
@@ -443,8 +433,7 @@ impl ResolutionEngine {
         }
 
         // Compute feature fingerprint
-        let feature_fingerprint_hash =
-            compute_feature_fingerprint(feature_files.into_iter());
+        let feature_fingerprint_hash = compute_feature_fingerprint(feature_files.into_iter());
 
         // Build the resolved plan
         let plan = ResolvedPlan::new(
@@ -470,7 +459,11 @@ impl ResolutionEngine {
     ///
     /// Per GOLD_PLAN §10.5.2, orphans are detected by comparing registry binding IDs
     /// against binding IDs used in the resolved plan AND in @Deferred scenarios.
-    fn compute_orphan_bindings(&self, plan: &ResolvedPlan, deferred_binding_ids: &[String]) -> Vec<OrphanBinding> {
+    fn compute_orphan_bindings(
+        &self,
+        plan: &ResolvedPlan,
+        deferred_binding_ids: &[String],
+    ) -> Vec<OrphanBinding> {
         // Collect all used binding IDs from the resolved plan
         let mut used_binding_ids: HashSet<&str> = plan
             .scenarios
@@ -541,11 +534,8 @@ impl ResolutionEngine {
         }
 
         // Resolve feature-level background steps once (they get prepended to each scenario)
-        let feature_background_steps = self.resolve_background_steps(
-            feature.background.as_ref(),
-            path,
-            errors,
-        );
+        let feature_background_steps =
+            self.resolve_background_steps(feature.background.as_ref(), path, errors);
 
         // PHASE 2.2c: Process rules and their scenarios
         for rule in &feature.rules {
@@ -573,11 +563,8 @@ impl ResolutionEngine {
             }
 
             // Rules can have their own background (in addition to feature background)
-            let rule_background_steps = self.resolve_background_steps(
-                rule.background.as_ref(),
-                path,
-                errors,
-            );
+            let rule_background_steps =
+                self.resolve_background_steps(rule.background.as_ref(), path, errors);
 
             for scenario in &rule.scenarios {
                 // For @Deferred scenarios: resolve steps to get binding IDs for orphan detection
@@ -603,7 +590,8 @@ impl ResolutionEngine {
 
                 // Derive scenario key from explicit IDs (v1.5 format)
                 #[cfg(feature = "npap")]
-                let scenario_key = derive_scenario_key_from_ids(&feature_id, Some(&rule_id), &scenario_id);
+                let scenario_key =
+                    derive_scenario_key_from_ids(&feature_id, Some(&rule_id), &scenario_id);
 
                 // Fallback to line-based key if feature flag not enabled (v1 compat)
                 #[cfg(not(feature = "npap"))]
@@ -741,10 +729,7 @@ impl ResolutionEngine {
                 step_kind: effective_kind.to_string(),
                 feature_path: feature_path.to_string(),
                 line,
-                matching_bindings: matching
-                    .iter()
-                    .map(|(b, _)| b.binding_id.clone())
-                    .collect(),
+                matching_bindings: matching.iter().map(|(b, _)| b.binding_id.clone()).collect(),
             }),
         }
     }
@@ -849,8 +834,7 @@ fn is_deferred_scenario(scenario: &gherkin::Scenario) -> bool {
 /// Returns (compiled regex, number of capture groups).
 fn cucumber_expression_to_regex(expr: &str) -> Result<(Regex, usize), String> {
     // Use cucumber_expressions crate's regex() static method
-    let regex = Expression::regex(expr)
-        .map_err(|e| format!("Failed to parse expression: {e}"))?;
+    let regex = Expression::regex(expr).map_err(|e| format!("Failed to parse expression: {e}"))?;
 
     // Count capture groups (subtract 1 for the full match group 0)
     let capture_count = regex.captures_len().saturating_sub(1);
@@ -900,7 +884,10 @@ mod tests {
         assert!(engine.is_err());
         let errors = engine.unwrap_err();
         assert_eq!(errors.len(), 1);
-        assert!(matches!(errors[0], ResolutionError::InvalidExpression { .. }));
+        assert!(matches!(
+            errors[0],
+            ResolutionError::InvalidExpression { .. }
+        ));
     }
 
     #[test]
@@ -983,9 +970,8 @@ Feature: And/But test
 
     #[test]
     fn test_missing_step_error() {
-        let registry = SemanticStepRegistry::new(vec![
-            make_binding("Given", "a server is running", 0),
-        ]);
+        let registry =
+            SemanticStepRegistry::new(vec![make_binding("Given", "a server is running", 0)]);
 
         let engine = ResolutionEngine::new(&registry).unwrap();
 
@@ -1005,14 +991,16 @@ Feature: Missing step
         let result = engine.resolve(features.into_iter());
 
         assert_eq!(result.errors.len(), 1);
-        assert!(matches!(result.errors[0], ResolutionError::MissingStep { .. }));
+        assert!(matches!(
+            result.errors[0],
+            ResolutionError::MissingStep { .. }
+        ));
     }
 
     #[test]
     fn test_captures_extraction() {
-        let registry = SemanticStepRegistry::new(vec![
-            make_binding("Given", "a user named {string}", 1),
-        ]);
+        let registry =
+            SemanticStepRegistry::new(vec![make_binding("Given", "a user named {string}", 1)]);
 
         let engine = ResolutionEngine::new(&registry).unwrap();
 
@@ -1068,12 +1056,18 @@ Feature: Signature mismatch
     fn test_cucumber_expression_to_regex() {
         let (regex, count) = cucumber_expression_to_regex("a user named {string}").unwrap();
         assert!(regex.is_match("a user named \"Alice\""));
-        assert!(count >= 1, "expected at least 1 capture for {{string}}, got {count}");
+        assert!(
+            count >= 1,
+            "expected at least 1 capture for {{string}}, got {count}"
+        );
 
         let (regex, count) = cucumber_expression_to_regex("I have {int} apples").unwrap();
         assert!(regex.is_match("I have 5 apples"));
         // {int} may have multiple internal groups, just verify it works
-        assert!(count >= 1, "expected at least 1 capture for {{int}}, got {count}");
+        assert!(
+            count >= 1,
+            "expected at least 1 capture for {{int}}, got {count}"
+        );
     }
 
     #[test]
@@ -1147,9 +1141,8 @@ Feature: All used
 
     #[test]
     fn test_requires_rule_sections() {
-        let registry = SemanticStepRegistry::new(vec![
-            make_binding("Given", "a server is running", 0),
-        ]);
+        let registry =
+            SemanticStepRegistry::new(vec![make_binding("Given", "a server is running", 0)]);
 
         let engine = ResolutionEngine::new(&registry).unwrap();
 
@@ -1166,7 +1159,17 @@ Feature: Missing rule
         let result = engine.resolve(features.into_iter());
 
         assert!(result.plan.is_none());
-        assert!(result.errors.iter().any(|e| matches!(e, ResolutionError::MissingRuleSection { .. })));
-        assert!(result.errors.iter().any(|e| matches!(e, ResolutionError::ScenarioOutsideRule { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolutionError::MissingRuleSection { .. }))
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolutionError::ScenarioOutsideRule { .. }))
+        );
     }
 }

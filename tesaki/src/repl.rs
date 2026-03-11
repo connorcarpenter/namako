@@ -8,25 +8,29 @@ use anyhow::Result;
 
 use servling::{agent_candidates, describe_candidates, MissionTokenStats, TokenUsage};
 
-use crate::{
-    surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy},
-    stop_reason::StopReason,
-    stage::{detect_stage, Stage, StageConstraint},
-    session::{PendingMission, SessionState},
-    repo_state::RepoState,
-    packet_parser::{parse_gate_json, parse_review_json, parse_status_json},
-    mission_type::MissionType,
-    lessons::{self, LessonsDatabase},
-    escalation,
-    diagnosis::StallDiagnosis,
-    config::{self, ConfigDiscoveryResult},
-    chat_planner::{build_planner, ChatPlan, ChatPlanner, MockChatPlanner}
-};
 use crate::chat_planner::{ChatTurnInput, MissionProposal, SurfaceLock, SurfacePolicy};
+use crate::{
+    chat_planner::{build_planner, ChatPlan, ChatPlanner, MockChatPlanner},
+    config::{self, ConfigDiscoveryResult},
+    diagnosis::StallDiagnosis,
+    escalation,
+    lessons::{self, LessonsDatabase},
+    mission_type::MissionType,
+    packet_parser::{parse_gate_json, parse_review_json, parse_status_json},
+    repo_state::RepoState,
+    session::{PendingMission, SessionState},
+    stage::{detect_stage, Stage, StageConstraint},
+    stop_reason::StopReason,
+    surface_policy::{SurfaceLock as RepoSurfaceLock, SurfacePolicy as RepoSurfacePolicy},
+};
 
 /// Run the autonomous loop directly without REPL (headless mode).
 /// Usage: `tesaki --loop 10` or `tesaki -l 10`
-pub fn run_loop_headless(start_dir: PathBuf, max_iterations: u32, logger: &crate::logging::JsonlLogger) -> Result<()> {
+pub fn run_loop_headless(
+    start_dir: PathBuf,
+    max_iterations: u32,
+    logger: &crate::logging::JsonlLogger,
+) -> Result<()> {
     let config = match config::discover_config(&start_dir)? {
         ConfigDiscoveryResult::Found(config) => config,
         ConfigDiscoveryResult::NotFound { .. } => {
@@ -134,10 +138,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
         );
     }
 
-    let planner_candidates = agent_candidates(
-        planner_name,
-        config.planner_cmd.clone(),
-    );
+    let planner_candidates = agent_candidates(planner_name, config.planner_cmd.clone());
     if planner_candidates.len() > 1 {
         println!(
             "Planner fallback chain: {}",
@@ -146,7 +147,8 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
     }
     let planner: Box<dyn ChatPlanner> = if planner_name == "mock" {
         Box::new(MockChatPlanner::new(ChatPlan {
-            say: "Planner not configured. Set `agent` or `planner` in .tesaki/config.toml.".to_string(),
+            say: "Planner not configured. Set `agent` or `planner` in .tesaki/config.toml."
+                .to_string(),
             run: vec![],
             mission_proposal: None,
             done: true,
@@ -233,7 +235,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
         session.intent.apply_user_message(line);
 
         let planner_hint: Option<String> = None;
-        
+
         // Build compact planner input
         let planner_input = ChatTurnInput {
             user_message: line.to_string(),
@@ -278,7 +280,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
                 }
             }
         };
-        
+
         if let Ok(plan_json) = serde_json::to_string(&plan) {
             logger.log_event(crate::logging::LogEvent::PlannerPlan {
                 parse_status: "ok".to_string(),
@@ -286,7 +288,7 @@ pub fn run_repl(start_dir: PathBuf, logger: &crate::logging::JsonlLogger) -> Res
                 error: None,
             });
         }
-        
+
         // Display the planner's response
         println!("{}", plan.say);
 
@@ -320,7 +322,8 @@ fn refresh_repo_state(
     session: &mut SessionState,
     logger: &crate::logging::JsonlLogger,
 ) -> Result<()> {
-    let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+    let gate_json =
+        crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
     let gate_packet = parse_gate_json(&gate_json)?;
 
     let status_json =
@@ -338,7 +341,8 @@ fn refresh_repo_state(
         state.propagation_summary().to_line()
     ));
     session.intent.stage = Some(detect_stage(&state));
-    session.last_packets_fingerprint = Some(fingerprint_packets(&status_json, &review_json, &gate_json));
+    session.last_packets_fingerprint =
+        Some(fingerprint_packets(&status_json, &review_json, &gate_json));
 
     Ok(())
 }
@@ -446,12 +450,12 @@ fn execute_proposed_mission(
         max_runtime_seconds,
         max_files_changed,
         max_retries,
-        None,  // model - use default
+        None, // model - use default
         Some(stage_to_arg(stage)),
         None,
         constraint.surface_overrides,
-        true,  // allow_dirty - REPL missions don't require clean workspace
-        None,  // model_overrides - use mission type defaults
+        true, // allow_dirty - REPL missions don't require clean workspace
+        None, // model_overrides - use mission type defaults
         pre_gate_build_cmd,
         pre_gate_build_mode,
         logger,
@@ -629,71 +633,83 @@ fn run_autonomous_loop(
     logger: &crate::logging::JsonlLogger,
 ) -> Result<()> {
     use crate::mission_selector::select_with_constraints;
-    
-    println!("Starting autonomous loop ({} missions max)...", max_iterations);
+
+    println!(
+        "Starting autonomous loop ({} missions max)...",
+        max_iterations
+    );
     println!("Task selection is ALGORITHMIC (no planner LLM).");
     println!("Loop continues while PROGRESS is being made.\n");
-    
+
     let mut stall_count = 0;
     const MAX_STALLS: u32 = 3;
     let loop_start = Instant::now();
     let mut chained_stage: Option<Stage> = None;
-    
+
     // Simple consecutive failure tracking (per OPTIMIZATION_ANALYSIS.md)
     // If same mission type fails 2× in a row, skip it for this session
     let mut last_mission_type: Option<String> = None;
     let mut consecutive_failures: u32 = 0;
     let mut skipped_types: Vec<String> = Vec::new();
     const MAX_CONSECUTIVE_FAILURES: u32 = 2;
-    
+
     // Record initial issue count for session summary
     {
-        let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let gate_json =
+            crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
         let gate_packet = parse_gate_json(&gate_json)?;
-        let status_json = crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
-        let review_json = crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let status_json =
+            crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
+        let review_json =
+            crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
         let status_packet = parse_status_json(&status_json)?;
         let review_packet = parse_review_json(&review_json)?;
         let initial_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
-        session.initial_issue_count = initial_state.spec_issues.len() + initial_state.binding_issues.len()
-            + initial_state.sut_issues.len() + initial_state.structure_issues.len();
+        session.initial_issue_count = initial_state.spec_issues.len()
+            + initial_state.binding_issues.len()
+            + initial_state.sut_issues.len()
+            + initial_state.structure_issues.len();
     }
-    
+
     for iteration in 1..=max_iterations {
         // Refresh state from Namako
         refresh_repo_state(spec_root, adapter, namako_cmd, session, logger)?;
-        
+
         // Get current RepoState
-        let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let gate_json =
+            crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
         let gate_packet = parse_gate_json(&gate_json)?;
-        let status_json = crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
-        let review_json = crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let status_json =
+            crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
+        let review_json =
+            crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
         let status_packet = parse_status_json(&status_json)?;
         let review_packet = parse_review_json(&review_json)?;
         let state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
-        
+
         // Snapshot issue counts BEFORE mission
         let before_spec = state.spec_issues.len();
         let before_binding = state.binding_issues.len();
         let before_sut = state.sut_issues.len();
         let before_structure = state.structure_issues.len();
         let before_total = before_spec + before_binding + before_sut + before_structure;
-        
+
         // Check if truly done (all gates pass AND no issues)
         if state.all_gates_pass() && !state.has_work() {
-            let assessment_needed = state.coverage_is_ambiguous() && state.coverage_assessment.is_none();
+            let assessment_needed =
+                state.coverage_is_ambiguous() && state.coverage_assessment.is_none();
             if !assessment_needed {
                 println!("🎉 All gates pass, no issues remaining. DONE!");
                 break;
             }
         }
-        
+
         // Algorithmic mission selection (NO LLM)
         let constraint = StageConstraint {
             stage: chained_stage.take().or(session.intent.stage),
             surface_overrides: None,
         };
-        
+
         let selection = match select_with_constraints(&state, &constraint) {
             Some(s) => s,
             None => {
@@ -701,48 +717,66 @@ fn run_autonomous_loop(
                 break;
             }
         };
-        
+
         let (mission_type, stage, surface_policy) = selection;
-        let (before_scenario_count, before_rule_count, before_feature_snapshot) = match &mission_type {
-            MissionType::AddOrClarifyScenario { feature_path, .. } => (
-                state.scenario_count_for_feature(feature_path),
-                state.rule_count_for_feature(feature_path),
-                read_feature_snapshot(spec_root, feature_path),
-            ),
-            _ => (None, None, None),
-        };
-        
+        let (before_scenario_count, before_rule_count, before_feature_snapshot) =
+            match &mission_type {
+                MissionType::AddOrClarifyScenario { feature_path, .. } => (
+                    state.scenario_count_for_feature(feature_path),
+                    state.rule_count_for_feature(feature_path),
+                    read_feature_snapshot(spec_root, feature_path),
+                ),
+                _ => (None, None, None),
+            };
+
         // Check if this mission type is skipped due to consecutive failures
         let type_name = mission_type.name().to_string();
         if skipped_types.contains(&type_name) {
-            println!("⏭️  Skipping {} (failed {}× consecutively)", type_name, MAX_CONSECUTIVE_FAILURES);
+            println!(
+                "⏭️  Skipping {} (failed {}× consecutively)",
+                type_name, MAX_CONSECUTIVE_FAILURES
+            );
             stall_count += 1;
             if stall_count >= MAX_STALLS {
                 let diagnosis = StallDiagnosis::diagnose(
-                    session, &state, &StopReason::NoProgress,
-                    Some(&type_name), mission_type.target_label().as_deref(),
+                    session,
+                    &state,
+                    &StopReason::NoProgress,
+                    Some(&type_name),
+                    mission_type.target_label().as_deref(),
                 );
                 println!("{}", diagnosis.format_report());
-                if let Some(ctx) = escalation::detect_escalation(session, &type_name, &StopReason::NoProgress) {
+                if let Some(ctx) =
+                    escalation::detect_escalation(session, &type_name, &StopReason::NoProgress)
+                {
                     println!("{}", escalation::format_escalation_message(&ctx));
                 }
                 break;
             }
             continue;
         }
-        
+
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!("MISSION {}/{}", iteration, max_iterations);
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!("Type:    {}", mission_type.name());
-        println!("Target:  {}", mission_type.target_label().unwrap_or_else(|| "(auto-selected)".to_string()));
+        println!(
+            "Target:  {}",
+            mission_type
+                .target_label()
+                .unwrap_or_else(|| "(auto-selected)".to_string())
+        );
         println!("Stage:   {}", stage.name());
-        println!("Surfaces: Spec {:?} • Tests {:?} • SUT {:?}",
-            surface_policy.spec, surface_policy.tests_bindings, surface_policy.sut);
-        println!("Before:  Spec:{} Bind:{} SUT:{} Struct:{} (total: {})",
-            before_spec, before_binding, before_sut, before_structure, before_total);
+        println!(
+            "Surfaces: Spec {:?} • Tests {:?} • SUT {:?}",
+            surface_policy.spec, surface_policy.tests_bindings, surface_policy.sut
+        );
+        println!(
+            "Before:  Spec:{} Bind:{} SUT:{} Struct:{} (total: {})",
+            before_spec, before_binding, before_sut, before_structure, before_total
+        );
         println!();
-        
+
         // Execute mission directly (bypass planner)
         let start = Instant::now();
         let result = crate::run_run(
@@ -755,31 +789,31 @@ fn run_autonomous_loop(
             max_runtime_seconds,
             max_files_changed,
             max_retries,
-            None,  // model - use default
+            None, // model - use default
             Some(stage_to_arg(stage)),
             None,
             Some(surface_policy),
-            true,  // allow_dirty
-            None,  // model_overrides - use mission type defaults
+            true, // allow_dirty
+            None, // model_overrides - use mission type defaults
             pre_gate_build_cmd.clone(),
             pre_gate_build_mode,
             logger,
         );
-        
+
         let elapsed = start.elapsed();
-        
+
         // Check result - but don't stop on "gate failed" if progress was made
         let runner_succeeded = result.is_ok();
         if let Err(e) = &result {
             println!("Runner reported: {}", e);
         }
         println!("Elapsed: {:.1}s", elapsed.as_secs_f64());
-        
+
         // Read token usage from latest mission and display/record it
         let token_usage = read_latest_token_usage(spec_root);
         if let Some(ref usage) = token_usage {
             println!("{}", usage.to_display_line());
-            
+
             // Record in session stats
             let mission_stats = MissionTokenStats {
                 mission_type: mission_type.name().to_string(),
@@ -790,17 +824,22 @@ fn run_autonomous_loop(
                 model: usage.model.clone(),
                 elapsed_seconds: elapsed.as_secs_f64(),
             };
-            session.token_stats.record_mission(&mission_stats, runner_succeeded);
+            session
+                .token_stats
+                .record_mission(&mission_stats, runner_succeeded);
         }
-        
+
         // Refresh state AFTER mission
         refresh_repo_state(spec_root, adapter, namako_cmd, session, logger)?;
-        
+
         // Get new counts
-        let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let gate_json =
+            crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
         let gate_packet = parse_gate_json(&gate_json)?;
-        let status_json = crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
-        let review_json = crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+        let status_json =
+            crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
+        let review_json =
+            crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
         let status_packet = parse_status_json(&status_json)?;
         let review_packet = parse_review_json(&review_json)?;
         let after_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
@@ -816,14 +855,15 @@ fn run_autonomous_loop(
             }
             _ => None,
         };
-        let assessment_added = state.coverage_assessment.is_none() && after_state.coverage_assessment.is_some();
-        
+        let assessment_added =
+            state.coverage_assessment.is_none() && after_state.coverage_assessment.is_some();
+
         let after_spec = after_state.spec_issues.len();
         let after_binding = after_state.binding_issues.len();
         let after_sut = after_state.sut_issues.len();
         let after_structure = after_state.structure_issues.len();
         let after_total = after_spec + after_binding + after_sut + after_structure;
-        
+
         // Calculate deltas
         let spec_delta = after_spec as i32 - before_spec as i32;
         let binding_delta = after_binding as i32 - before_binding as i32;
@@ -839,7 +879,7 @@ fn run_autonomous_loop(
             _ => None,
         };
         let rules_increased = rule_delta.map(|delta| delta > 0).unwrap_or(false);
-        
+
         // Calculate adjusted delta accounting for expected SDD flow
         // AddOrClarifyScenario: adding scenarios creates binding gaps (expected, not regression)
         // CreateMissingBindings: new bindings may surface SUT failures (expected, not regression)
@@ -856,14 +896,25 @@ fn run_autonomous_loop(
             }
             adj
         };
-        
+
         println!();
-        println!("After:   Spec:{} Bind:{} SUT:{} Struct:{} (total: {})",
-            after_spec, after_binding, after_sut, after_structure, after_total);
-        println!("Delta:   Spec:{:+} Bind:{:+} SUT:{:+} Total:{:+}{}",
-            spec_delta, binding_delta, sut_delta, total_delta,
-            if adjusted_delta != total_delta { format!(" (adj:{:+})", adjusted_delta) } else { String::new() });
-        
+        println!(
+            "After:   Spec:{} Bind:{} SUT:{} Struct:{} (total: {})",
+            after_spec, after_binding, after_sut, after_structure, after_total
+        );
+        println!(
+            "Delta:   Spec:{:+} Bind:{:+} SUT:{:+} Total:{:+}{}",
+            spec_delta,
+            binding_delta,
+            sut_delta,
+            total_delta,
+            if adjusted_delta != total_delta {
+                format!(" (adj:{:+})", adjusted_delta)
+            } else {
+                String::new()
+            }
+        );
+
         // Determine if we made progress - mission-type aware
         // Each mission type has a PRIMARY metric that MUST improve (or at least not regress)
         let (made_progress, violated_invariant) = match &mission_type {
@@ -883,14 +934,14 @@ fn run_autonomous_loop(
                 // Binding missions: binding_issues MUST decrease
                 // SUT increase is expected (new bindings may surface test failures)
                 let progress = binding_delta < 0;
-                let violated = binding_delta > 0;  // Bindings increased = something wrong
+                let violated = binding_delta > 0; // Bindings increased = something wrong
                 (progress, violated)
             }
-            MissionType::ImplementBehaviorForScenario { .. } | 
-            MissionType::FixRegressionFromGateFailure { .. } => {
+            MissionType::ImplementBehaviorForScenario { .. }
+            | MissionType::FixRegressionFromGateFailure { .. } => {
                 // SUT missions: sut_issues MUST decrease
                 let progress = sut_delta < 0;
-                let violated = sut_delta > 0;  // SUT issues increased = regression
+                let violated = sut_delta > 0; // SUT issues increased = regression
                 (progress, violated)
             }
             MissionType::AssessSpecCoverage => {
@@ -903,44 +954,59 @@ fn run_autonomous_loop(
                 (progress, false)
             }
         };
-        
+
         let gates_now_pass = after_state.all_gates_pass();
-        
+
         // Check for invariant violation first (stricter than general regression)
         if violated_invariant {
             if let MissionType::AddOrClarifyScenario { feature_path, .. } = &mission_type {
                 if rules_increased {
                     if let Some(snapshot) = before_feature_snapshot.as_ref() {
-                        if let Err(err) = restore_feature_snapshot(spec_root, feature_path, snapshot) {
-                            println!("⚠️  Failed to restore feature after rule-count violation: {}", err);
+                        if let Err(err) =
+                            restore_feature_snapshot(spec_root, feature_path, snapshot)
+                        {
+                            println!(
+                                "⚠️  Failed to restore feature after rule-count violation: {}",
+                                err
+                            );
                         } else {
                             println!("↩️  Restored feature file after rule-count violation");
                         }
                     }
                 }
             }
-            println!("❌ Mission invariant violated: {} made its primary metric worse", type_name);
+            println!(
+                "❌ Mission invariant violated: {} made its primary metric worse",
+                type_name
+            );
             // Record invariant violation lesson
             {
                 let target_key = mission_type.target_label().unwrap_or_default();
                 let lesson = lessons::create_lesson(
-                    &target_key, "invariant_violation",
-                    Some(&format!("{} violated primary metric", type_name)), None,
+                    &target_key,
+                    "invariant_violation",
+                    Some(&format!("{} violated primary metric", type_name)),
+                    None,
                 );
                 lessons_db.add_lesson(lesson);
                 lessons_db.save(spec_root).ok();
             }
             consecutive_failures += 1;
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES && !skipped_types.contains(&type_name) {
-                println!("⏭️  {} violated invariant {}× - skipping for this session", 
-                    type_name, consecutive_failures);
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+                && !skipped_types.contains(&type_name)
+            {
+                println!(
+                    "⏭️  {} violated invariant {}× - skipping for this session",
+                    type_name, consecutive_failures
+                );
                 skipped_types.push(type_name.clone());
             }
             last_mission_type = Some(type_name.clone());
             stall_count += 1;
             println!("Outcome: INVARIANT_VIOLATION");
         } else if gates_now_pass && !after_state.has_work() {
-            let assessment_needed = after_state.coverage_is_ambiguous() && after_state.coverage_assessment.is_none();
+            let assessment_needed =
+                after_state.coverage_is_ambiguous() && after_state.coverage_assessment.is_none();
             if assessment_needed {
                 println!("🧭 Coverage assessment pending - continuing");
                 stall_count = 0;
@@ -967,8 +1033,11 @@ fn run_autonomous_loop(
             // Mark all prior lessons for this target as resolved
             {
                 let target_key = mission_type.target_label().unwrap_or_default();
-                let ids: Vec<_> = lessons_db.find_lessons_for_target(&target_key)
-                    .iter().map(|l| l.id.clone()).collect();
+                let ids: Vec<_> = lessons_db
+                    .find_lessons_for_target(&target_key)
+                    .iter()
+                    .map(|l| l.id.clone())
+                    .collect();
                 for id in ids {
                     lessons_db.mark_resolved(&id, "All gates pass");
                 }
@@ -995,8 +1064,7 @@ fn run_autonomous_loop(
                 if let Some(assessment) = after_state.coverage_assessment.as_ref() {
                     println!(
                         "🧭 Coverage assessment: {} (score {:.1})",
-                        assessment.verdict,
-                        assessment.score
+                        assessment.verdict, assessment.score
                     );
                     if !assessment.gaps.is_empty() {
                         println!("   Gaps: {}", assessment.gaps.join("; "));
@@ -1008,8 +1076,11 @@ fn run_autonomous_loop(
             // Mark lessons for this target as resolved on progress
             {
                 let target_key = mission_type.target_label().unwrap_or_default();
-                let ids: Vec<_> = lessons_db.find_lessons_for_target(&target_key)
-                    .iter().map(|l| l.id.clone()).collect();
+                let ids: Vec<_> = lessons_db
+                    .find_lessons_for_target(&target_key)
+                    .iter()
+                    .map(|l| l.id.clone())
+                    .collect();
                 for id in ids {
                     lessons_db.mark_resolved(&id, &format!("{} succeeded", type_name));
                 }
@@ -1025,19 +1096,30 @@ fn run_autonomous_loop(
             }
             // Phase 6: Spec quality gate — check feature file after scenario addition
             if quality_gates_enabled {
-                if let MissionType::AddOrClarifyScenario { ref feature_path, .. } = mission_type {
+                if let MissionType::AddOrClarifyScenario {
+                    ref feature_path, ..
+                } = mission_type
+                {
                     let feature_file = spec_root.join(feature_path);
                     if let Ok(content) = std::fs::read_to_string(&feature_file) {
-                        let quality = crate::spec_quality::check_feature_quality(feature_path, &content);
+                        let quality =
+                            crate::spec_quality::check_feature_quality(feature_path, &content);
                         if !quality.passed {
                             println!("⚠️  Spec quality violations detected:");
                             println!("{}", quality.to_markdown());
                             // Roll back the bad scenarios
                             if let Some(snapshot) = before_feature_snapshot.as_ref() {
-                                if let Err(err) = restore_feature_snapshot(spec_root, feature_path, snapshot) {
-                                    println!("⚠️  Failed to restore feature after quality violation: {}", err);
+                                if let Err(err) =
+                                    restore_feature_snapshot(spec_root, feature_path, snapshot)
+                                {
+                                    println!(
+                                        "⚠️  Failed to restore feature after quality violation: {}",
+                                        err
+                                    );
                                 } else {
-                                    println!("↩️  Restored feature file after spec quality violation");
+                                    println!(
+                                        "↩️  Restored feature file after spec quality violation"
+                                    );
                                 }
                             }
                             stall_count += 1;
@@ -1061,9 +1143,13 @@ fn run_autonomous_loop(
             // Track consecutive failures for this mission type
             if last_mission_type.as_ref() == Some(&type_name) {
                 consecutive_failures += 1;
-                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES && !skipped_types.contains(&type_name) {
-                    println!("⏭️  {} failed {}× consecutively - skipping for this session", 
-                        type_name, consecutive_failures);
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+                    && !skipped_types.contains(&type_name)
+                {
+                    println!(
+                        "⏭️  {} failed {}× consecutively - skipping for this session",
+                        type_name, consecutive_failures
+                    );
                     skipped_types.push(type_name.clone());
                 }
             } else {
@@ -1073,18 +1159,27 @@ fn run_autonomous_loop(
             // Record failure lesson (or add approach to existing one)
             let target_key = mission_type.target_label().unwrap_or_default();
             if !lessons_db.add_attempted_approach(&target_key, &type_name) {
-                let lesson = lessons::create_lesson(&target_key, "no_progress", Some(&type_name), None);
+                let lesson =
+                    lessons::create_lesson(&target_key, "no_progress", Some(&type_name), None);
                 lessons_db.add_lesson(lesson);
             }
             lessons_db.save(spec_root).ok();
-            println!("Outcome: NO_PROGRESS (stall {}/{})", stall_count, MAX_STALLS);
+            println!(
+                "Outcome: NO_PROGRESS (stall {}/{})",
+                stall_count, MAX_STALLS
+            );
             if stall_count >= MAX_STALLS {
                 let diagnosis = StallDiagnosis::diagnose(
-                    session, &after_state, &StopReason::NoProgress,
-                    Some(&type_name), mission_type.target_label().as_deref(),
+                    session,
+                    &after_state,
+                    &StopReason::NoProgress,
+                    Some(&type_name),
+                    mission_type.target_label().as_deref(),
                 );
                 println!("{}", diagnosis.format_report());
-                if let Some(ctx) = escalation::detect_escalation(session, &type_name, &StopReason::NoProgress) {
+                if let Some(ctx) =
+                    escalation::detect_escalation(session, &type_name, &StopReason::NoProgress)
+                {
                     println!("{}", escalation::format_escalation_message(&ctx));
                 }
                 break;
@@ -1094,7 +1189,10 @@ fn run_autonomous_loop(
             // Roll back changes in spec repo
             let rollback_ok = rollback_spec_changes(spec_root);
             if rollback_ok {
-                println!("↩️  Rolled back spec changes (regression of +{} adjusted issues)", adjusted_delta);
+                println!(
+                    "↩️  Rolled back spec changes (regression of +{} adjusted issues)",
+                    adjusted_delta
+                );
             } else {
                 println!("⚠️  Rollback skipped (workspace dirty or git unavailable)");
             }
@@ -1103,22 +1201,28 @@ fn run_autonomous_loop(
             // Track consecutive failures for regression too
             if last_mission_type.as_ref() == Some(&type_name) {
                 consecutive_failures += 1;
-                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES && !skipped_types.contains(&type_name) {
-                    println!("⏭️  {} caused regression {}× - skipping for this session", 
-                        type_name, consecutive_failures);
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+                    && !skipped_types.contains(&type_name)
+                {
+                    println!(
+                        "⏭️  {} caused regression {}× - skipping for this session",
+                        type_name, consecutive_failures
+                    );
                     skipped_types.push(type_name.clone());
                 }
             } else {
                 consecutive_failures = 1;
             }
             last_mission_type = Some(type_name.clone());
-            
+
             // Record regression lesson
             {
                 let target_key = mission_type.target_label().unwrap_or_default();
                 let lesson = lessons::create_lesson(
-                    &target_key, "regression",
-                    Some(&format!("adjusted delta +{}", adjusted_delta)), None,
+                    &target_key,
+                    "regression",
+                    Some(&format!("adjusted delta +{}", adjusted_delta)),
+                    None,
                 );
                 lessons_db.add_lesson(lesson);
                 lessons_db.save(spec_root).ok();
@@ -1127,8 +1231,11 @@ fn run_autonomous_loop(
             const MAX_REGRESSION_TOLERATED: i32 = 5;
             if adjusted_delta > MAX_REGRESSION_TOLERATED {
                 let diagnosis = StallDiagnosis::diagnose(
-                    session, &after_state, &StopReason::GateFailed,
-                    Some(&type_name), mission_type.target_label().as_deref(),
+                    session,
+                    &after_state,
+                    &StopReason::GateFailed,
+                    Some(&type_name),
+                    mission_type.target_label().as_deref(),
                 );
                 println!("{}", diagnosis.format_report());
                 println!("Outcome: REGRESSION_STOP");
@@ -1138,7 +1245,10 @@ fn run_autonomous_loop(
             stall_count += 1;
         } else if total_delta > 0 && adjusted_delta <= 0 {
             // Total increased but adjusted is fine = expected SDD flow (e.g., scenarios added, bindings needed)
-            println!("✅ Expected SDD flow: {} issues added (bindings/SUT work created)", total_delta);
+            println!(
+                "✅ Expected SDD flow: {} issues added (bindings/SUT work created)",
+                total_delta
+            );
             println!("Outcome: EXPECTED_FLOW");
             stall_count = 0;
             consecutive_failures = 0;
@@ -1148,39 +1258,52 @@ fn run_autonomous_loop(
             }
             last_mission_type = Some(type_name.clone());
         }
-        
+
         println!();
     }
-    
+
     // Final summary
     refresh_repo_state(spec_root, adapter, namako_cmd, session, logger)?;
-    
+
     // Get final issue count for summary
-    let gate_json = crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+    let gate_json =
+        crate::run_namako_gate_json(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
     let gate_packet = parse_gate_json(&gate_json)?;
-    let status_json = crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
-    let review_json = crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
+    let status_json =
+        crate::run_namako_status(namako_cmd, adapter, &spec_root.to_path_buf(), None, logger)?;
+    let review_json =
+        crate::run_namako_review(namako_cmd, adapter, &spec_root.to_path_buf(), logger)?;
     let status_packet = parse_status_json(&status_json)?;
     let review_packet = parse_review_json(&review_json)?;
     let final_state = RepoState::compute(&status_packet, &review_packet, &gate_packet, None)?;
-    let final_issues = final_state.spec_issues.len() + final_state.binding_issues.len() 
-        + final_state.sut_issues.len() + final_state.structure_issues.len();
-    
+    let final_issues = final_state.spec_issues.len()
+        + final_state.binding_issues.len()
+        + final_state.sut_issues.len()
+        + final_state.structure_issues.len();
+
     // Calculate session duration (use wall clock time from loop_start)
     let session_duration = loop_start.elapsed().as_secs_f64();
-    
+
     // Print token stats summary if we have any
     if session.token_stats.missions_completed > 0 || session.token_stats.missions_failed > 0 {
-        println!("{}", session.token_stats.format_summary(
-            session.initial_issue_count,
-            final_issues,
-            session_duration
-        ));
-        if session.regression_count > 0 || session.policy_violation_count > 0 || !skipped_types.is_empty() {
-            println!("Regressions: {} | Policy violations: {} | Skipped types: [{}]",
+        println!(
+            "{}",
+            session.token_stats.format_summary(
+                session.initial_issue_count,
+                final_issues,
+                session_duration
+            )
+        );
+        if session.regression_count > 0
+            || session.policy_violation_count > 0
+            || !skipped_types.is_empty()
+        {
+            println!(
+                "Regressions: {} | Policy violations: {} | Skipped types: [{}]",
                 session.regression_count,
                 session.policy_violation_count,
-                skipped_types.join(", "));
+                skipped_types.join(", ")
+            );
         }
     } else {
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -1190,14 +1313,19 @@ fn run_autonomous_loop(
             println!("Final state: {}", summary);
         }
         // Session-level quality metrics
-        if session.regression_count > 0 || session.policy_violation_count > 0 || !skipped_types.is_empty() {
-            println!("Regressions: {} | Policy violations: {} | Skipped types: [{}]",
+        if session.regression_count > 0
+            || session.policy_violation_count > 0
+            || !skipped_types.is_empty()
+        {
+            println!(
+                "Regressions: {} | Policy violations: {} | Skipped types: [{}]",
                 session.regression_count,
                 session.policy_violation_count,
-                skipped_types.join(", "));
+                skipped_types.join(", ")
+            );
         }
     }
-    
+
     Ok(())
 }
 
@@ -1213,22 +1341,29 @@ fn format_mission_success(
     scenario_delta: Option<i32>,
 ) -> Option<String> {
     use crate::mission_type::MissionType;
-    
+
     match mission_type {
         MissionType::CreateMissingBindings { .. } => {
             let bindings_created = before_binding.saturating_sub(after_binding);
             if bindings_created > 0 {
                 let cascade_msg = if after_sut > before_sut {
-                    format!(" → {} SUT issue(s) surfaced (expected cascade)", after_sut - before_sut)
+                    format!(
+                        " → {} SUT issue(s) surfaced (expected cascade)",
+                        after_sut - before_sut
+                    )
                 } else {
                     String::new()
                 };
-                Some(format!("📝 Created {} binding(s){}", bindings_created, cascade_msg))
+                Some(format!(
+                    "📝 Created {} binding(s){}",
+                    bindings_created, cascade_msg
+                ))
             } else {
                 None
             }
         }
-        MissionType::ImplementBehaviorForScenario { .. } | MissionType::FixRegressionFromGateFailure { .. } => {
+        MissionType::ImplementBehaviorForScenario { .. }
+        | MissionType::FixRegressionFromGateFailure { .. } => {
             let sut_fixed = before_sut.saturating_sub(after_sut);
             if sut_fixed > 0 {
                 Some(format!("🔧 Fixed {} SUT issue(s)", sut_fixed))
@@ -1255,7 +1390,10 @@ fn format_mission_success(
                 } else {
                     String::new()
                 };
-                Some(format!("📋 Improved {} spec issue(s){}", specs_improved, cascade_msg))
+                Some(format!(
+                    "📋 Improved {} spec issue(s){}",
+                    specs_improved, cascade_msg
+                ))
             } else {
                 None
             }
@@ -1269,41 +1407,35 @@ fn format_mission_success(
 fn read_latest_token_usage(spec_root: &Path) -> Option<TokenUsage> {
     let missions_dir = spec_root.join(".tesaki/missions");
     let failed_dir = spec_root.join(".tesaki/failed");
-    
+
     // Collect entries from both directories
     let mut entries: Vec<_> = Vec::new();
-    
+
     if missions_dir.exists() {
         if let Ok(dir) = std::fs::read_dir(&missions_dir) {
-            entries.extend(
-                dir.filter_map(|e| e.ok())
-                   .filter(|e| e.path().is_dir())
-            );
+            entries.extend(dir.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()));
         }
     }
-    
+
     if failed_dir.exists() {
         if let Ok(dir) = std::fs::read_dir(&failed_dir) {
-            entries.extend(
-                dir.filter_map(|e| e.ok())
-                   .filter(|e| e.path().is_dir())
-            );
+            entries.extend(dir.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()));
         }
     }
-    
+
     if entries.is_empty() {
         return None;
     }
-    
+
     // Find the most recent mission directory (sorted by name, which includes sequence number)
     entries.sort_by_key(|e| e.path());
     let latest = entries.last()?;
-    
+
     let token_path = latest.path().join("RUNNER_OUTPUT/token_usage.json");
     if !token_path.exists() {
         return None;
     }
-    
+
     let content = std::fs::read_to_string(&token_path).ok()?;
     serde_json::from_str(&content).ok()
 }

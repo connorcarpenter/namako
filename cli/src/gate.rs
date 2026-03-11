@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use serde::Serialize;
 use serde_json::Value;
@@ -24,8 +24,8 @@ use namako_engine::npap::{
     SemanticStepRegistry, HASH_CONTRACT_VERSION, NPAP_VERSION,
 };
 
-use crate::status::{self, StatusArgs};
 use crate::review::{self, ReviewArgs};
+use crate::status::{self, StatusArgs};
 
 /// Arguments for the gate command.
 #[derive(Args, Debug)]
@@ -134,14 +134,20 @@ pub fn run(args: GateArgs) -> Result<()> {
     let num_runs = args.runs.unwrap_or(if args.determinism { 2 } else { 1 });
 
     if args.determinism && num_runs < 2 {
-        bail!("Determinism check requires at least 2 runs (got {})", num_runs);
+        bail!(
+            "Determinism check requires at least 2 runs (got {})",
+            num_runs
+        );
     }
 
     if args.determinism {
         run_with_determinism(&args, num_runs)
     } else {
         // Use provided artifacts_dir or default to specs_dir for persistence
-        let artifacts_dir = args.artifacts_dir.clone().unwrap_or_else(|| args.specs_dir.clone());
+        let artifacts_dir = args
+            .artifacts_dir
+            .clone()
+            .unwrap_or_else(|| args.specs_dir.clone());
         run_single(&args, Some(&artifacts_dir))
     }
 }
@@ -157,17 +163,30 @@ fn run_single(args: &GateArgs, artifact_root: Option<&PathBuf>) -> Result<()> {
         }
     };
 
-    std::fs::create_dir_all(&artifacts_dir)
-        .with_context(|| format!("Failed to create artifacts dir: {}", artifacts_dir.display()))?;
+    std::fs::create_dir_all(&artifacts_dir).with_context(|| {
+        format!(
+            "Failed to create artifacts dir: {}",
+            artifacts_dir.display()
+        )
+    })?;
 
     let resolved_plan_path = artifacts_dir.join("resolved_plan.json");
     let run_report_path = artifacts_dir.join("run_report.json");
     let cert_path = args.specs_dir.join(&args.certification);
 
     let mut output = GateOutput {
-        lint: PhaseResult { status: PhaseStatus::Skipped, reason: None },
-        run: PhaseResult { status: PhaseStatus::Skipped, reason: None },
-        verify: PhaseResult { status: PhaseStatus::Skipped, reason: None },
+        lint: PhaseResult {
+            status: PhaseStatus::Skipped,
+            reason: None,
+        },
+        run: PhaseResult {
+            status: PhaseStatus::Skipped,
+            reason: None,
+        },
+        verify: PhaseResult {
+            status: PhaseStatus::Skipped,
+            reason: None,
+        },
         determinism: None,
     };
 
@@ -178,7 +197,10 @@ fn run_single(args: &GateArgs, artifact_root: Option<&PathBuf>) -> Result<()> {
 
     match run_lint(args, &resolved_plan_path) {
         Ok(()) => {
-            output.lint = PhaseResult { status: PhaseStatus::Pass, reason: None };
+            output.lint = PhaseResult {
+                status: PhaseStatus::Pass,
+                reason: None,
+            };
             if !args.json {
                 eprintln!("  lint: PASS");
             }
@@ -204,7 +226,10 @@ fn run_single(args: &GateArgs, artifact_root: Option<&PathBuf>) -> Result<()> {
 
     match run_adapter(args, &resolved_plan_path, &run_report_path) {
         Ok(()) => {
-            output.run = PhaseResult { status: PhaseStatus::Pass, reason: None };
+            output.run = PhaseResult {
+                status: PhaseStatus::Pass,
+                reason: None,
+            };
             if !args.json {
                 eprintln!("  run: PASS");
             }
@@ -230,7 +255,10 @@ fn run_single(args: &GateArgs, artifact_root: Option<&PathBuf>) -> Result<()> {
 
     match run_verify(args, &run_report_path) {
         Ok(()) => {
-            output.verify = PhaseResult { status: PhaseStatus::Pass, reason: None };
+            output.verify = PhaseResult {
+                status: PhaseStatus::Pass,
+                reason: None,
+            };
             if !args.json {
                 eprintln!("  verify: PASS");
             }
@@ -239,18 +267,18 @@ fn run_single(args: &GateArgs, artifact_root: Option<&PathBuf>) -> Result<()> {
             // Check if this is a drift error and auto_cert is enabled
             let error_msg = format!("{}", e);
             let is_drift = error_msg.contains("Baseline drift:");
-            
+
             if is_drift && args.auto_cert {
                 // Auto-update certification
                 if !args.json {
                     eprintln!("  verify: DRIFT DETECTED - auto-updating certification...");
                 }
-                
+
                 match auto_update_certification(args, &run_report_path, &cert_path) {
                     Ok(()) => {
-                        output.verify = PhaseResult { 
-                            status: PhaseStatus::Pass, 
-                            reason: Some("Auto-updated certification".to_string()) 
+                        output.verify = PhaseResult {
+                            status: PhaseStatus::Pass,
+                            reason: Some("Auto-updated certification".to_string()),
                         };
                         if !args.json {
                             eprintln!("  verify: PASS (certification updated)");
@@ -351,9 +379,18 @@ fn run_with_determinism(args: &GateArgs, num_runs: usize) -> Result<()> {
 
     if args.json {
         let output = GateOutput {
-            lint: PhaseResult { status: PhaseStatus::Pass, reason: None },
-            run: PhaseResult { status: PhaseStatus::Pass, reason: None },
-            verify: PhaseResult { status: PhaseStatus::Pass, reason: None },
+            lint: PhaseResult {
+                status: PhaseStatus::Pass,
+                reason: None,
+            },
+            run: PhaseResult {
+                status: PhaseStatus::Pass,
+                reason: None,
+            },
+            verify: PhaseResult {
+                status: PhaseStatus::Pass,
+                reason: None,
+            },
             determinism: Some(determinism_result.clone()),
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -454,14 +491,16 @@ fn run_lint(args: &GateArgs, output_path: &PathBuf) -> Result<()> {
 
     // Check for orphan bindings (v1.5 hard error)
     if !result.orphan_bindings.is_empty() {
-        bail!("{} orphan binding(s) detected", result.orphan_bindings.len());
+        bail!(
+            "{} orphan binding(s) detected",
+            result.orphan_bindings.len()
+        );
     }
 
     let plan = result.plan.expect("No errors but no plan - this is a bug");
 
     // Write resolved_plan.json
-    let json = serde_json::to_string_pretty(&plan)
-        .context("Failed to serialize resolved plan")?;
+    let json = serde_json::to_string_pretty(&plan).context("Failed to serialize resolved plan")?;
     std::fs::write(output_path, &json)
         .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
@@ -494,16 +533,22 @@ fn run_adapter(args: &GateArgs, plan_path: &PathBuf, output_path: &PathBuf) -> R
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Adapter run failed (exit {}): {}", output.status.code().unwrap_or(-1), stderr);
+        bail!(
+            "Adapter run failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            stderr
+        );
     }
 
     // Check for failed scenarios in run_report
     let report_json = std::fs::read_to_string(output_path)
         .with_context(|| format!("Failed to read run report: {}", output_path.display()))?;
-    let report: RunReport = serde_json::from_str(&report_json)
-        .context("Failed to parse run report JSON")?;
+    let report: RunReport =
+        serde_json::from_str(&report_json).context("Failed to parse run report JSON")?;
 
-    let failed_count = report.scenarios.iter()
+    let failed_count = report
+        .scenarios
+        .iter()
         .filter(|s| s.status != ScenarioStatus::Passed)
         .count();
 
@@ -519,15 +564,15 @@ fn run_verify(args: &GateArgs, run_report_path: &PathBuf) -> Result<()> {
     // Read run report
     let run_report_json = std::fs::read_to_string(run_report_path)
         .with_context(|| format!("Failed to read run report: {}", run_report_path.display()))?;
-    let run_report: RunReport = serde_json::from_str(&run_report_json)
-        .context("Failed to parse run report JSON")?;
+    let run_report: RunReport =
+        serde_json::from_str(&run_report_json).context("Failed to parse run report JSON")?;
 
     // Read certification baseline
     let cert_path = args.specs_dir.join(&args.certification);
     let cert_json = std::fs::read_to_string(&cert_path)
         .with_context(|| format!("Failed to read certification: {}", cert_path.display()))?;
-    let certification: Certification = serde_json::from_str(&cert_json)
-        .context("Failed to parse certification JSON")?;
+    let certification: Certification =
+        serde_json::from_str(&cert_json).context("Failed to parse certification JSON")?;
 
     // Recompute identity from current sources
     let recomputed = recompute_identity(args)?;
@@ -564,31 +609,29 @@ fn run_verify(args: &GateArgs, run_report_path: &PathBuf) -> Result<()> {
 
 /// Auto-update certification when lint+run pass but verify fails due to drift.
 /// This is the self-healing path for turnkey operation.
-fn auto_update_certification(args: &GateArgs, run_report_path: &PathBuf, cert_path: &PathBuf) -> Result<()> {
+fn auto_update_certification(
+    args: &GateArgs,
+    run_report_path: &PathBuf,
+    cert_path: &PathBuf,
+) -> Result<()> {
     // Read run report
     let run_report_json = std::fs::read_to_string(run_report_path)
         .with_context(|| format!("Failed to read run report: {}", run_report_path.display()))?;
-    let run_report: RunReport = serde_json::from_str(&run_report_json)
-        .context("Failed to parse run report JSON")?;
+    let run_report: RunReport =
+        serde_json::from_str(&run_report_json).context("Failed to parse run report JSON")?;
 
     // Recompute identity from current sources
     let recomputed = recompute_identity(args)?;
 
     // Verify run_report matches current sources (freshness check)
     if run_report.header.feature_fingerprint_hash != recomputed.feature_fingerprint_hash {
-        bail!(
-            "Cannot auto-cert: run report is stale (feature_fingerprint mismatch)"
-        );
+        bail!("Cannot auto-cert: run report is stale (feature_fingerprint mismatch)");
     }
     if run_report.header.step_registry_hash != recomputed.step_registry_hash {
-        bail!(
-            "Cannot auto-cert: run report is stale (step_registry mismatch)"
-        );
+        bail!("Cannot auto-cert: run report is stale (step_registry mismatch)");
     }
     if run_report.header.resolved_plan_hash != recomputed.resolved_plan_hash {
-        bail!(
-            "Cannot auto-cert: run report is stale (resolved_plan mismatch)"
-        );
+        bail!("Cannot auto-cert: run report is stale (resolved_plan mismatch)");
     }
 
     // Create new certification
@@ -617,7 +660,11 @@ fn auto_update_certification(args: &GateArgs, run_report_path: &PathBuf, cert_pa
 }
 
 /// Generate status.json for determinism evidence
-fn generate_status(args: &GateArgs, run_report_path: &PathBuf, output_path: &PathBuf) -> Result<()> {
+fn generate_status(
+    args: &GateArgs,
+    run_report_path: &PathBuf,
+    output_path: &PathBuf,
+) -> Result<()> {
     let status_args = StatusArgs {
         specs_dir: args.specs_dir.clone(),
         adapter_cmd: args.adapter_cmd.clone(),
@@ -652,7 +699,12 @@ fn collect_evidence_bundle(run_dir: &PathBuf) -> Result<EvidenceBundle> {
     let mut contents = BTreeMap::new();
 
     // Evidence files to collect
-    let evidence_files = ["resolved_plan.json", "run_report.json", "status.json", "review.json"];
+    let evidence_files = [
+        "resolved_plan.json",
+        "run_report.json",
+        "status.json",
+        "review.json",
+    ];
 
     for filename in &evidence_files {
         let path = run_dir.join(filename);
@@ -671,8 +723,8 @@ fn collect_evidence_bundle(run_dir: &PathBuf) -> Result<EvidenceBundle> {
 
 /// Canonicalize JSON: parse, strip ephemeral fields, re-serialize with sorted keys
 fn canonicalize_json(raw: &str) -> Result<String> {
-    let mut value: Value = serde_json::from_str(raw)
-        .context("Failed to parse JSON for canonicalization")?;
+    let mut value: Value =
+        serde_json::from_str(raw).context("Failed to parse JSON for canonicalization")?;
 
     strip_ephemeral_fields(&mut value);
 
@@ -688,7 +740,8 @@ fn strip_ephemeral_fields(value: &mut Value) {
     match value {
         Value::Object(map) => {
             // Remove ephemeral fields
-            let keys_to_remove: Vec<String> = map.keys()
+            let keys_to_remove: Vec<String> = map
+                .keys()
                 .filter(|k| is_ephemeral_key(k))
                 .cloned()
                 .collect();
@@ -730,14 +783,13 @@ fn serialize_canonical(value: &Value) -> Result<String> {
 fn sort_value(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
-            let sorted: BTreeMap<String, Value> = map.iter()
+            let sorted: BTreeMap<String, Value> = map
+                .iter()
                 .map(|(k, v)| (k.clone(), sort_value(v)))
                 .collect();
             Value::Object(sorted.into_iter().collect())
         }
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(sort_value).collect())
-        }
+        Value::Array(arr) => Value::Array(arr.iter().map(sort_value).collect()),
         other => other.clone(),
     }
 }
@@ -889,8 +941,7 @@ fn fetch_adapter_manifest(adapter_cmd: &str) -> Result<SemanticStepRegistry> {
         bail!("Adapter manifest failed: {}", stderr);
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("Adapter output is not valid UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("Adapter output is not valid UTF-8")?;
 
     serde_json::from_str(&stdout).context("Failed to parse adapter manifest JSON")
 }
@@ -945,23 +996,29 @@ mod tests {
 
     #[test]
     fn test_strip_ephemeral_fields() {
-        let mut value: Value = serde_json::from_str(r#"{
+        let mut value: Value = serde_json::from_str(
+            r#"{
             "name": "test",
             "timestamp": "2026-01-19T00:00:00Z",
             "nested": {
                 "generated_at": "2026-01-19T00:00:00Z",
                 "data": "value"
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         strip_ephemeral_fields(&mut value);
 
-        let expected: Value = serde_json::from_str(r#"{
+        let expected: Value = serde_json::from_str(
+            r#"{
             "name": "test",
             "nested": {
                 "data": "value"
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         // Compare after sorting
         assert_eq!(sort_value(&value), sort_value(&expected));
@@ -1004,10 +1061,14 @@ mod tests {
     #[test]
     fn test_compare_bundles_identical() {
         let bundle1 = EvidenceBundle {
-            contents: [("test.json".to_string(), r#"{"a":1}"#.to_string())].into_iter().collect(),
+            contents: [("test.json".to_string(), r#"{"a":1}"#.to_string())]
+                .into_iter()
+                .collect(),
         };
         let bundle2 = EvidenceBundle {
-            contents: [("test.json".to_string(), r#"{"a":1}"#.to_string())].into_iter().collect(),
+            contents: [("test.json".to_string(), r#"{"a":1}"#.to_string())]
+                .into_iter()
+                .collect(),
         };
 
         let mismatches = compare_bundles(&[bundle1, bundle2]).unwrap();
@@ -1017,10 +1078,14 @@ mod tests {
     #[test]
     fn test_compare_bundles_different() {
         let bundle1 = EvidenceBundle {
-            contents: [("test.json".to_string(), r#"{"a":1}"#.to_string())].into_iter().collect(),
+            contents: [("test.json".to_string(), r#"{"a":1}"#.to_string())]
+                .into_iter()
+                .collect(),
         };
         let bundle2 = EvidenceBundle {
-            contents: [("test.json".to_string(), r#"{"a":2}"#.to_string())].into_iter().collect(),
+            contents: [("test.json".to_string(), r#"{"a":2}"#.to_string())]
+                .into_iter()
+                .collect(),
         };
 
         let mismatches = compare_bundles(&[bundle1, bundle2]).unwrap();

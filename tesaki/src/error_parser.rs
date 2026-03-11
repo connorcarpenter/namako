@@ -41,7 +41,7 @@ impl CompileError {
         } else {
             format!("{}:{}", self.file, self.line)
         };
-        
+
         if let Some(ref code) = self.code {
             format!("{}: {} [{}]: {}", loc, self.level, code, self.message)
         } else {
@@ -79,9 +79,9 @@ impl BuildCheckResult {
         if self.success {
             return "✅ Build succeeded".to_string();
         }
-        
+
         let mut md = String::from("### ❌ Build Failed\n\n");
-        
+
         if self.errors.is_empty() {
             md.push_str(&format!("```\n{}\n```\n", self.stderr_excerpt));
         } else {
@@ -91,65 +91,83 @@ impl BuildCheckResult {
                 md.push('\n');
             }
             md.push_str("```\n");
-            
+
             if self.total_errors > max_errors {
-                md.push_str(&format!("\n*...and {} more errors*\n", self.total_errors - max_errors));
+                md.push_str(&format!(
+                    "\n*...and {} more errors*\n",
+                    self.total_errors - max_errors
+                ));
             }
         }
-        
+
         md
     }
 }
 
 // Regex patterns for parsing cargo output
 // Example: "error[E0425]: cannot find value `x` in this scope"
-static ERROR_HEADER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(error|warning)(?:\[(E\d+)\])?: (.+)$").unwrap()
-});
+static ERROR_HEADER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(error|warning)(?:\[(E\d+)\])?: (.+)$").unwrap());
 
 // Example: "  --> src/main.rs:42:13"
-static LOCATION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*-->\s*([^:]+):(\d+):(\d+)").unwrap()
-});
+static LOCATION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*-->\s*([^:]+):(\d+):(\d+)").unwrap());
 
 // Alternative location format: "  --> src/main.rs:42"
-static LOCATION_NO_COL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*-->\s*([^:]+):(\d+)$").unwrap()
-});
+static LOCATION_NO_COL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*-->\s*([^:]+):(\d+)$").unwrap());
 
 /// Parse cargo build/check stderr into structured errors.
 pub fn parse_cargo_errors(stderr: &str) -> Vec<CompileError> {
     let mut errors = Vec::new();
     let lines: Vec<&str> = stderr.lines().collect();
-    
+
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
-        
+
         // Match error/warning header
         if let Some(caps) = ERROR_HEADER_RE.captures(line) {
-            let level = caps.get(1).map(|m| m.as_str()).unwrap_or("error").to_string();
+            let level = caps
+                .get(1)
+                .map(|m| m.as_str())
+                .unwrap_or("error")
+                .to_string();
             let code = caps.get(2).map(|m| m.as_str().to_string());
             let message = caps.get(3).map(|m| m.as_str()).unwrap_or("").to_string();
-            
+
             // Look for location in next few lines
             let mut file = String::new();
             let mut line_num = 0u32;
             let mut column = None;
-            
+
             for j in (i + 1)..std::cmp::min(i + 5, lines.len()) {
                 if let Some(loc_caps) = LOCATION_RE.captures(lines[j]) {
-                    file = loc_caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
-                    line_num = loc_caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+                    file = loc_caps
+                        .get(1)
+                        .map(|m| m.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    line_num = loc_caps
+                        .get(2)
+                        .and_then(|m| m.as_str().parse().ok())
+                        .unwrap_or(0);
                     column = loc_caps.get(3).and_then(|m| m.as_str().parse().ok());
                     break;
                 } else if let Some(loc_caps) = LOCATION_NO_COL_RE.captures(lines[j]) {
-                    file = loc_caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
-                    line_num = loc_caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+                    file = loc_caps
+                        .get(1)
+                        .map(|m| m.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    line_num = loc_caps
+                        .get(2)
+                        .and_then(|m| m.as_str().parse().ok())
+                        .unwrap_or(0);
                     break;
                 }
             }
-            
+
             // Only include if we found a valid location
             if !file.is_empty() && line_num > 0 && level == "error" {
                 errors.push(CompileError {
@@ -162,10 +180,10 @@ pub fn parse_cargo_errors(stderr: &str) -> Vec<CompileError> {
                 });
             }
         }
-        
+
         i += 1;
     }
-    
+
     errors
 }
 
@@ -183,21 +201,20 @@ fn detect_test_harness(working_dir: &Path) -> Option<String> {
         working_dir.join("tests/harness/Cargo.toml"),
         working_dir.join("test_harness/Cargo.toml"),
     ];
-    
+
     for cargo_path in &candidates {
         if cargo_path.exists() {
             if let Ok(content) = fs::read_to_string(cargo_path) {
                 // Simple regex to extract package name
-                static PKG_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
-                    Regex::new(r#"(?m)^\s*name\s*=\s*"([^"]+)""#).unwrap()
-                });
+                static PKG_NAME_RE: LazyLock<Regex> =
+                    LazyLock::new(|| Regex::new(r#"(?m)^\s*name\s*=\s*"([^"]+)""#).unwrap());
                 if let Some(caps) = PKG_NAME_RE.captures(&content) {
                     return Some(caps.get(1).unwrap().as_str().to_string());
                 }
             }
         }
     }
-    
+
     None
 }
 
@@ -212,15 +229,12 @@ fn detect_test_harness(working_dir: &Path) -> Option<String> {
 /// **Resilience policy:** If no test harness is detected and the fallback
 /// workspace-wide check fails, we still return success=true with a warning.
 /// This prevents unrelated broken crates from blocking the spec loop.
-pub fn run_pre_gate_build(
-    working_dir: &Path,
-    build_cmd: Option<&str>,
-) -> BuildCheckResult {
+pub fn run_pre_gate_build(working_dir: &Path, build_cmd: Option<&str>) -> BuildCheckResult {
     let start = std::time::Instant::now();
-    
+
     // Track whether we're doing a targeted harness build or fallback
     let mut targeted_harness = false;
-    
+
     // Build command as owned Strings for the auto-detect case
     let (program, args): (String, Vec<String>) = if let Some(cmd) = build_cmd {
         // Explicit command provided - treat as targeted
@@ -229,56 +243,58 @@ pub fn run_pre_gate_build(
         if parts.is_empty() {
             ("cargo".to_string(), vec!["check".to_string()])
         } else {
-            (parts[0].to_string(), parts[1..].iter().map(|s| s.to_string()).collect())
+            (
+                parts[0].to_string(),
+                parts[1..].iter().map(|s| s.to_string()).collect(),
+            )
         }
     } else {
         // Auto-detect test harness package for targeted build
         if let Some(harness_pkg) = detect_test_harness(working_dir) {
             targeted_harness = true;
             // Build only the test harness, not the entire workspace
-            ("cargo".to_string(), vec![
-                "check".to_string(),
-                "-p".to_string(),
-                harness_pkg,
-            ])
+            (
+                "cargo".to_string(),
+                vec!["check".to_string(), "-p".to_string(), harness_pkg],
+            )
         } else {
             // Fallback: use cargo check (faster than build, less likely to hit unrelated issues)
             // NOT targeted - failures here are non-blocking
             ("cargo".to_string(), vec!["check".to_string()])
         }
     };
-    
+
     let result = Command::new(&program)
         .args(&args)
         .current_dir(working_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output();
-    
+
     let elapsed = start.elapsed().as_secs_f64();
-    
+
     match result {
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let errors = parse_cargo_errors(&stderr);
             let total_errors = errors.len();
-            
+
             // Truncate stderr for excerpt
             let stderr_excerpt = if stderr.len() > 2000 {
                 format!("{}...[truncated]", &stderr[..2000])
             } else {
                 stderr.to_string()
             };
-            
+
             let raw_success = output.status.success();
-            
+
             // Resilience: if not targeted and build failed, warn but don't block
             let (success, warning) = if !raw_success && !targeted_harness {
                 (true, Some("Workspace-wide check failed (unrelated crates may be broken). Proceeding anyway.".to_string()))
             } else {
                 (raw_success, None)
             };
-            
+
             BuildCheckResult {
                 success,
                 exit_code: output.status.code(),
@@ -302,7 +318,6 @@ pub fn run_pre_gate_build(
         },
     }
 }
-
 
 /// Check if a build is needed before running gate.
 ///
@@ -396,23 +411,21 @@ error[E0425]: cannot find value `y`
         let result = BuildCheckResult {
             success: false,
             exit_code: Some(1),
-            errors: vec![
-                CompileError {
-                    file: "src/main.rs".to_string(),
-                    line: 10,
-                    column: Some(5),
-                    level: "error".to_string(),
-                    code: Some("E0425".to_string()),
-                    message: "cannot find value".to_string(),
-                },
-            ],
+            errors: vec![CompileError {
+                file: "src/main.rs".to_string(),
+                line: 10,
+                column: Some(5),
+                level: "error".to_string(),
+                code: Some("E0425".to_string()),
+                message: "cannot find value".to_string(),
+            }],
             total_errors: 1,
             stderr_excerpt: "".to_string(),
             elapsed_seconds: 1.5,
             targeted_harness: true,
             warning: None,
         };
-        
+
         let md = result.to_markdown(5);
         assert!(md.contains("Build Failed"));
         assert!(md.contains("src/main.rs:10:5"));
@@ -430,7 +443,7 @@ error[E0425]: cannot find value `y`
             targeted_harness: false,
             warning: None,
         };
-        
+
         let md = result.to_markdown(5);
         assert!(md.contains("Build succeeded"));
     }

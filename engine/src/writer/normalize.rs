@@ -1,5 +1,3 @@
-
-
 //! [`Writer`]-wrapper for outputting events in a normalized readable order.
 
 use std::{hash::Hash, mem};
@@ -46,7 +44,10 @@ pub struct Normalize<World, Writer> {
 // `#[derive(Clone)]`.
 impl<World, Writer: Clone> Clone for Normalize<World, Writer> {
     fn clone(&self) -> Self {
-        Self { writer: self.writer.clone(), queue: self.queue.clone() }
+        Self {
+            writer: self.writer.clone(),
+            queue: self.queue.clone(),
+        }
     }
 }
 
@@ -55,7 +56,10 @@ impl<W, Writer> Normalize<W, Writer> {
     /// and feed them to the given [`Writer`].
     #[must_use]
     pub fn new(writer: Writer) -> Self {
-        Self { writer, queue: NamakoQueue::new(Metadata::new(())) }
+        Self {
+            writer,
+            queue: NamakoQueue::new(Metadata::new(())),
+        }
     }
 
     /// Returns the original [`Writer`], wrapped by this [`Normalized`] one.
@@ -73,7 +77,7 @@ impl<World, Wr: Writer<World>> Writer<World> for Normalize<World, Wr> {
         event: parser::Result<Event<event::Namako<World>>>,
         cli: &Self::Cli,
     ) {
-        use event::{Namako, Feature, Rule};
+        use event::{Feature, Namako, Rule};
 
         // Once `Namako::Finished` is emitted, we just pass events through,
         // without any normalization.
@@ -85,11 +89,7 @@ impl<World, Wr: Writer<World>> Writer<World> for Normalize<World, Wr> {
         }
 
         match event.map(Event::split) {
-            res @ (Err(_)
-            | Ok((
-                Namako::Started | Namako::ParsingFinished { .. },
-                _,
-            ))) => {
+            res @ (Err(_) | Ok((Namako::Started | Namako::ParsingFinished { .. }, _))) => {
                 self.writer
                     .handle_event(res.map(|(ev, meta)| meta.insert(ev)), cli)
                     .await;
@@ -98,23 +98,14 @@ impl<World, Wr: Writer<World>> Writer<World> for Normalize<World, Wr> {
             Ok((Namako::Feature(f, ev), meta)) => match ev {
                 Feature::Started => self.queue.new_feature(meta.wrap(f)),
                 Feature::Scenario(s, ev) => {
-                    self.queue.insert_scenario_event(
-                        &f,
-                        None,
-                        s,
-                        meta.wrap(ev),
-                    );
+                    self.queue.insert_scenario_event(&f, None, s, meta.wrap(ev));
                 }
                 Feature::Finished => self.queue.feature_finished(meta.wrap(&f)),
                 Feature::Rule(r, ev) => match ev {
                     Rule::Started => self.queue.new_rule(&f, meta.wrap(r)),
                     Rule::Scenario(s, ev) => {
-                        self.queue.insert_scenario_event(
-                            &f,
-                            Some(r),
-                            s,
-                            meta.wrap(ev),
-                        );
+                        self.queue
+                            .insert_scenario_event(&f, Some(r), s, meta.wrap(ev));
                     }
                     Rule::Finished => {
                         self.queue.rule_finished(&f, meta.wrap(r));
@@ -123,9 +114,7 @@ impl<World, Wr: Writer<World>> Writer<World> for Normalize<World, Wr> {
             },
         }
 
-        while let Some(feature_to_remove) =
-            self.queue.emit((), &mut self.writer, cli).await
-        {
+        while let Some(feature_to_remove) = self.queue.emit((), &mut self.writer, cli).await {
             self.queue.remove(&feature_to_remove);
         }
 
@@ -175,10 +164,7 @@ where
 }
 
 #[warn(clippy::missing_trait_methods)]
-impl<W, Wr: writer::NonTransforming> writer::NonTransforming
-    for Normalize<W, Wr>
-{
-}
+impl<W, Wr: writer::NonTransforming> writer::NonTransforming for Normalize<W, Wr> {}
 
 /// Marker indicating that a [`Writer`] can accept events in a [happened-before]
 /// order.
@@ -284,10 +270,7 @@ where
 }
 
 #[warn(clippy::missing_trait_methods)]
-impl<Wr: writer::NonTransforming> writer::NonTransforming
-    for AssertNormalized<Wr>
-{
-}
+impl<Wr: writer::NonTransforming> writer::NonTransforming for AssertNormalized<Wr> {}
 
 #[warn(clippy::missing_trait_methods)]
 impl<Writer> Normalized for AssertNormalized<Writer> {}
@@ -438,8 +421,7 @@ trait Emitter<World> {
 }
 
 /// [`Queue`] of all incoming events.
-type NamakoQueue<World> =
-    Queue<Source<gherkin::Feature>, FeatureQueue<World>>;
+type NamakoQueue<World> = Queue<Source<gherkin::Feature>, FeatureQueue<World>>;
 
 impl<World> NamakoQueue<World> {
     /// Inserts a new [`Feature`] on [`event::Feature::Started`].
@@ -467,11 +449,7 @@ impl<World> NamakoQueue<World> {
     /// Inserts a new [`Rule`] on [`event::Rule::Started`].
     ///
     /// [`Rule`]: gherkin::Feature
-    fn new_rule(
-        &mut self,
-        feat: &Source<gherkin::Feature>,
-        rule: Event<Source<gherkin::Rule>>,
-    ) {
+    fn new_rule(&mut self, feat: &Source<gherkin::Feature>, rule: Event<Source<gherkin::Rule>>) {
         self.fifo
             .get_mut(feat)
             .unwrap_or_else(|| panic!("no `Feature: {}`", feat.name))
@@ -529,25 +507,20 @@ impl<'me, World> Emitter<World> for &'me mut NamakoQueue<World> {
             if let Some(meta) = events.initial.take() {
                 writer
                     .handle_event(
-                        Ok(meta
-                            .wrap(event::Namako::feature_started(f.clone()))),
+                        Ok(meta.wrap(event::Namako::feature_started(f.clone()))),
                         cli,
                     )
                     .await;
             }
 
-            while let Some(scenario_or_rule_to_remove) =
-                events.emit(f.clone(), writer, cli).await
-            {
+            while let Some(scenario_or_rule_to_remove) = events.emit(f.clone(), writer, cli).await {
                 events.remove(&scenario_or_rule_to_remove);
             }
 
             if let Some(meta) = events.state.take_to_emit() {
                 writer
                     .handle_event(
-                        Ok(meta.wrap(event::Namako::feature_finished(
-                            f.clone(),
-                        ))),
+                        Ok(meta.wrap(event::Namako::feature_finished(f.clone()))),
                         cli,
                     )
                     .await;
@@ -562,15 +535,13 @@ impl<'me, World> Emitter<World> for &'me mut NamakoQueue<World> {
 ///
 /// [`Rule`]: gherkin::Rule
 /// [`Scenario`]: gherkin::Scenario
-type RuleOrScenario =
-    Either<Source<gherkin::Rule>, Source<gherkin::Scenario>>;
+type RuleOrScenario = Either<Source<gherkin::Rule>, Source<gherkin::Scenario>>;
 
 /// Either a [`Rule`]'s or a [`Scenario`]'s [`Queue`].
 ///
 /// [`Rule`]: gherkin::Rule
 /// [`Scenario`]: gherkin::Scenario
-type RuleOrScenarioQueue<World> =
-    Either<RulesQueue<World>, ScenariosQueue<World>>;
+type RuleOrScenarioQueue<World> = Either<RulesQueue<World>, ScenariosQueue<World>>;
 
 /// Either a [`Rule`]'s or a [`Scenario`]'s [`Queue`] with the corresponding
 /// [`Rule`] or [`Scenario`] which is currently being outputted.
@@ -579,7 +550,10 @@ type RuleOrScenarioQueue<World> =
 /// [`Scenario`]: gherkin::Scenario
 type NextRuleOrScenario<'events, World> = Either<
     (Source<gherkin::Rule>, &'events mut RulesQueue<World>),
-    (Source<gherkin::Scenario>, &'events mut ScenariosQueue<World>),
+    (
+        Source<gherkin::Scenario>,
+        &'events mut ScenariosQueue<World>,
+    ),
 >;
 
 /// [`Queue`] of all events of a single [`Feature`].
@@ -594,10 +568,8 @@ impl<World> FeatureQueue<World> {
     fn new_rule(&mut self, rule: Event<Source<gherkin::Rule>>) {
         let (rule, meta) = rule.split();
         drop(
-            self.fifo.insert(
-                Either::Left(rule),
-                Either::Left(RulesQueue::new(meta)),
-            ),
+            self.fifo
+                .insert(Either::Left(rule), Either::Left(RulesQueue::new(meta))),
         );
     }
 
@@ -657,9 +629,7 @@ impl<'me, World> Emitter<World> for &'me mut FeatureQueue<World> {
 
     fn current_item(self) -> Option<Self::Current> {
         Some(match self.fifo.iter_mut().next()? {
-            (Either::Left(rule), Either::Left(events)) => {
-                Either::Left((rule.clone(), events))
-            }
+            (Either::Left(rule), Either::Left(events)) => Either::Left((rule.clone(), events)),
             (Either::Right(scenario), Either::Right(events)) => {
                 Either::Right((scenario.clone(), events))
             }
@@ -674,9 +644,10 @@ impl<'me, World> Emitter<World> for &'me mut FeatureQueue<World> {
         cli: &W::Cli,
     ) -> Option<Self::Emitted> {
         match self.current_item()? {
-            Either::Left((rule, events)) => {
-                events.emit((path, rule), writer, cli).await.map(Either::Left)
-            }
+            Either::Left((rule, events)) => events
+                .emit((path, rule), writer, cli)
+                .await
+                .map(Either::Left),
             Either::Right((scenario, events)) => events
                 .emit((path, None, scenario), writer, cli)
                 .await
@@ -688,8 +659,7 @@ impl<'me, World> Emitter<World> for &'me mut FeatureQueue<World> {
 /// [`Queue`] of all events of a single [`Rule`].
 ///
 /// [`Rule`]: gherkin::Rule
-type RulesQueue<World> =
-    Queue<Source<gherkin::Scenario>, ScenariosQueue<World>>;
+type RulesQueue<World> = Queue<Source<gherkin::Scenario>, ScenariosQueue<World>>;
 
 impl<'me, World> Emitter<World> for &'me mut RulesQueue<World> {
     type Current = (Source<gherkin::Scenario>, &'me mut ScenariosQueue<World>);
@@ -709,10 +679,7 @@ impl<'me, World> Emitter<World> for &'me mut RulesQueue<World> {
         if let Some(meta) = self.initial.take() {
             writer
                 .handle_event(
-                    Ok(meta.wrap(event::Namako::rule_started(
-                        feature.clone(),
-                        rule.clone(),
-                    ))),
+                    Ok(meta.wrap(event::Namako::rule_started(feature.clone(), rule.clone()))),
                     cli,
                 )
                 .await;
@@ -720,11 +687,7 @@ impl<'me, World> Emitter<World> for &'me mut RulesQueue<World> {
 
         while let Some((scenario, events)) = self.current_item() {
             if let Some(should_be_removed) = events
-                .emit(
-                    (feature.clone(), Some(rule.clone()), scenario),
-                    writer,
-                    cli,
-                )
+                .emit((feature.clone(), Some(rule.clone()), scenario), writer, cli)
                 .await
             {
                 self.remove(&should_be_removed);
@@ -736,10 +699,7 @@ impl<'me, World> Emitter<World> for &'me mut RulesQueue<World> {
         if let Some(meta) = self.state.take_to_emit() {
             writer
                 .handle_event(
-                    Ok(meta.wrap(event::Namako::rule_finished(
-                        feature,
-                        rule.clone(),
-                    ))),
+                    Ok(meta.wrap(event::Namako::rule_finished(feature, rule.clone()))),
                     cli,
                 )
                 .await;

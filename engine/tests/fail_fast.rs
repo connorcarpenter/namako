@@ -1,9 +1,6 @@
 mod test_utils;
 
-use namako_engine::{
-    World as _,
-    runner, given, then, writer::summarize::Stats,
-};
+use namako_engine::{World as _, given, runner, then, writer::summarize::Stats};
 
 use test_utils::{World, WorldMut, WorldRef};
 
@@ -25,9 +22,7 @@ fn nothing_happens(ctx: WorldRef) {
 
 #[tokio::test]
 async fn correct_stats() {
-    for (feat, (p_sc, f_sc, _r_sc, p_st, f_st, _r_st)) in [
-        ("no_retry", (0, 1, 0, 0, 1, 0)),
-    ] {
+    for (feat, (p_sc, f_sc, _r_sc, p_st, f_st, _r_st)) in [("no_retry", (0, 1, 0, 0, 1, 0))] {
         let writer = World::namako()
             .with_runner(
                 runner::Basic::default()
@@ -41,12 +36,20 @@ async fn correct_stats() {
 
         assert_eq!(
             *writer.scenarios_stats(),
-            Stats { passed: p_sc, skipped: 0, failed: f_sc },
+            Stats {
+                passed: p_sc,
+                skipped: 0,
+                failed: f_sc
+            },
             "Wrong `Stats` for `Scenario`s in `{feat}`",
         );
         assert_eq!(
             *writer.steps_stats(),
-            Stats { passed: p_st, skipped: 0, failed: f_st },
+            Stats {
+                passed: p_st,
+                skipped: 0,
+                failed: f_st
+            },
             "Wrong `Stats` for `Step`s in `{feat}`",
         );
     }

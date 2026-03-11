@@ -1,5 +1,3 @@
-
-
 //! [`Writer`]-wrapper for re-outputting events at the end of an output.
 
 use std::mem;
@@ -10,8 +8,7 @@ use crate::{Event, World, Writer, event, parser, writer};
 
 /// Alias for a [`fn`] predicate deciding whether an event should be
 /// re-outputted or not.
-pub type FilterEvent<W> =
-    fn(&parser::Result<Event<event::Namako<W>>>) -> bool;
+pub type FilterEvent<W> = fn(&parser::Result<Event<event::Namako<W>>>) -> bool;
 
 /// Wrapper for a [`Writer`] implementation for re-outputting events at the end
 /// of an output, based on a filter predicated.
@@ -66,8 +63,7 @@ where
             self.events.push(event.clone());
         }
 
-        let is_finished =
-            matches!(event.as_deref(), Ok(event::Namako::Finished));
+        let is_finished = matches!(event.as_deref(), Ok(event::Namako::Finished));
 
         self.writer.handle_event(event, cli).await;
 
@@ -129,7 +125,11 @@ impl<W, Wr, F> Repeat<W, Wr, F> {
     /// output in case the given `filter` predicated returns `true`.
     #[must_use]
     pub const fn new(writer: Wr, filter: F) -> Self {
-        Self { writer, filter, events: Vec::new() }
+        Self {
+            writer,
+            filter,
+            events: Vec::new(),
+        }
     }
 }
 
@@ -140,7 +140,7 @@ impl<W, Wr> Repeat<W, Wr> {
     /// [`Skipped`]: event::Step::Skipped
     #[must_use]
     pub fn skipped(writer: Wr) -> Self {
-        use event::{Namako, Feature, Rule, Scenario, Step};
+        use event::{Feature, Namako, Rule, Scenario, Step};
 
         Self {
             writer,
@@ -175,7 +175,7 @@ impl<W, Wr> Repeat<W, Wr> {
     /// [`Parser`]: crate::Parser
     #[must_use]
     pub fn failed(writer: Wr) -> Self {
-        use event::{Namako, Feature, Rule, Scenario, Step};
+        use event::{Feature, Namako, Rule, Scenario, Step};
 
         Self {
             writer,
@@ -189,10 +189,7 @@ impl<W, Wr> Repeat<W, Wr> {
                             Rule::Scenario(
                                 _,
                                 Scenario::Step(_, Step::Failed(..))
-                                    | Scenario::Background(
-                                        _,
-                                        Step::Failed(..),
-                                    ),
+                                    | Scenario::Background(_, Step::Failed(..),),
                             )
                         ) | Feature::Scenario(
                             _,

@@ -1,9 +1,9 @@
 //! Issue classification for RepoState computation.
 
-use crate::packet_parser::{ReviewPacket, StatusPacket, BlockerType};
+use crate::packet_parser::{BlockerType, ReviewPacket, StatusPacket};
 use crate::repo_state::{
-    BindingIssue, BindingIssueKind, Blocker, BlockerKind, SpecIssue, SpecIssueKind,
-    StructureIssue, StructureIssueKind, SutIssue,
+    BindingIssue, BindingIssueKind, Blocker, BlockerKind, SpecIssue, SpecIssueKind, StructureIssue,
+    StructureIssueKind, SutIssue,
 };
 
 /// Classify spec issues from the review packet.
@@ -122,7 +122,10 @@ fn extract_steps_by_kind(steps: &[crate::packet_parser::StepInfo], kind: &str) -
 }
 
 /// Classify structure issues from status and review packets.
-pub fn classify_structure_issues(status: &StatusPacket, _review: &ReviewPacket) -> Vec<StructureIssue> {
+pub fn classify_structure_issues(
+    status: &StatusPacket,
+    _review: &ReviewPacket,
+) -> Vec<StructureIssue> {
     let mut issues = Vec::new();
 
     if matches!(status.lint_status, crate::packet_parser::StatusValue::Fail) {
@@ -154,7 +157,10 @@ pub fn classify_binding_issues(review: &ReviewPacket, status: &StatusPacket) -> 
         }
         for step in &missing.missing_step_texts {
             // Avoid duplicates
-            if issues.iter().any(|i| i.step_text.as_deref() == Some(step.as_str())) {
+            if issues
+                .iter()
+                .any(|i| i.step_text.as_deref() == Some(step.as_str()))
+            {
                 continue;
             }
             issues.push(BindingIssue {
@@ -175,20 +181,20 @@ pub fn classify_binding_issues(review: &ReviewPacket, status: &StatusPacket) -> 
 /// Parse MissingStep entries from lint summary (debug format).
 fn parse_missing_steps_from_summary(summary: &str) -> Vec<BindingIssue> {
     use regex::Regex;
-    
+
     let mut issues = Vec::new();
-    
+
     // Pattern: MissingStep { step_text: "...", step_kind: "...", feature_path: "...", line: N }
     let re = Regex::new(
         r#"MissingStep \{ step_text: "([^"]+)", step_kind: "([^"]+)", feature_path: "([^"]+)", line: (\d+) \}"#
     ).unwrap();
-    
+
     for cap in re.captures_iter(summary) {
         let step_text = cap.get(1).map(|m| m.as_str().to_string());
         let step_kind = cap.get(2).map(|m| m.as_str());
         let feature_path = cap.get(3).map(|m| m.as_str().to_string());
         let line = cap.get(4).and_then(|m| m.as_str().parse::<u32>().ok());
-        
+
         let scenario_key = match (&feature_path, line) {
             (Some(path), Some(line)) => Some(format!("{}:{}", path, line)),
             (Some(path), None) => Some(path.clone()),
@@ -208,7 +214,7 @@ fn parse_missing_steps_from_summary(summary: &str) -> Vec<BindingIssue> {
             ),
         });
     }
-    
+
     issues
 }
 
@@ -248,7 +254,10 @@ pub fn classify_blockers(review: &ReviewPacket) -> Vec<Blocker> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packet_parser::{CoverageSummary, FeatureReview, IdentityFields, MissingBindingInfo, ReviewPacket, RuleReview, ScenarioReview, SourceSpan, StatusPacket, StatusValue, StepInfo};
+    use crate::packet_parser::{
+        CoverageSummary, FeatureReview, IdentityFields, MissingBindingInfo, ReviewPacket,
+        RuleReview, ScenarioReview, SourceSpan, StatusPacket, StatusValue, StepInfo,
+    };
 
     fn review_stub() -> ReviewPacket {
         ReviewPacket {
@@ -265,7 +274,10 @@ mod tests {
                 feature_name: "A".to_string(),
                 rules: vec![RuleReview {
                     rule_name: "Rule(01)".to_string(),
-                    source_span: SourceSpan { start_line: 1, end_line: 10 },
+                    source_span: SourceSpan {
+                        start_line: 1,
+                        end_line: 10,
+                    },
                     executable_scenarios: vec![],
                     deferred_items: vec![],
                 }],
@@ -295,99 +307,171 @@ mod tests {
     #[test]
     fn classify_spec_issues_detects_insufficient_coverage() {
         let mut review = review_stub();
-        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
+        if let Some(rule) = review
+            .features
+            .first_mut()
+            .and_then(|f| f.rules.first_mut())
+        {
             rule.executable_scenarios = vec![ScenarioReview {
                 name: "Scenario A".to_string(),
-                source_span: SourceSpan { start_line: 1, end_line: 5 },
+                source_span: SourceSpan {
+                    start_line: 1,
+                    end_line: 5,
+                },
                 steps: vec![],
             }];
         }
 
         let issues = classify_spec_issues(&review);
-        assert!(issues.iter().any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
+        assert!(issues
+            .iter()
+            .any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
     }
 
     #[test]
     fn classify_spec_issues_detects_duplicate_then_sets() {
         let mut review = review_stub();
-        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
+        if let Some(rule) = review
+            .features
+            .first_mut()
+            .and_then(|f| f.rules.first_mut())
+        {
             rule.executable_scenarios = vec![
                 ScenarioReview {
                     name: "Scenario A".to_string(),
-                    source_span: SourceSpan { start_line: 1, end_line: 5 },
-                    steps: vec![
-                        StepInfo { kind: "Then".to_string(), text: "the operation returns an Err result".to_string() },
-                    ],
+                    source_span: SourceSpan {
+                        start_line: 1,
+                        end_line: 5,
+                    },
+                    steps: vec![StepInfo {
+                        kind: "Then".to_string(),
+                        text: "the operation returns an Err result".to_string(),
+                    }],
                 },
                 ScenarioReview {
                     name: "Scenario B".to_string(),
-                    source_span: SourceSpan { start_line: 6, end_line: 10 },
+                    source_span: SourceSpan {
+                        start_line: 6,
+                        end_line: 10,
+                    },
                     steps: vec![
-                        StepInfo { kind: "Then".to_string(), text: "the operation returns an Err result".to_string() },
-                        StepInfo { kind: "Then".to_string(), text: "no panic occurs".to_string() },
+                        StepInfo {
+                            kind: "Then".to_string(),
+                            text: "the operation returns an Err result".to_string(),
+                        },
+                        StepInfo {
+                            kind: "Then".to_string(),
+                            text: "no panic occurs".to_string(),
+                        },
                     ],
                 },
             ];
         }
 
         let issues = classify_spec_issues(&review);
-        assert!(issues.iter().any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
+        assert!(issues
+            .iter()
+            .any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
     }
 
     #[test]
     fn classify_spec_issues_allows_distinct_then_sets() {
         let mut review = review_stub();
-        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
+        if let Some(rule) = review
+            .features
+            .first_mut()
+            .and_then(|f| f.rules.first_mut())
+        {
             rule.executable_scenarios = vec![
                 ScenarioReview {
                     name: "Scenario A".to_string(),
-                    source_span: SourceSpan { start_line: 1, end_line: 5 },
-                    steps: vec![
-                        StepInfo { kind: "Then".to_string(), text: "the operation returns an Err result".to_string() },
-                    ],
+                    source_span: SourceSpan {
+                        start_line: 1,
+                        end_line: 5,
+                    },
+                    steps: vec![StepInfo {
+                        kind: "Then".to_string(),
+                        text: "the operation returns an Err result".to_string(),
+                    }],
                 },
                 ScenarioReview {
                     name: "Scenario B".to_string(),
-                    source_span: SourceSpan { start_line: 6, end_line: 10 },
-                    steps: vec![
-                        StepInfo { kind: "Then".to_string(), text: "the client receives the response".to_string() },
-                    ],
+                    source_span: SourceSpan {
+                        start_line: 6,
+                        end_line: 10,
+                    },
+                    steps: vec![StepInfo {
+                        kind: "Then".to_string(),
+                        text: "the client receives the response".to_string(),
+                    }],
                 },
             ];
         }
 
         let issues = classify_spec_issues(&review);
-        assert!(!issues.iter().any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
+        assert!(!issues
+            .iter()
+            .any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
     }
 
     #[test]
     fn classify_spec_issues_allows_distinct_conditions() {
         let mut review = review_stub();
-        if let Some(rule) = review.features.first_mut().and_then(|f| f.rules.first_mut()) {
+        if let Some(rule) = review
+            .features
+            .first_mut()
+            .and_then(|f| f.rules.first_mut())
+        {
             rule.executable_scenarios = vec![
                 ScenarioReview {
                     name: "Scenario A".to_string(),
-                    source_span: SourceSpan { start_line: 1, end_line: 5 },
+                    source_span: SourceSpan {
+                        start_line: 1,
+                        end_line: 5,
+                    },
                     steps: vec![
-                        StepInfo { kind: "Given".to_string(), text: "the client sends an oversize packet".to_string() },
-                        StepInfo { kind: "When".to_string(), text: "the server receives the packet".to_string() },
-                        StepInfo { kind: "Then".to_string(), text: "the packet is dropped".to_string() },
+                        StepInfo {
+                            kind: "Given".to_string(),
+                            text: "the client sends an oversize packet".to_string(),
+                        },
+                        StepInfo {
+                            kind: "When".to_string(),
+                            text: "the server receives the packet".to_string(),
+                        },
+                        StepInfo {
+                            kind: "Then".to_string(),
+                            text: "the packet is dropped".to_string(),
+                        },
                     ],
                 },
                 ScenarioReview {
                     name: "Scenario B".to_string(),
-                    source_span: SourceSpan { start_line: 6, end_line: 10 },
+                    source_span: SourceSpan {
+                        start_line: 6,
+                        end_line: 10,
+                    },
                     steps: vec![
-                        StepInfo { kind: "Given".to_string(), text: "the client sends a malformed packet".to_string() },
-                        StepInfo { kind: "When".to_string(), text: "the server receives the packet".to_string() },
-                        StepInfo { kind: "Then".to_string(), text: "the packet is dropped".to_string() },
+                        StepInfo {
+                            kind: "Given".to_string(),
+                            text: "the client sends a malformed packet".to_string(),
+                        },
+                        StepInfo {
+                            kind: "When".to_string(),
+                            text: "the server receives the packet".to_string(),
+                        },
+                        StepInfo {
+                            kind: "Then".to_string(),
+                            text: "the packet is dropped".to_string(),
+                        },
                     ],
                 },
             ];
         }
 
         let issues = classify_spec_issues(&review);
-        assert!(!issues.iter().any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
+        assert!(!issues
+            .iter()
+            .any(|i| i.rule_name.as_deref() == Some("Rule(01)")));
     }
 
     fn status_stub() -> StatusPacket {
@@ -466,12 +550,14 @@ mod tests {
             metadata: None,
             gates: None,
         };
-        status.last_run_failures.push(crate::packet_parser::FailureRecord {
-            scenario_key: "feature:Rule(01):Scenario(01)".to_string(),
-            scenario_name: "Example".to_string(),
-            failure_kind: "assertion".to_string(),
-            summary: "expected 1".to_string(),
-        });
+        status
+            .last_run_failures
+            .push(crate::packet_parser::FailureRecord {
+                scenario_key: "feature:Rule(01):Scenario(01)".to_string(),
+                scenario_name: "Example".to_string(),
+                failure_kind: "assertion".to_string(),
+                summary: "expected 1".to_string(),
+            });
 
         let issues = classify_sut_issues(&status);
         assert_eq!(issues.len(), 1);
@@ -481,13 +567,15 @@ mod tests {
     #[test]
     fn classify_blockers_external_only() {
         let mut review = review_stub();
-        review.deferred_items.push(crate::packet_parser::DeferredScenarioItem {
-            scenario_key: "feature:Rule(01):Scenario(02)".to_string(),
-            scenario_name: "Blocked".to_string(),
-            feature_path: "features/a.feature".to_string(),
-            rule_name: "Rule(01)".to_string(),
-            blocker: BlockerType::External,
-        });
+        review
+            .deferred_items
+            .push(crate::packet_parser::DeferredScenarioItem {
+                scenario_key: "feature:Rule(01):Scenario(02)".to_string(),
+                scenario_name: "Blocked".to_string(),
+                feature_path: "features/a.feature".to_string(),
+                rule_name: "Rule(01)".to_string(),
+                blocker: BlockerType::External,
+            });
 
         let blockers = classify_blockers(&review);
         assert_eq!(blockers.len(), 1);

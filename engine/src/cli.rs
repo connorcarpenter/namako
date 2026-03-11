@@ -1,5 +1,3 @@
-
-
 //! Tools for composing CLI options.
 //!
 //! The main thing in this module is [`Opts`], which compose all the strongly

@@ -39,7 +39,10 @@ impl SpecQualityResult {
         if self.passed {
             return "Spec quality: OK".to_string();
         }
-        let mut md = format!("### Spec Quality Violations ({})\n\n", self.violations.len());
+        let mut md = format!(
+            "### Spec Quality Violations ({})\n\n",
+            self.violations.len()
+        );
         for v in self.violations.iter().take(5) {
             md.push_str(&format!(
                 "- **[{}]** `{}` — {}\n",
@@ -59,18 +62,21 @@ impl SpecQualityResult {
 const PLACEHOLDER_PATTERNS: &[(&str, &str)] = &[
     ("given a test scenario", "NO_PLACEHOLDER_STEPS"),
     ("then no panic occurs", "NO_PLACEHOLDER_STEPS"),
-    ("then the system intentionally fails", "NO_PLACEHOLDER_STEPS"),
+    (
+        "then the system intentionally fails",
+        "NO_PLACEHOLDER_STEPS",
+    ),
 ];
 
 // -------------------------------------------------------------------------
 // Common English words filtered out when extracting domain nouns
 // -------------------------------------------------------------------------
 const COMMON_WORDS: &[&str] = &[
-    "the", "and", "for", "with", "from", "when", "that", "this", "should", "must",
-    "can", "are", "was", "has", "have", "been", "will", "not", "but", "also",
-    "after", "before", "while", "about", "into", "than", "then", "does", "each",
-    "which", "their", "there", "what", "where", "only", "same", "some", "any",
-    "being", "both", "another", "such", "more", "most", "other", "over", "under",
+    "the", "and", "for", "with", "from", "when", "that", "this", "should", "must", "can", "are",
+    "was", "has", "have", "been", "will", "not", "but", "also", "after", "before", "while",
+    "about", "into", "than", "then", "does", "each", "which", "their", "there", "what", "where",
+    "only", "same", "some", "any", "being", "both", "another", "such", "more", "most", "other",
+    "over", "under",
 ];
 
 // -------------------------------------------------------------------------
@@ -220,7 +226,10 @@ fn check_orphan_stubs(
                     rule: "NO_ORPHAN_STUBS".to_string(),
                     file: file.to_string(),
                     scenario_name: scenario.name.clone(),
-                    details: format!("Orphan stub marker '{}' used outside _orphan_stubs.feature", marker),
+                    details: format!(
+                        "Orphan stub marker '{}' used outside _orphan_stubs.feature",
+                        marker
+                    ),
                 });
                 return;
             }
@@ -310,7 +319,10 @@ Feature: Widget
 "#;
         let result = check_feature_quality("test.feature", feature);
         assert!(!result.passed);
-        assert!(result.violations.iter().any(|v| v.rule == "NO_PLACEHOLDER_STEPS"));
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "NO_PLACEHOLDER_STEPS"));
     }
 
     #[test]
@@ -324,7 +336,10 @@ Feature: Widget
 "#;
         let result = check_feature_quality("test.feature", feature);
         assert!(!result.passed);
-        assert!(result.violations.iter().any(|v| v.rule == "NO_PLACEHOLDER_STEPS"));
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "NO_PLACEHOLDER_STEPS"));
     }
 
     #[test]
@@ -338,7 +353,10 @@ Feature: Widget
 "#;
         let result = check_feature_quality("test.feature", feature);
         assert!(!result.passed);
-        assert!(result.violations.iter().any(|v| v.rule == "NO_PLACEHOLDER_STEPS"));
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "NO_PLACEHOLDER_STEPS"));
     }
 
     #[test]
@@ -352,7 +370,10 @@ Feature: Widget
 "#;
         let result = check_feature_quality("test.feature", feature);
         // Should pass NO_PLACEHOLDER_STEPS (domain noun check may or may not pass)
-        assert!(!result.violations.iter().any(|v| v.rule == "NO_PLACEHOLDER_STEPS"));
+        assert!(!result
+            .violations
+            .iter()
+            .any(|v| v.rule == "NO_PLACEHOLDER_STEPS"));
     }
 
     // -----------------------------------------------------------------------
@@ -368,7 +389,10 @@ Feature: Widget
       Then a widget is created
 "#;
         let result = check_feature_quality("test.feature", feature);
-        assert!(!result.violations.iter().any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
+        assert!(!result
+            .violations
+            .iter()
+            .any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
     }
 
     #[test]
@@ -381,7 +405,10 @@ Feature: Widget
       Then success
 "#;
         let result = check_feature_quality("test.feature", feature);
-        assert!(!result.violations.iter().any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
+        assert!(!result
+            .violations
+            .iter()
+            .any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
     }
 
     #[test]
@@ -394,7 +421,10 @@ Feature: Widget
       Then a success message appears
 "#;
         let result = check_feature_quality("test.feature", feature);
-        assert!(result.violations.iter().any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
     }
 
     #[test]
@@ -407,7 +437,10 @@ Feature: Widget
     Then a result
 "#;
         let result = check_feature_quality("test.feature", feature);
-        assert!(!result.violations.iter().any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
+        assert!(!result
+            .violations
+            .iter()
+            .any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
     }
 
     #[test]
@@ -420,7 +453,10 @@ Feature: Widget
       Then a result
 "#;
         let result = check_feature_quality("test.feature", feature);
-        assert!(!result.violations.iter().any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
+        assert!(!result
+            .violations
+            .iter()
+            .any(|v| v.rule == "DOMAIN_NOUN_REQUIRED"));
     }
 
     // -----------------------------------------------------------------------
@@ -436,7 +472,10 @@ Feature: Widget
       Then done
 "#;
         let result = check_feature_quality("features/my_feature.feature", feature);
-        assert!(result.violations.iter().any(|v| v.rule == "NO_ORPHAN_STUBS"));
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "NO_ORPHAN_STUBS"));
     }
 
     #[test]
@@ -449,7 +488,10 @@ Feature: Widget
       Then done
 "#;
         let result = check_feature_quality("features/_orphan_stubs.feature", feature);
-        assert!(!result.violations.iter().any(|v| v.rule == "NO_ORPHAN_STUBS"));
+        assert!(!result
+            .violations
+            .iter()
+            .any(|v| v.rule == "NO_ORPHAN_STUBS"));
     }
 
     #[test]
@@ -462,7 +504,10 @@ Feature: Widget
       Then result
 "#;
         let result = check_feature_quality("test.feature", feature);
-        assert!(result.violations.iter().any(|v| v.rule == "NO_ORPHAN_STUBS"));
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "NO_ORPHAN_STUBS"));
     }
 
     // -----------------------------------------------------------------------
@@ -470,7 +515,10 @@ Feature: Widget
     // -----------------------------------------------------------------------
     #[test]
     fn to_markdown_ok() {
-        let r = SpecQualityResult { passed: true, violations: vec![] };
+        let r = SpecQualityResult {
+            passed: true,
+            violations: vec![],
+        };
         assert!(r.to_markdown().contains("OK"));
     }
 
@@ -478,14 +526,12 @@ Feature: Widget
     fn to_markdown_with_violations() {
         let r = SpecQualityResult {
             passed: false,
-            violations: vec![
-                SpecQualityViolation {
-                    rule: "NO_PLACEHOLDER_STEPS".to_string(),
-                    file: "a.feature".to_string(),
-                    scenario_name: "Bad".to_string(),
-                    details: "placeholder".to_string(),
-                },
-            ],
+            violations: vec![SpecQualityViolation {
+                rule: "NO_PLACEHOLDER_STEPS".to_string(),
+                file: "a.feature".to_string(),
+                scenario_name: "Bad".to_string(),
+                details: "placeholder".to_string(),
+            }],
         };
         let md = r.to_markdown();
         assert!(md.contains("NO_PLACEHOLDER_STEPS"));

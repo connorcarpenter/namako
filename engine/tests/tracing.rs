@@ -1,11 +1,8 @@
 use std::{fs, io, panic::AssertUnwindSafe, time::Duration};
 
-use namako_engine::{
-    World as _, WriterExt as _,
-    given, writer, writer::Coloring,
-};
 use derive_more::with_trait::Display;
 use futures::FutureExt as _;
+use namako_engine::{World as _, WriterExt as _, given, writer, writer::Coloring};
 use regex::Regex;
 use tokio::{spawn, time};
 use tracing_subscriber::{
@@ -21,8 +18,16 @@ struct WorldMut<'a>(&'a mut World);
 #[derive(Clone, Copy)]
 struct WorldRef<'a>(&'a World);
 
-impl<'a> WorldMut<'a> { fn new(world: &'a mut World) -> Self { Self(world) } }
-impl<'a> WorldRef<'a> { fn new(world: &'a World) -> Self { Self(world) } }
+impl<'a> WorldMut<'a> {
+    fn new(world: &'a mut World) -> Self {
+        Self(world)
+    }
+}
+impl<'a> WorldRef<'a> {
+    fn new(world: &'a World) -> Self {
+        Self(world)
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -41,10 +46,7 @@ async fn main() {
         .with_writer(
             writer::Basic::raw(&mut out, Coloring::Never, 0)
                 .discard_stats_writes()
-                .tee::<World, _>(
-                    writer::Basic::raw(io::stdout(), Coloring::Never, 0)
-                        .summarized(),
-                )
+                .tee::<World, _>(writer::Basic::raw(io::stdout(), Coloring::Never, 0).summarized())
                 .normalized(),
         )
         .fail_on_skipped()
@@ -52,10 +54,7 @@ async fn main() {
         .configure_and_init_tracing(
             DefaultFields::new(),
             Format::default().with_ansi(false).without_time(),
-            |layer| {
-                tracing_subscriber::registry()
-                    .with(LevelFilter::INFO.and_then(layer))
-            },
+            |layer| tracing_subscriber::registry().with(LevelFilter::INFO.and_then(layer)),
         )
         .run_and_exit("tests/features/tracing");
 
@@ -70,11 +69,9 @@ async fn main() {
     .unwrap();
 
     assert_eq!(
-        non_deterministic
-            .replace_all(String::from_utf8_lossy(&out).as_ref(), ""),
+        non_deterministic.replace_all(String::from_utf8_lossy(&out).as_ref(), ""),
         non_deterministic.replace_all(
-            &fs::read_to_string("tests/features/tracing/correct.stdout")
-                .unwrap(),
+            &fs::read_to_string("tests/features/tracing/correct.stdout").unwrap(),
             "",
         ),
     );

@@ -2,9 +2,7 @@ mod test_utils;
 
 use std::{fmt, io};
 
-use namako_engine::{
-    StatsWriter, World as _, WriterExt as _, given, then, when, writer,
-};
+use namako_engine::{StatsWriter, World as _, WriterExt as _, given, then, when, writer};
 
 use test_utils::{World, WorldMut, WorldRef};
 
@@ -29,10 +27,7 @@ fn then_step(ctx: WorldRef, num: usize) {
 async fn by_examples() {
     let mut output = Output::default();
     let writer = World::namako()
-        .with_writer(
-            writer::Basic::new(&mut output, writer::Coloring::Auto, 0)
-                .summarized(),
-        )
+        .with_writer(writer::Basic::new(&mut output, writer::Coloring::Auto, 0).summarized())
         .with_default_cli()
         .filter_run("tests/features/filter", |_, _, sc| {
             // Omit `Examples` rows containing numbers less than 10.
@@ -40,9 +35,8 @@ async fn by_examples() {
                 && (sc.examples.first().is_some_and(|example| {
                     example.table.as_ref().is_some_and(|table| {
                         table.rows.get(1).is_some_and(|cols| {
-                            cols.iter().all(|v| {
-                                v.parse::<usize>().is_ok_and(|num| num < 10)
-                            })
+                            cols.iter()
+                                .all(|v| v.parse::<usize>().is_ok_and(|num| num < 10))
                         })
                     })
                 }))

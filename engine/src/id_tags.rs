@@ -8,21 +8,18 @@ use std::sync::LazyLock;
 
 /// Regex for @Feature(name) tag - captures the name inside parentheses
 /// Matches: @Feature(connection_lifecycle) or Feature(connection_lifecycle)
-static FEATURE_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^@?[Ff]eature\(([a-zA-Z][a-zA-Z0-9_]*)\)$").unwrap()
-});
+static FEATURE_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^@?[Ff]eature\(([a-zA-Z][a-zA-Z0-9_]*)\)$").unwrap());
 
 /// Regex for @Rule(nn) tag - captures the numeric index
 /// Matches: @Rule(01), @Rule(1), Rule(01), etc.
-static RULE_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^@?[Rr]ule\((\d+)\)$").unwrap()
-});
+static RULE_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^@?[Rr]ule\((\d+)\)$").unwrap());
 
 /// Regex for @Scenario(nn) tag - captures the numeric index
 /// Matches: @Scenario(01), @Scenario(1), Scenario(01), etc.
-static SCENARIO_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^@?[Ss]cenario\((\d+)\)$").unwrap()
-});
+static SCENARIO_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^@?[Ss]cenario\((\d+)\)$").unwrap());
 
 /// Parsed explicit ID from a Feature's tags
 #[derive(Debug, Clone, PartialEq, Eq)]

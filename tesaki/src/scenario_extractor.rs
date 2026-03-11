@@ -18,22 +18,22 @@ pub fn extract_example_scenario(feature_path: &Path) -> Result<Option<String>> {
     }
 
     let content = fs::read_to_string(feature_path)?;
-    
+
     // Find the first scenario
     let lines: Vec<&str> = content.lines().collect();
     let mut in_scenario = false;
     let mut scenario_lines = Vec::new();
     let mut rule_tag = String::new();
-    
+
     for line in &lines {
         let trimmed = line.trim();
-        
+
         // Track the most recent @Rule tag
         if trimmed.starts_with("@Rule(") {
             rule_tag = trimmed.to_string();
             continue;
         }
-        
+
         // Start capturing on @Scenario tag
         if trimmed.starts_with("@Scenario(") {
             if in_scenario {
@@ -47,7 +47,7 @@ pub fn extract_example_scenario(feature_path: &Path) -> Result<Option<String>> {
             scenario_lines.push(trimmed.to_string());
             continue;
         }
-        
+
         if in_scenario {
             // Stop at next Rule or empty line after Then
             if trimmed.starts_with("@Rule(") || trimmed.starts_with("Rule:") {
@@ -56,9 +56,9 @@ pub fn extract_example_scenario(feature_path: &Path) -> Result<Option<String>> {
             if trimmed.starts_with("@Scenario(") {
                 break;
             }
-            
+
             // Include Scenario:, Given, When, Then, And lines
-            if trimmed.starts_with("Scenario:") 
+            if trimmed.starts_with("Scenario:")
                 || trimmed.starts_with("Given ")
                 || trimmed.starts_with("When ")
                 || trimmed.starts_with("Then ")
@@ -67,7 +67,7 @@ pub fn extract_example_scenario(feature_path: &Path) -> Result<Option<String>> {
             {
                 scenario_lines.push(format!("  {}", trimmed));
             }
-            
+
             // Stop after we have a complete scenario (after Then line and next empty/tag)
             if scenario_lines.len() >= 3 && trimmed.is_empty() {
                 // Check if we have at least Given/When/Then
@@ -80,11 +80,11 @@ pub fn extract_example_scenario(feature_path: &Path) -> Result<Option<String>> {
             }
         }
     }
-    
+
     if scenario_lines.is_empty() {
         return Ok(None);
     }
-    
+
     Ok(Some(scenario_lines.join("\n")))
 }
 
@@ -114,21 +114,21 @@ Feature: Test Feature
       When another action
       Then another outcome
 "#;
-        
+
         let mut temp_file = NamedTempFile::new().unwrap();
         temp_file.write_all(content.as_bytes()).unwrap();
-        
+
         let result = extract_example_scenario(temp_file.path()).unwrap();
         assert!(result.is_some());
         let scenario = result.unwrap();
-        
+
         assert!(scenario.contains("@Rule(01)"));
         assert!(scenario.contains("@Scenario(01)"));
         assert!(scenario.contains("Scenario: First test scenario"));
         assert!(scenario.contains("Given a precondition"));
         assert!(scenario.contains("When an action occurs"));
         assert!(scenario.contains("Then an outcome is observed"));
-        
+
         // Should NOT contain the second scenario
         assert!(!scenario.contains("Second scenario"));
     }
@@ -136,10 +136,10 @@ Feature: Test Feature
     #[test]
     fn test_extract_no_scenarios() {
         let content = "Feature: Empty feature\n\n# Just comments\n";
-        
+
         let mut temp_file = NamedTempFile::new().unwrap();
         temp_file.write_all(content.as_bytes()).unwrap();
-        
+
         let result = extract_example_scenario(temp_file.path()).unwrap();
         assert!(result.is_none());
     }

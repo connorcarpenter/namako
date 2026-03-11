@@ -387,8 +387,8 @@ pub struct BriefContext {
     // CreateMissingBindings
     pub scenario_key: Option<String>,
     pub missing_steps: Option<Vec<String>>,
-    pub all_missing_steps: Option<Vec<String>>,  // All unique missing steps for batching
-    pub binding_exemplars: Option<Vec<BindingExemplar>>,  // Examples from repo
+    pub all_missing_steps: Option<Vec<String>>, // All unique missing steps for batching
+    pub binding_exemplars: Option<Vec<BindingExemplar>>, // Examples from repo
 
     // ImplementBehaviorForScenario
     pub scenario_name: Option<String>,
@@ -400,8 +400,8 @@ pub struct BriefContext {
     pub feature_path: Option<String>,
     pub rule_name: Option<String>,
     pub missing_tags: Option<Vec<String>>,
-    pub current_scenario_count: Option<usize>,  // For AddOrClarifyScenario
-    pub rules_without_scenarios: Option<Vec<String>>,  // For AddOrClarifyScenario
+    pub current_scenario_count: Option<usize>, // For AddOrClarifyScenario
+    pub rules_without_scenarios: Option<Vec<String>>, // For AddOrClarifyScenario
 
     // RefactorBindingsForClarity
     pub binding_ids: Option<Vec<String>>,
@@ -456,9 +456,12 @@ impl BriefContext {
                 missing_steps,
             } => {
                 // Collect ALL unique missing step texts for comprehensive batching
-                let all_missing: Vec<String> = state.binding_issues
+                let all_missing: Vec<String> = state
+                    .binding_issues
                     .iter()
-                    .filter(|b| matches!(b.kind, crate::repo_state::BindingIssueKind::MissingBinding))
+                    .filter(|b| {
+                        matches!(b.kind, crate::repo_state::BindingIssueKind::MissingBinding)
+                    })
                     .filter_map(|b| b.step_text.clone())
                     .collect();
 
@@ -482,7 +485,7 @@ impl BriefContext {
                     selection_evidence,
                     ..Default::default()
                 }
-            },
+            }
             MissionType::ImplementBehaviorForScenario {
                 scenario_key,
                 scenario_name,
@@ -509,19 +512,20 @@ impl BriefContext {
                 rule_name,
             } => {
                 // Count executable scenarios from feature files (excluding @Deferred) so promotions count as progress.
-                let scenario_count = state
-                    .scenario_count_for_feature(feature_path)
-                    .unwrap_or(0);
+                let scenario_count = state.scenario_count_for_feature(feature_path).unwrap_or(0);
 
                 // Find rules that might need scenarios
-                let rules_needing_scenarios: Vec<String> = state.spec_issues
+                let rules_needing_scenarios: Vec<String> = state
+                    .spec_issues
                     .iter()
                     .filter(|i| i.feature_path == *feature_path)
                     .filter(|i| matches!(i.kind, crate::repo_state::SpecIssueKind::MissingCoverage))
                     .filter_map(|i| i.rule_name.clone())
                     .collect();
 
-                let issue = state.spec_issues.iter()
+                let issue = state
+                    .spec_issues
+                    .iter()
                     .find(|i| &i.feature_path == feature_path);
 
                 let selection_evidence = issue.map(|i| SelectionEvidence {
@@ -544,7 +548,7 @@ impl BriefContext {
                     selection_evidence,
                     ..Default::default()
                 }
-            },
+            }
             MissionType::NormalizeIdentityTags {
                 feature_path,
                 missing_tags,
@@ -578,12 +582,19 @@ impl BriefContext {
                 failure_count: Some(state.last_run_failures.len()),
                 ..Default::default()
             },
-            MissionType::DraftSpecScenarios { feature_path, rule_name } => Self {
+            MissionType::DraftSpecScenarios {
+                feature_path,
+                rule_name,
+            } => Self {
                 feature_path: Some(feature_path.clone()),
                 rule_name: rule_name.clone(),
                 ..Default::default()
             },
-            MissionType::PromoteScenariosToExecutable { feature_path, scenario_name, rule_name } => Self {
+            MissionType::PromoteScenariosToExecutable {
+                feature_path,
+                scenario_name,
+                rule_name,
+            } => Self {
                 feature_path: Some(feature_path.clone()),
                 rule_name: Some(rule_name.clone()),
                 scenario_name: Some(scenario_name.clone()),
@@ -621,9 +632,7 @@ impl Default for BriefContext {
 #[allow(dead_code)]
 pub fn brief_template_name(mission_type: &MissionType) -> &'static str {
     match mission_type {
-        MissionType::CreateMissingBindings { .. } => {
-            "mission/briefs/create_missing_bindings.md.j2"
-        }
+        MissionType::CreateMissingBindings { .. } => "mission/briefs/create_missing_bindings.md.j2",
         MissionType::ImplementBehaviorForScenario { .. } => {
             "mission/briefs/implement_behavior.md.j2"
         }
@@ -639,7 +648,9 @@ pub fn brief_template_name(mission_type: &MissionType) -> &'static str {
         MissionType::ExplainState => "mission/briefs/explain_state.md.j2",
         MissionType::TriageFailures => "mission/briefs/triage_failures.md.j2",
         MissionType::DraftSpecScenarios { .. } => "mission/briefs/add_clarify_scenario.md.j2",
-        MissionType::PromoteScenariosToExecutable { .. } => "mission/briefs/add_clarify_scenario.md.j2",
+        MissionType::PromoteScenariosToExecutable { .. } => {
+            "mission/briefs/add_clarify_scenario.md.j2"
+        }
     }
 }
 
@@ -1133,9 +1144,16 @@ mod tests {
         let result = render_mission_md(&ctx).unwrap();
 
         // Constraint block appears BEFORE the mission ID header
-        let constraint_pos = result.find("⚠️ CRITICAL FILE EDITING CONSTRAINTS ⚠️").expect("Constraints should be present");
-        let mission_header_pos = result.find("# Mission 001-test-abc12345").expect("Mission header should be present");
-        assert!(constraint_pos < mission_header_pos, "Constraints should appear before mission header");
+        let constraint_pos = result
+            .find("⚠️ CRITICAL FILE EDITING CONSTRAINTS ⚠️")
+            .expect("Constraints should be present");
+        let mission_header_pos = result
+            .find("# Mission 001-test-abc12345")
+            .expect("Mission header should be present");
+        assert!(
+            constraint_pos < mission_header_pos,
+            "Constraints should appear before mission header"
+        );
 
         // Spec patterns should be in FORBIDDEN section when spec is LOCKED
         assert!(result.contains("❌ FORBIDDEN"));

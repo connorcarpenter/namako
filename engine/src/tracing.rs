@@ -25,15 +25,10 @@ use tracing_subscriber::{
 use crate::{
     Namako, Parser, Runner, World, Writer,
     event::{self, Source},
-    runner::{
-        self,
-        ScenarioType,
-        basic::ScenarioId,
-    },
+    runner::{self, ScenarioType, basic::ScenarioId},
 };
 
-impl<W, P, I, Wr, Cli, WhichSc>
-    Namako<W, P, I, runner::Basic<W, WhichSc>, Wr, Cli>
+impl<W, P, I, Wr, Cli, WhichSc> Namako<W, P, I, runner::Basic<W, WhichSc>, Wr, Cli>
 where
     W: World,
     P: Parser<I>,
@@ -47,14 +42,9 @@ where
     /// [`fmt::Layer`]: tracing_subscriber::fmt::Layer
     #[must_use]
     pub fn init_tracing(self) -> Self {
-        self.configure_and_init_tracing(
-            format::DefaultFields::new(),
-            Format::default(),
-            |layer| {
-                tracing_subscriber::registry()
-                    .with(LevelFilter::INFO.and_then(layer))
-            },
-        )
+        self.configure_and_init_tracing(format::DefaultFields::new(), Format::default(), |layer| {
+            tracing_subscriber::registry().with(LevelFilter::INFO.and_then(layer))
+        })
     }
 
     /// Configures a [`fmt::Layer`], additionally wraps it (for example, into a
@@ -128,10 +118,14 @@ where
         );
         Dispatch::new(configure(layer)).init();
 
-        drop(self.runner.logs_collector.swap(Box::new(Some(Collector::new(
-            logs_receiver,
-            span_close_receiver,
-        )))));
+        drop(
+            self.runner
+                .logs_collector
+                .swap(Box::new(Some(Collector::new(
+                    logs_receiver,
+                    span_close_receiver,
+                )))),
+        );
 
         self
     }
@@ -150,8 +144,7 @@ type Scenarios = HashMap<
 >;
 
 /// All [`Callback`]s for [`Span`]s closing events with their completion status.
-type SpanEventsCallbacks =
-    HashMap<span::Id, (Option<Vec<Callback>>, IsReceived)>;
+type SpanEventsCallbacks = HashMap<span::Id, (Option<Vec<Callback>>, IsReceived)>;
 
 /// Indication whether a [`Span`] closing event was received.
 type IsReceived = bool;
@@ -245,27 +238,29 @@ impl Collector {
     /// [`Scenario`]s.
     ///
     /// [`Scenario`]: gherkin::Scenario
-    pub(crate) fn emitted_logs<W>(
-        &mut self,
-    ) -> Option<Vec<event::Namako<W>>> {
+    pub(crate) fn emitted_logs<W>(&mut self) -> Option<Vec<event::Namako<W>>> {
         self.notify_about_closing_spans();
 
-        self.logs_receiver.try_next().ok().flatten().map(|(id, msg)| {
-            id.and_then(|k| self.scenarios.get(&k))
-                .map_or_else(
-                    || Either::Left(self.scenarios.values()),
-                    |p| Either::Right(iter::once(p)),
-                )
-                .map(|(f, r, s)| {
-                    event::Namako::scenario(
-                        f.clone(),
-                        r.clone(),
-                        s.clone(),
-                        event::Scenario::Log(msg.clone()),
+        self.logs_receiver
+            .try_next()
+            .ok()
+            .flatten()
+            .map(|(id, msg)| {
+                id.and_then(|k| self.scenarios.get(&k))
+                    .map_or_else(
+                        || Either::Left(self.scenarios.values()),
+                        |p| Either::Right(iter::once(p)),
                     )
-                })
-                .collect()
-        })
+                    .map(|(f, r, s)| {
+                        event::Namako::scenario(
+                            f.clone(),
+                            r.clone(),
+                            s.clone(),
+                            event::Scenario::Log(msg.clone()),
+                        )
+                    })
+                    .collect()
+            })
     }
 
     /// Notifies all its subscribers about closing [`Span`]s via [`Callback`]s.
@@ -273,9 +268,7 @@ impl Collector {
         if let Some(id) = self.span_close_receiver.try_next().ok().flatten() {
             self.span_events.entry(id).or_default().1 = true;
         }
-        while let Some((id, callback)) =
-            self.wait_span_event_receiver.try_next().ok().flatten()
-        {
+        while let Some((id, callback)) = self.wait_span_event_receiver.try_next().ok().flatten() {
             self.span_events
                 .entry(id)
                 .or_default()
@@ -350,7 +343,10 @@ impl SpanCloseWaiter {
     /// Waits for the [`Span`] being closed.
     pub(crate) async fn wait_for_span_close(&self, id: span::Id) {
         let (sender, receiver) = oneshot::channel();
-        _ = self.wait_span_event_sender.unbounded_send((id, sender)).ok();
+        _ = self
+            .wait_span_event_sender
+            .unbounded_send((id, sender))
+            .ok();
         _ = receiver.await.ok();
     }
 }
@@ -375,12 +371,7 @@ impl<S> Layer<S> for RecordScenarioId
 where
     S: for<'a> LookupSpan<'a> + Subscriber,
 {
-    fn on_new_span(
-        &self,
-        attrs: &span::Attributes<'_>,
-        id: &span::Id,
-        ctx: layer::Context<'_, S>,
-    ) {
+    fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: layer::Context<'_, S>) {
         if let Some(span) = ctx.span(id) {
             let mut visitor = GetScenarioId(None);
             attrs.values().record(&mut visitor);
@@ -392,12 +383,7 @@ where
         }
     }
 
-    fn on_record(
-        &self,
-        id: &span::Id,
-        values: &span::Record<'_>,
-        ctx: layer::Context<'_, S>,
-    ) {
+    fn on_record(&self, id: &span::Id, values: &span::Record<'_>, ctx: layer::Context<'_, S>) {
         if let Some(span) = ctx.span(id) {
             let mut visitor = GetScenarioId(None);
             values.record(&mut visitor);
@@ -434,11 +420,7 @@ impl Visit for GetScenarioId {
 pub struct SkipScenarioIdSpan<F>(pub F);
 
 impl<'w, F: FormatFields<'w>> FormatFields<'w> for SkipScenarioIdSpan<F> {
-    fn format_fields<R: RecordFields>(
-        &self,
-        writer: format::Writer<'w>,
-        fields: R,
-    ) -> fmt::Result {
+    fn format_fields<R: RecordFields>(&self, writer: format::Writer<'w>, fields: R) -> fmt::Result {
         let mut is_scenario_span = IsScenarioIdSpan(false);
         fields.record(&mut is_scenario_span);
         if !is_scenario_span.0 {
@@ -487,10 +469,7 @@ where
                 .from_root()
                 .find_map(|span| span.extensions().get::<ScenarioId>().copied())
         }) {
-            writer.write_fmt(format_args!(
-                "{}{scenario_id}",
-                suffix::BEFORE_SCENARIO_ID,
-            ))?;
+            writer.write_fmt(format_args!("{}{scenario_id}", suffix::BEFORE_SCENARIO_ID,))?;
         } else {
             writer.write_fmt(format_args!("{}", suffix::NO_SCENARIO_ID))?;
         }
@@ -530,9 +509,7 @@ pub struct CollectorWriter {
 
 impl CollectorWriter {
     /// Creates a new [`CollectorWriter`].
-    const fn new(
-        sender: mpsc::UnboundedSender<(Option<ScenarioId>, String)>,
-    ) -> Self {
+    const fn new(sender: mpsc::UnboundedSender<(Option<ScenarioId>, String)>) -> Self {
         Self { sender }
     }
 }
@@ -556,9 +533,7 @@ impl io::Write for CollectorWriter {
         // unreadable.
         let msgs = String::from_utf8_lossy(buf);
         for msg in msgs.split_terminator(suffix::END) {
-            if let Some((before, after)) =
-                msg.rsplit_once(suffix::NO_SCENARIO_ID)
-            {
+            if let Some((before, after)) = msg.rsplit_once(suffix::NO_SCENARIO_ID) {
                 if !after.is_empty() {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -566,12 +541,10 @@ impl io::Write for CollectorWriter {
                     ));
                 }
                 _ = self.sender.unbounded_send((None, before.to_owned())).ok();
-            } else if let Some((before, after)) =
-                msg.rsplit_once(suffix::BEFORE_SCENARIO_ID)
-            {
-                let scenario_id = after.parse().map_err(|e| {
-                    io::Error::new(io::ErrorKind::InvalidData, e)
-                })?;
+            } else if let Some((before, after)) = msg.rsplit_once(suffix::BEFORE_SCENARIO_ID) {
+                let scenario_id = after
+                    .parse()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 _ = self
                     .sender
                     .unbounded_send((Some(scenario_id), before.to_owned()))

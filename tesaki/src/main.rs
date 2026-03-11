@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 mod binding_extractor;
+mod chat_planner;
 mod config;
 mod diagnosis;
 mod error_parser;
@@ -39,22 +40,25 @@ mod policy_violation;
 mod prompts;
 mod repl;
 mod repo_state;
+mod runner;
 mod scenario_extractor;
 mod session;
+mod spec_quality;
 mod stage;
 mod stop_reason;
 mod surface_policy;
-mod spec_quality;
 mod workspace;
-mod chat_planner;
-mod runner;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use servling::{agent_candidates, describe_candidates, normalize_model, OutcomeClassification, TokenUsage};
+use servling::{
+    agent_candidates, describe_candidates, normalize_model, OutcomeClassification, TokenUsage,
+};
 
-use crate::runner::{build_runner, check_surface_violations, outcome_from_error, Runner, RunnerConfig};
+use crate::runner::{
+    build_runner, check_surface_violations, outcome_from_error, Runner, RunnerConfig,
+};
 
 /// Log file name for update-cert audit trail
 const UPDATE_CERT_LOG: &str = "update_cert_log.jsonl";
@@ -83,7 +87,9 @@ struct IdentitySnapshot {
 #[command(name = "tesaki")]
 #[command(about = "AI-friendly task orchestrator for Namako spec-driven development")]
 #[command(disable_version_flag = true)]
-#[command(after_help = "Run `tesaki` to start the interactive REPL, or `tesaki --loop N` for autonomous mode.")]
+#[command(
+    after_help = "Run `tesaki` to start the interactive REPL, or `tesaki --loop N` for autonomous mode."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -192,7 +198,6 @@ struct MissingBindings {
     missing_step_texts: Vec<String>,
 }
 
-
 fn cmd_diagnose(mission_id: &str, spec_root: &Path) -> Result<()> {
     // Find mission directory
     let missions_dir = spec_root.join(".tesaki").join("missions");
@@ -231,7 +236,10 @@ fn cmd_diagnose(mission_id: &str, spec_root: &Path) -> Result<()> {
     let gate_path = mission_dir.join("GATE_RESULT.json");
     if gate_path.exists() {
         let gate: serde_json::Value = serde_json::from_str(&fs::read_to_string(&gate_path)?)?;
-        let outcome = gate.get("outcome").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let outcome = gate
+            .get("outcome")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         println!("Gate Result: {}", outcome);
         if let Some(errors) = gate.get("errors").and_then(|v| v.as_array()) {
             for err in errors.iter().take(5) {
@@ -307,10 +315,7 @@ fn main() -> Result<()> {
 
     let log_path = std::env::var_os("TESAKI_LOG_PATH").map(PathBuf::from);
     // Use Off mode for cleaner REPL output - state is shown in summary
-    let logger = logging::JsonlLogger::new_with_console(
-        log_path,
-        logging::ConsoleMode::Off,
-    );
+    let logger = logging::JsonlLogger::new_with_console(log_path, logging::ConsoleMode::Off);
 
     if let Some(iterations) = cli.r#loop {
         // Autonomous mode: run loop directly without REPL
@@ -359,8 +364,9 @@ fn resolve_config_or_flags(
 ) -> Result<ResolvedArgs> {
     // If both required flags are provided, use them directly
     if let (Some(spec_root), Some(adapter)) = (&spec_root, &adapter) {
-        let spec_root = fs::canonicalize(spec_root)
-            .with_context(|| format!("Failed to canonicalize spec_root: {}", spec_root.display()))?;
+        let spec_root = fs::canonicalize(spec_root).with_context(|| {
+            format!("Failed to canonicalize spec_root: {}", spec_root.display())
+        })?;
         let adapter = canonicalize_adapter_cmd(adapter)?;
         return Ok(ResolvedArgs {
             specs_dir: spec_root,
@@ -492,23 +498,12 @@ fn run_status_cmd(
     namako_cli: NamakoCliResolution,
     logger: &logging::JsonlLogger,
 ) -> Result<()> {
-    use crate::packet_parser::{
-        parse_gate_json,
-        parse_review_json,
-        parse_status_json,
-    };
+    use crate::packet_parser::{parse_gate_json, parse_review_json, parse_status_json};
     use crate::repo_state::RepoState;
     use crate::stage::detect_stage;
 
     let namako = namako_cli.command.clone();
-    log_session_start(
-        logger,
-        spec_root,
-        adapter,
-        &namako_cli,
-        None,
-        None,
-    );
+    log_session_start(logger, spec_root, adapter, &namako_cli, None, None);
     let gate_json = run_namako_gate_json(&namako, adapter, spec_root, logger)?;
     let gate_packet = parse_gate_json(&gate_json)?;
 
@@ -529,7 +524,10 @@ fn run_status_cmd(
     let stage = detect_stage(&repo_state);
     println!("RepoState: {}", repo_state.summary());
     println!("Stage: {}", stage.name());
-    println!("Propagation: {}", repo_state.propagation_summary().to_line());
+    println!(
+        "Propagation: {}",
+        repo_state.propagation_summary().to_line()
+    );
 
     log_session_end(logger, stop_reason::StopReason::Done, None);
     Ok(())
@@ -548,14 +546,7 @@ fn run_explain_cmd(
     use crate::stage::detect_stage;
 
     let namako = namako_cli.command.clone();
-    log_session_start(
-        logger,
-        spec_root,
-        adapter,
-        &namako_cli,
-        None,
-        None,
-    );
+    log_session_start(logger, spec_root, adapter, &namako_cli, None, None);
     let gate_json = run_namako_gate_json(&namako, adapter, spec_root, logger)?;
     let gate_packet = parse_gate_json(&gate_json)?;
 
@@ -642,8 +633,7 @@ fn run_next(
     logger: &logging::JsonlLogger,
 ) -> Result<()> {
     // Canonicalize spec_root to get absolute path
-    let spec_root = fs::canonicalize(spec_root)
-        .context("Failed to canonicalize spec_root path")?;
+    let spec_root = fs::canonicalize(spec_root).context("Failed to canonicalize spec_root path")?;
 
     // Canonicalize adapter command paths
     let adapter = canonicalize_adapter_cmd(adapter)?;
@@ -662,19 +652,12 @@ fn run_next(
 
     // Determine namako CLI command
     let namako = namako_cli.command.clone();
-    log_session_start(
-        logger,
-        &spec_root,
-        &adapter,
-        &namako_cli,
-        None,
-        None,
-    );
+    log_session_start(logger, &spec_root, &adapter, &namako_cli, None, None);
 
     // Define artifact paths used throughout
     let artifacts_dir = spec_root.join("target/namako_artifacts");
-    let run_report_path =
-        resolve_run_report_path(&spec_root).unwrap_or_else(|| artifacts_dir.join("run_report.json"));
+    let run_report_path = resolve_run_report_path(&spec_root)
+        .unwrap_or_else(|| artifacts_dir.join("run_report.json"));
     let cert_path = spec_root.join("certification.json");
     let log_path = out_dir.join(UPDATE_CERT_LOG);
 
@@ -695,8 +678,7 @@ fn run_next(
     } else {
         None
     };
-    let status_content =
-        run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
+    let status_content = run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
     fs::write(&status_path, &status_content)?;
 
     // Parse status
@@ -730,9 +712,15 @@ fn run_next(
 
         let remaining = max_cert_updates.saturating_sub(updates_this_run);
         if remaining > 0 {
-            eprintln!("  {} updates remaining this run (max: {})", remaining, max_cert_updates);
+            eprintln!(
+                "  {} updates remaining this run (max: {})",
+                remaining, max_cert_updates
+            );
         } else {
-            eprintln!("  No updates remaining this run (max: {})", max_cert_updates);
+            eprintln!(
+                "  No updates remaining this run (max: {})",
+                max_cert_updates
+            );
         }
 
         if !run_report_path.exists() {
@@ -767,19 +755,26 @@ fn run_next(
             match result {
                 Ok(()) => {
                     updates_this_run += 1;
-                    eprintln!("  ✓ Baseline updated ({}/{} used this run)", updates_this_run, max_cert_updates);
+                    eprintln!(
+                        "  ✓ Baseline updated ({}/{} used this run)",
+                        updates_this_run, max_cert_updates
+                    );
 
                     // Read new certification for logging
                     let new_identity = read_certification_identity(&cert_path);
 
                     // Log the update
-                    let drift_reason = status.drift.as_ref()
+                    let drift_reason = status
+                        .drift
+                        .as_ref()
                         .map(|d| d.kind.clone())
                         .unwrap_or_else(|| "UNKNOWN".to_string());
 
                     if let Some(new_id) = new_identity {
                         let log_entry = UpdateCertLogEntry {
-                            timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                            timestamp_utc: chrono::Utc::now()
+                                .format("%Y-%m-%dT%H:%M:%SZ")
+                                .to_string(),
                             old_identity,
                             new_identity: new_id,
                             reason: drift_reason,
@@ -811,10 +806,7 @@ fn run_next(
     // If FIX_RUN and we have failures, generate explain
     let explain_path = if action == "FIX_RUN" && !status.last_run_failures.is_empty() {
         let first_failure = &status.last_run_failures[0];
-        eprintln!(
-            "  Generating explain for: {}",
-            first_failure.scenario_key
-        );
+        eprintln!("  Generating explain for: {}", first_failure.scenario_key);
         let explain_file = out_dir.join("explain_failure.json");
         let _ = run_namako_explain(
             &namako,
@@ -1027,7 +1019,10 @@ fn read_certification_identity(cert_path: &PathBuf) -> Option<IdentitySnapshot> 
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
     let identity = json.get("identity")?;
     Some(IdentitySnapshot {
-        feature_fingerprint_hash: identity.get("feature_fingerprint_hash")?.as_str()?.to_string(),
+        feature_fingerprint_hash: identity
+            .get("feature_fingerprint_hash")?
+            .as_str()?
+            .to_string(),
         step_registry_hash: identity.get("step_registry_hash")?.as_str()?.to_string(),
         resolved_plan_hash: identity.get("resolved_plan_hash")?.as_str()?.to_string(),
     })
@@ -1070,20 +1065,21 @@ fn generate_next_task(
     max_cert_updates: u32,
 ) -> Result<()> {
     use prompts::{
-        render_next_task_base, render_next_task_done, render_next_task_fix_lint,
-        render_next_task_fix_run, render_next_task_needs_approval, render_next_task_run_gate,
-        render_next_task_unknown, render_next_task_artifacts,
+        render_next_task_artifacts, render_next_task_base, render_next_task_done,
+        render_next_task_fix_lint, render_next_task_fix_run, render_next_task_needs_approval,
+        render_next_task_run_gate, render_next_task_unknown, CandidateContext, DriftDetailContext,
+        FailureDisplayContext, MissingBindingContext, NextTaskArtifactsContext,
         NextTaskBaseContext, NextTaskDoneContext, NextTaskFixLintContext, NextTaskFixRunContext,
-        NextTaskNeedsApprovalContext, NextTaskRunGateContext, NextTaskArtifactsContext,
-        CandidateContext, MissingBindingContext, FailureDisplayContext, DriftDetailContext,
-        TESAKI_VERSION,
+        NextTaskNeedsApprovalContext, NextTaskRunGateContext, TESAKI_VERSION,
     };
 
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     // Filter out stubs (defense-in-depth)
     // Per TODO.md §2: Tesaki must NEVER select @Stub scenarios as tasks.
-    let eligible_candidates: Vec<_> = review.promotion_candidates.iter()
+    let eligible_candidates: Vec<_> = review
+        .promotion_candidates
+        .iter()
         .filter(|c| !c.is_stub)
         .collect();
     let drift_kind = status
@@ -1103,11 +1099,10 @@ fn generate_next_task(
         drift_kind: drift_kind.to_string(),
     };
 
-    let mut content = render_next_task_base(&base_ctx)
-        .unwrap_or_else(|e| {
-            log::error!("Failed to render next_task base: {}", e);
-            format!("# NEXT_TASK.md\n\n**Action:** `{}`\n\n---\n\n", action)
-        });
+    let mut content = render_next_task_base(&base_ctx).unwrap_or_else(|e| {
+        log::error!("Failed to render next_task base: {}", e);
+        format!("# NEXT_TASK.md\n\n**Action:** `{}`\n\n---\n\n", action)
+    });
 
     // Convert candidates to context
     let candidate_contexts: Vec<CandidateContext> = eligible_candidates
@@ -1210,16 +1205,20 @@ fn generate_next_task(
             };
             render_next_task_run_gate(&ctx).unwrap_or_else(|e| {
                 log::error!("Failed to render next_task run_gate: {}", e);
-                format!("## Task: Run Gate `{}`\n\nThe pipeline needs to be executed.\n", action)
+                format!(
+                    "## Task: Run Gate `{}`\n\nThe pipeline needs to be executed.\n",
+                    action
+                )
             })
         }
 
-        _ => {
-            render_next_task_unknown(action).unwrap_or_else(|e| {
-                log::error!("Failed to render next_task unknown: {}", e);
-                format!("## Task: Unknown State `{}`\n\nThe recommended action is not recognized.\n", action)
-            })
-        }
+        _ => render_next_task_unknown(action).unwrap_or_else(|e| {
+            log::error!("Failed to render next_task unknown: {}", e);
+            format!(
+                "## Task: Unknown State `{}`\n\nThe recommended action is not recognized.\n",
+                action
+            )
+        }),
     };
 
     content.push_str("\n");
@@ -1278,28 +1277,24 @@ fn run_run(
     pre_gate_build_mode: config::PreGateBuildMode,
     logger: &logging::JsonlLogger,
 ) -> Result<()> {
-    use crate::mission::{MissionBundle, MissionBudgets, MissionInputs};
+    use crate::error_parser::run_pre_gate_build;
+    use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker};
     use crate::mission::SurfaceDefinitions;
+    use crate::mission::{MissionBudgets, MissionBundle, MissionInputs};
     use crate::mission_selector::select_with_constraints;
     use crate::model_tier::select_model_for_attempt;
     use crate::packet_parser::{
-        failures_from_run_report,
-        parse_gate_json,
-        parse_review_json,
-        parse_run_report_json,
+        failures_from_run_report, parse_gate_json, parse_review_json, parse_run_report_json,
         parse_status_json,
     };
     use crate::repo_state::RepoState;
-    use crate::stage::{Stage, StageConstraint, detect_stage};
-    use crate::stop_reason::{StopReason, RunResult};
-    use crate::workspace::Workspace;
-    use crate::gate::{GateOutcome, ProcessInvoker, UpdateCertInvoker};
+    use crate::stage::{detect_stage, Stage, StageConstraint};
+    use crate::stop_reason::{RunResult, StopReason};
     use crate::surface_policy::SurfaceDefinition;
-    use crate::error_parser::run_pre_gate_build;
+    use crate::workspace::Workspace;
 
     // Canonicalize spec_root
-    let spec_root = fs::canonicalize(spec_root)
-        .context("Failed to canonicalize spec_root path")?;
+    let spec_root = fs::canonicalize(spec_root).context("Failed to canonicalize spec_root path")?;
 
     // Canonicalize adapter command
     let adapter = canonicalize_adapter_cmd(adapter)?;
@@ -1356,7 +1351,7 @@ fn run_run(
             describe_candidates(&runner_candidates)
         );
     }
-    
+
     let runner: Box<dyn Runner> = match build_runner(runner_candidates) {
         Ok(agent) => agent,
         Err(err) => {
@@ -1392,7 +1387,11 @@ fn run_run(
 
     eprintln!(
         "  Gate: {}",
-        if gate_passes { "PASS (all phases green)" } else { "Not all phases passing" }
+        if gate_passes {
+            "PASS (all phases green)"
+        } else {
+            "Not all phases passing"
+        }
     );
 
     // Step 2: Get status and review packets
@@ -1405,8 +1404,7 @@ fn run_run(
     let run_report_path = resolve_run_report_path(&spec_root);
     let run_report_opt = run_report_path.as_ref().filter(|path| path.exists());
 
-    let status_json =
-        run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
+    let status_json = run_namako_status(&namako, &adapter, &spec_root, run_report_opt, logger)?;
     fs::write(&status_path, &status_json)?;
     let review_json = run_namako_review(&namako, &adapter, &spec_root, logger)?;
     fs::write(&review_path, &review_json)?;
@@ -1429,20 +1427,29 @@ fn run_run(
     let pre_fingerprint = fingerprint_packets(&status_json, &review_json, &gate_json);
 
     let stage_override = match stage.as_deref() {
-        Some(value) => Stage::from_str(value)
-            .ok_or_else(|| anyhow::anyhow!("Invalid stage '{}'", value))?,
+        Some(value) => {
+            Stage::from_str(value).ok_or_else(|| anyhow::anyhow!("Invalid stage '{}'", value))?
+        }
         None => detect_stage(&repo_state),
     };
     eprintln!(
         "  Stage: {} {}",
         stage_override.name(),
-        if stage.is_some() { "(manual)" } else { "(auto)" }
+        if stage.is_some() {
+            "(manual)"
+        } else {
+            "(auto)"
+        }
     );
 
     // Step 3: Select mission type
     eprintln!("[3/6] Selecting mission...");
     let constraint = StageConstraint {
-        stage: if stage.is_some() { Some(stage_override) } else { None },
+        stage: if stage.is_some() {
+            Some(stage_override)
+        } else {
+            None
+        },
         surface_overrides,
     };
 
@@ -1471,11 +1478,13 @@ fn run_run(
     let mut pre_feature_scenario_count: Option<usize> = None;
     let mut pre_rule_scenario_count: Option<usize> = None;
     let (pre_rule_count, feature_snapshot) = match &mission_type {
-        crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, rule_name } => {
+        crate::mission_type::MissionType::AddOrClarifyScenario {
+            feature_path,
+            rule_name,
+        } => {
             pre_feature_scenario_count = repo_state.scenario_count_for_feature(feature_path);
             if let Some(rule) = rule_name.as_ref() {
-                pre_rule_scenario_count =
-                    repo_state.scenario_count_for_rule(feature_path, rule);
+                pre_rule_scenario_count = repo_state.scenario_count_for_rule(feature_path, rule);
             }
             scenario_budget = Some(scenario_add_budget(
                 feature_path,
@@ -1551,7 +1560,8 @@ fn run_run(
         && crate::error_parser::should_run_pre_gate_build(workspace.working_dir());
     if should_build {
         eprintln!("Pre-gate build check...");
-        let build_result = run_pre_gate_build(workspace.working_dir(), pre_gate_build_cmd.as_deref());
+        let build_result =
+            run_pre_gate_build(workspace.working_dir(), pre_gate_build_cmd.as_deref());
         if !build_result.success {
             eprintln!("{}", build_result.to_markdown(5));
 
@@ -1705,9 +1715,11 @@ fn run_run(
             Ok(outcome) => outcome,
             Err(err) => outcome_from_error(err),
         };
-        eprintln!("  Runner outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
-            outcome.classification, outcome.exit_code, outcome.elapsed_seconds);
-        
+        eprintln!(
+            "  Runner outcome: {:?} (exit: {:?}, elapsed: {:.1}s)",
+            outcome.classification, outcome.exit_code, outcome.elapsed_seconds
+        );
+
         // Display token usage immediately after runner completes (before any move to failed/)
         if let Some(ref usage) = outcome.token_usage {
             let usage: &TokenUsage = usage;
@@ -1728,8 +1740,8 @@ fn run_run(
         }
 
         let stop_reason_path = mission.path.join("RUNNER_OUTPUT").join("stop_reason.json");
-        let stop_reason_json = serde_json::to_string_pretty(&outcome)
-            .context("Failed to serialize runner outcome")?;
+        let stop_reason_json =
+            serde_json::to_string_pretty(&outcome).context("Failed to serialize runner outcome")?;
         fs::write(&stop_reason_path, stop_reason_json)
             .context("Failed to write RUNNER_OUTPUT/stop_reason.json")?;
 
@@ -1750,10 +1762,18 @@ fn run_run(
         if let Some(stop) = runner_stop {
             if !stop.is_retryable() || attempts_made > max_retries {
                 let failed_path = mission.preserve_failed()?;
-                let result = RunResult::error(stop.clone(), format!("Runner failed: {:?}", outcome.classification))
-                    .with_mission_path(failed_path.display().to_string())
-                    .with_missions(attempts_made);
-                let _ = save_failure_record(&spec_root, &mission_type, stop.clone(), result.details.clone());
+                let result = RunResult::error(
+                    stop.clone(),
+                    format!("Runner failed: {:?}", outcome.classification),
+                )
+                .with_mission_path(failed_path.display().to_string())
+                .with_missions(attempts_made);
+                let _ = save_failure_record(
+                    &spec_root,
+                    &mission_type,
+                    stop.clone(),
+                    result.details.clone(),
+                );
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, stop.clone(), result.details.clone());
                 eprintln!("STOP: {} - After {} attempt(s)", stop, attempts_made);
@@ -1762,7 +1782,10 @@ fn run_run(
                 return Ok(());
             }
             // Retryable and attempts remain
-            eprintln!("  Runner failed but retryable. {} attempts remaining.", max_retries + 1 - attempts_made);
+            eprintln!(
+                "  Runner failed but retryable. {} attempts remaining.",
+                max_retries + 1 - attempts_made
+            );
             prev_attempt_failed = true;
             let _ = mission.preserve_failed()?;
             continue;
@@ -1775,7 +1798,12 @@ fn run_run(
             let result = RunResult::error(StopReason::NoProgress, details.clone())
                 .with_mission_path(failed_path.display().to_string())
                 .with_missions(attempts_made);
-            let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+            let _ = save_failure_record(
+                &spec_root,
+                &mission_type,
+                StopReason::NoProgress,
+                result.details.clone(),
+            );
             emit_run_result(&result, &spec_root)?;
             save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
             log_session_end(logger, StopReason::NoProgress, Some(details));
@@ -1810,7 +1838,10 @@ fn run_run(
                 surface_policy.tests_bindings == crate::surface_policy::SurfaceLock::Locked,
                 surface_policy.sut == crate::surface_policy::SurfaceLock::Locked,
             );
-            eprintln!("  ⚠️  Surface policy violations detected ({} file(s)):", validation.violations.len());
+            eprintln!(
+                "  ⚠️  Surface policy violations detected ({} file(s)):",
+                validation.violations.len()
+            );
             for v in &violations {
                 eprintln!("      - {}", v);
             }
@@ -1889,11 +1920,20 @@ fn run_run(
         let post_status_packet = parse_status_json(&post_status_json)?;
         let post_review_packet = parse_review_json(&post_review_json)?;
         let post_gate_packet = parse_gate_json(&post_gate_json)?;
-        let post_state = RepoState::compute(&post_status_packet, &post_review_packet, &post_gate_packet, None)?;
+        let post_state = RepoState::compute(
+            &post_status_packet,
+            &post_review_packet,
+            &post_gate_packet,
+            None,
+        )?;
 
         let mut scenario_delta_feature: Option<i32> = None;
         let mut scenario_delta_rule: Option<i32> = None;
-        if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, rule_name } = &mission_type {
+        if let crate::mission_type::MissionType::AddOrClarifyScenario {
+            feature_path,
+            rule_name,
+        } = &mission_type
+        {
             let post_feature_scenarios = post_state.scenario_count_for_feature(feature_path);
             scenario_delta_feature = match (pre_feature_scenario_count, post_feature_scenarios) {
                 (Some(pre), Some(post)) => Some(post as i32 - pre as i32),
@@ -1908,15 +1948,24 @@ fn run_run(
             }
         }
 
-        let scenario_delta_for_budget = if matches!(mission_type, crate::mission_type::MissionType::AddOrClarifyScenario { rule_name: Some(_), .. }) {
+        let scenario_delta_for_budget = if matches!(
+            mission_type,
+            crate::mission_type::MissionType::AddOrClarifyScenario {
+                rule_name: Some(_),
+                ..
+            }
+        ) {
             scenario_delta_rule
         } else {
             scenario_delta_feature
         };
 
-        if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } = &mission_type {
+        if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } =
+            &mission_type
+        {
             let post_rule_count = post_state.rule_count_for_feature(feature_path);
-            let rules_increased = matches!((pre_rule_count, post_rule_count), (Some(pre), Some(post)) if post > pre);
+            let rules_increased =
+                matches!((pre_rule_count, post_rule_count), (Some(pre), Some(post)) if post > pre);
             if rules_increased {
                 if let Some(snapshot) = feature_snapshot.as_ref() {
                     let _ = restore_feature_snapshot(&spec_root, feature_path, snapshot);
@@ -1929,7 +1978,12 @@ fn run_run(
                 let result = RunResult::error(StopReason::NoProgress, details.clone())
                     .with_mission_path(failed_path.display().to_string())
                     .with_missions(attempts_made);
-                let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+                let _ = save_failure_record(
+                    &spec_root,
+                    &mission_type,
+                    StopReason::NoProgress,
+                    result.details.clone(),
+                );
                 emit_run_result(&result, &spec_root)?;
                 save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
                 log_session_end(logger, StopReason::NoProgress, Some(details));
@@ -1940,10 +1994,17 @@ fn run_run(
             }
         }
 
-        if matches!(mission_type, crate::mission_type::MissionType::AddOrClarifyScenario { .. }) {
+        if matches!(
+            mission_type,
+            crate::mission_type::MissionType::AddOrClarifyScenario { .. }
+        ) {
             if let (Some(delta), Some(budget)) = (scenario_delta_for_budget, scenario_budget) {
                 if delta > budget.max_additional {
-                    if let crate::mission_type::MissionType::AddOrClarifyScenario { feature_path, .. } = &mission_type {
+                    if let crate::mission_type::MissionType::AddOrClarifyScenario {
+                        feature_path,
+                        ..
+                    } = &mission_type
+                    {
                         if let Some(snapshot) = feature_snapshot.as_ref() {
                             let _ = restore_feature_snapshot(&spec_root, feature_path, snapshot);
                         }
@@ -1956,7 +2017,12 @@ fn run_run(
                     let result = RunResult::error(StopReason::NoProgress, details.clone())
                         .with_mission_path(failed_path.display().to_string())
                         .with_missions(attempts_made);
-                    let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+                    let _ = save_failure_record(
+                        &spec_root,
+                        &mission_type,
+                        StopReason::NoProgress,
+                        result.details.clone(),
+                    );
                     emit_run_result(&result, &spec_root)?;
                     save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
                     log_session_end(logger, StopReason::NoProgress, Some(details));
@@ -1969,12 +2035,18 @@ fn run_run(
         }
 
         if !has_progress(&repo_state, &post_state, &mission_type) {
-            let details = "Post-gate evidence shows no progress for the mission target.".to_string();
+            let details =
+                "Post-gate evidence shows no progress for the mission target.".to_string();
             let failed_path = mission.preserve_failed()?;
             let result = RunResult::error(StopReason::NoProgress, details.clone())
                 .with_mission_path(failed_path.display().to_string())
                 .with_missions(attempts_made);
-            let _ = save_failure_record(&spec_root, &mission_type, StopReason::NoProgress, result.details.clone());
+            let _ = save_failure_record(
+                &spec_root,
+                &mission_type,
+                StopReason::NoProgress,
+                result.details.clone(),
+            );
             emit_run_result(&result, &spec_root)?;
             save_no_progress_record(&spec_root, &mission_type, &pre_fingerprint)?;
             log_session_end(logger, StopReason::NoProgress, Some(details));
@@ -2011,7 +2083,10 @@ fn run_run(
                 clear_failure_record(&spec_root);
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::Done, None);
-                eprintln!("\nSUCCESS: Mission completed after {} attempt(s)", attempts_made);
+                eprintln!(
+                    "\nSUCCESS: Mission completed after {} attempt(s)",
+                    attempts_made
+                );
                 eprintln!("Mission bundle: {}", mission.path.display());
                 eprintln!("Outcome: {}", stop_reason_label(StopReason::Done));
                 return Ok(());
@@ -2020,24 +2095,28 @@ fn run_run(
             GateOutcome::FailVerifyOnly => {
                 // Per TODO.md §A3: Check if update-cert is allowed
                 if cert_updates_made >= max_cert_updates {
-                    eprintln!("  Verify failed but update-cert limit reached ({}/{})",
-                        cert_updates_made, max_cert_updates);
+                    eprintln!(
+                        "  Verify failed but update-cert limit reached ({}/{})",
+                        cert_updates_made, max_cert_updates
+                    );
                     // Treat as GATE_FAILED, check if retryable
                 } else {
-                    eprintln!("  Verify-only failure - attempting update-cert ({}/{} used)...",
-                        cert_updates_made, max_cert_updates);
+                    eprintln!(
+                        "  Verify-only failure - attempting update-cert ({}/{} used)...",
+                        cert_updates_made, max_cert_updates
+                    );
 
                     // Paths for update-cert
-                    let run_report_path =
-                        resolve_run_report_path(&spec_root)
-                            .unwrap_or_else(|| spec_root.join("run_report.json"));
+                    let run_report_path = resolve_run_report_path(&spec_root)
+                        .unwrap_or_else(|| spec_root.join("run_report.json"));
                     let cert_path = spec_root.join("certification.json");
 
                     // Read old identity for logging
                     let old_identity = read_certification_identity(&cert_path);
 
                     // Run update-cert
-                    let mut update_args: Vec<String> = namako.split_whitespace().map(|s| s.to_string()).collect();
+                    let mut update_args: Vec<String> =
+                        namako.split_whitespace().map(|s| s.to_string()).collect();
                     update_args.push("update-cert".to_string());
                     update_args.push("-a".to_string());
                     update_args.push(adapter.to_string());
@@ -2070,20 +2149,25 @@ fn run_run(
                         let new_identity = read_certification_identity(&cert_path);
                         if let Some(new_id) = new_identity {
                             let log_entry = UpdateCertLogEntry {
-                                timestamp_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                                timestamp_utc: chrono::Utc::now()
+                                    .format("%Y-%m-%dT%H:%M:%SZ")
+                                    .to_string(),
                                 old_identity,
                                 new_identity: new_id,
                                 reason: "VERIFY_ONLY_FAIL".to_string(),
                                 updates_this_run: cert_updates_made,
                                 max_updates_allowed: max_cert_updates,
                             };
-                            let log_path = spec_root.join("target/namako_artifacts/tesaki").join(UPDATE_CERT_LOG);
+                            let log_path = spec_root
+                                .join("target/namako_artifacts/tesaki")
+                                .join(UPDATE_CERT_LOG);
                             append_to_log(&log_path, &log_entry);
                         }
 
                         // Re-gate to confirm
                         eprintln!("  Re-validating after update-cert...");
-                        let recheck_json = run_namako_gate_json(&namako, &adapter, &spec_root, logger)?;
+                        let recheck_json =
+                            run_namako_gate_json(&namako, &adapter, &spec_root, logger)?;
 
                         // Write POST_GATE_AFTER_UPDATE_CERT.json per TODO.md §A4
                         let after_cert_path = mission.path.join("POST_GATE_AFTER_UPDATE_CERT.json");
@@ -2103,7 +2187,10 @@ fn run_run(
                             eprintln!("Outcome: {}", stop_reason_label(StopReason::Done));
                             return Ok(());
                         } else {
-                            eprintln!("  ✗ Gate still failing after update-cert: {:?}", recheck_outcome);
+                            eprintln!(
+                                "  ✗ Gate still failing after update-cert: {:?}",
+                                recheck_outcome
+                            );
                             // Fall through to GATE_FAILED handling
                         }
                     } else {
@@ -2114,19 +2201,30 @@ fn run_run(
 
                 // GATE_FAILED - check if retryable
                 if StopReason::GateFailed.is_retryable() && attempts_made <= max_retries {
-                    eprintln!("  Gate failed but retryable. {} attempts remaining.",
-                        max_retries + 1 - attempts_made);
+                    eprintln!(
+                        "  Gate failed but retryable. {} attempts remaining.",
+                        max_retries + 1 - attempts_made
+                    );
                     let _ = mission.preserve_failed()?;
                     continue;
                 }
 
                 let failed_path = mission.preserve_failed()?;
-                let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed (verify-only after update-cert)")
-                    .with_mission_path(failed_path.display().to_string())
-                    .with_missions(attempts_made)
-                    .with_cert_updates(cert_updates_made);
+                let result = RunResult::error(
+                    StopReason::GateFailed,
+                    "Post-run gate failed (verify-only after update-cert)",
+                )
+                .with_mission_path(failed_path.display().to_string())
+                .with_missions(attempts_made)
+                .with_cert_updates(cert_updates_made);
                 let gate_errors = extract_gate_errors(&post_gate_json);
-                let _ = save_failure_record_with_errors(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone(), Some(gate_errors));
+                let _ = save_failure_record_with_errors(
+                    &spec_root,
+                    &mission_type,
+                    StopReason::GateFailed,
+                    result.details.clone(),
+                    Some(gate_errors),
+                );
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Verify still failing after update-cert");
@@ -2140,18 +2238,27 @@ fn run_run(
                 eprintln!("  Gate failed (lint or run) - no update-cert attempt");
 
                 if StopReason::GateFailed.is_retryable() && attempts_made <= max_retries {
-                    eprintln!("  Gate failed but retryable. {} attempts remaining.",
-                        max_retries + 1 - attempts_made);
+                    eprintln!(
+                        "  Gate failed but retryable. {} attempts remaining.",
+                        max_retries + 1 - attempts_made
+                    );
                     let _ = mission.preserve_failed()?;
                     continue;
                 }
 
                 let failed_path = mission.preserve_failed()?;
-                let result = RunResult::error(StopReason::GateFailed, "Post-run gate failed (lint or run)")
-                    .with_mission_path(failed_path.display().to_string())
-                    .with_missions(attempts_made);
+                let result =
+                    RunResult::error(StopReason::GateFailed, "Post-run gate failed (lint or run)")
+                        .with_mission_path(failed_path.display().to_string())
+                        .with_missions(attempts_made);
                 let gate_errors = extract_gate_errors(&post_gate_json);
-                let _ = save_failure_record_with_errors(&spec_root, &mission_type, StopReason::GateFailed, result.details.clone(), Some(gate_errors));
+                let _ = save_failure_record_with_errors(
+                    &spec_root,
+                    &mission_type,
+                    StopReason::GateFailed,
+                    result.details.clone(),
+                    Some(gate_errors),
+                );
                 emit_run_result(&result, &spec_root)?;
                 log_session_end(logger, StopReason::GateFailed, result.details.clone());
                 eprintln!("\nSTOP: GATE_FAILED - Post-run validation failed");
@@ -2192,8 +2299,8 @@ fn run_namako_gate_json(
     log_command_result(logger, "namako", &cmd_args, &output);
 
     // gate --json outputs to stdout even on failure (with status in JSON)
-    let stdout = String::from_utf8(output.stdout)
-        .context("namako gate output is not valid UTF-8")?;
+    let stdout =
+        String::from_utf8(output.stdout).context("namako gate output is not valid UTF-8")?;
 
     // If stdout is empty but we have stderr, the command itself failed
     if stdout.trim().is_empty() {
@@ -2422,7 +2529,9 @@ pub(crate) fn log_mission_proposed(
     stage: &crate::stage::Stage,
     surface_policy: &crate::surface_policy::SurfacePolicy,
 ) {
-    let target = mission_type.target_label().unwrap_or_else(|| "none".to_string());
+    let target = mission_type
+        .target_label()
+        .unwrap_or_else(|| "none".to_string());
     logger.log_event(logging::LogEvent::MissionProposed {
         mission_type: mission_type.name().to_string(),
         stage: stage.name().to_string(),
@@ -2540,7 +2649,6 @@ struct FailureRecord {
     violated_surface: Option<String>,
 }
 
-
 fn last_failure_path(spec_root: &PathBuf) -> PathBuf {
     spec_root.join(".tesaki").join("last_failure.json")
 }
@@ -2567,7 +2675,15 @@ fn save_failure_record_with_errors(
     details: Option<String>,
     gate_errors: Option<Vec<String>>,
 ) -> Result<()> {
-    save_failure_record_full(spec_root, mission_type, stop_reason, details, gate_errors, None, None)
+    save_failure_record_full(
+        spec_root,
+        mission_type,
+        stop_reason,
+        details,
+        gate_errors,
+        None,
+        None,
+    )
 }
 
 fn save_failure_record_full(
@@ -2607,7 +2723,11 @@ fn extract_gate_errors(gate_json: &str) -> Vec<String> {
     };
 
     let mut errors = Vec::new();
-    for phase in &[("lint", &gate.lint), ("run", &gate.run), ("verify", &gate.verify)] {
+    for phase in &[
+        ("lint", &gate.lint),
+        ("run", &gate.run),
+        ("verify", &gate.verify),
+    ] {
         let (name, result) = phase;
         if result.status == crate::gate::PhaseStatus::Fail {
             if let Some(ref errs) = result.errors {
@@ -2766,7 +2886,11 @@ fn scan_runner_policy_violations(
     }
 
     let report = policy_violation::scan_policy_violations(&combined);
-    if report.is_empty() { None } else { Some(report) }
+    if report.is_empty() {
+        None
+    } else {
+        Some(report)
+    }
 }
 
 fn write_policy_violation_artifacts(
@@ -2817,18 +2941,20 @@ fn has_progress(
 ) -> bool {
     let gate_improved = !pre.all_gates_pass() && post.all_gates_pass();
     let issue_count_decrease = post.total_issue_count() < pre.total_issue_count();
-    
+
     // Use expected issue flow to calculate "adjusted" progress
     // Some missions create expected downstream work (e.g., new scenarios need bindings)
     let expected_flow = mission_type.expected_issue_flow();
-    
+
     // Calculate adjusted issue delta (excluding expected increases)
     let spec_delta = post.spec_issues.len() as i32 - pre.spec_issues.len() as i32;
     let binding_delta = post.binding_issues.len() as i32 - pre.binding_issues.len() as i32;
     let sut_delta = post.sut_issues.len() as i32 - pre.sut_issues.len() as i32;
-    
+
     let adjusted_delta = {
-        let mut adj = spec_delta + binding_delta + sut_delta 
+        let mut adj = spec_delta
+            + binding_delta
+            + sut_delta
             + (post.structure_issues.len() as i32 - pre.structure_issues.len() as i32);
         if expected_flow.binding_increase_ok && binding_delta > 0 {
             adj -= binding_delta;
@@ -2838,7 +2964,7 @@ fn has_progress(
         }
         adj
     };
-    
+
     // Progress if adjusted delta is negative (net improvement)
     let adjusted_progress = adjusted_delta < 0;
 
@@ -2879,7 +3005,8 @@ fn has_progress(
             // For AddOrClarifyScenario, progress means new scenarios were added to the target feature.
             let pre_count = pre.scenario_count_for_feature(feature_path);
             let post_count = post.scenario_count_for_feature(feature_path);
-            let scenarios_added = matches!((pre_count, post_count), (Some(pre), Some(post)) if post > pre);
+            let scenarios_added =
+                matches!((pre_count, post_count), (Some(pre), Some(post)) if post > pre);
             let counts_known = pre_count.is_some() && post_count.is_some();
 
             if scenarios_added {
@@ -2906,16 +3033,21 @@ fn has_progress(
     }
 }
 
-fn count_missing_bindings(state: &crate::repo_state::RepoState, scenario_key: Option<&str>) -> usize {
+fn count_missing_bindings(
+    state: &crate::repo_state::RepoState,
+    scenario_key: Option<&str>,
+) -> usize {
     state
         .binding_issues
         .iter()
         .filter(|issue| issue.kind == crate::repo_state::BindingIssueKind::MissingBinding)
-        .filter(|issue| match (scenario_key, issue.scenario_key.as_deref()) {
-            (Some(target), Some(key)) => key == target,
-            (Some(_), None) => false,
-            (None, _) => true,
-        })
+        .filter(
+            |issue| match (scenario_key, issue.scenario_key.as_deref()) {
+                (Some(target), Some(key)) => key == target,
+                (Some(_), None) => false,
+                (None, _) => true,
+            },
+        )
         .count()
 }
 
@@ -2983,13 +3115,13 @@ fn lock_label(lock: crate::surface_policy::SurfaceLock) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
     use crate::packet_parser::{
         BlockerType as ReviewBlockerType, CoverageSummary, DeferredItem, FeatureReview,
         IdentityFields, IdentitySection, LegacyGateResult, LegacyGateStatus, ReviewPacket,
         RuleReview, ScenarioReview, SourceSpan, StatusPacket, StatusValue, StepInfo,
     };
+    use std::fs;
+    use tempfile::TempDir;
 
     /// Test log entry serialization
     #[test]
@@ -3211,9 +3343,7 @@ mod tests {
         ];
 
         // Simulate filtering (as in generate_next_task)
-        let eligible: Vec<_> = candidates.iter()
-            .filter(|c| !c.is_stub)
-            .collect();
+        let eligible: Vec<_> = candidates.iter().filter(|c| !c.is_stub).collect();
 
         // Both real scenarios should be eligible (stubs excluded)
         assert_eq!(eligible.len(), 2);
@@ -3222,14 +3352,20 @@ mod tests {
 
         // Verify stub was excluded
         let has_stub = eligible.iter().any(|c| c.scenario_name == "Stub scenario");
-        assert!(!has_stub, "Stub scenario should be excluded from eligible list");
+        assert!(
+            !has_stub,
+            "Stub scenario should be excluded from eligible list"
+        );
     }
 
     fn review_for_rule(feature_path: &str, rule_name: &str, deferred_count: usize) -> ReviewPacket {
         let deferred_items = (0..deferred_count)
             .map(|i| DeferredItem {
                 text: format!("Deferred {}", i),
-                source_span: SourceSpan { start_line: 1, end_line: 1 },
+                source_span: SourceSpan {
+                    start_line: 1,
+                    end_line: 1,
+                },
                 blocker: ReviewBlockerType::Unknown,
             })
             .collect::<Vec<_>>();
@@ -3248,11 +3384,20 @@ mod tests {
                 feature_name: "Feature".to_string(),
                 rules: vec![RuleReview {
                     rule_name: rule_name.to_string(),
-                    source_span: SourceSpan { start_line: 1, end_line: 1 },
+                    source_span: SourceSpan {
+                        start_line: 1,
+                        end_line: 1,
+                    },
                     executable_scenarios: vec![ScenarioReview {
                         name: "Scenario".to_string(),
-                        source_span: SourceSpan { start_line: 1, end_line: 1 },
-                        steps: vec![StepInfo { kind: "given".to_string(), text: "x".to_string() }],
+                        source_span: SourceSpan {
+                            start_line: 1,
+                            end_line: 1,
+                        },
+                        steps: vec![StepInfo {
+                            kind: "given".to_string(),
+                            text: "x".to_string(),
+                        }],
                     }],
                     deferred_items,
                 }],

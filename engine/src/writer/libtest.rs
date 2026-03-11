@@ -1,5 +1,3 @@
-
-
 //! [Rust `libtest`][1] compatible [`Writer`] implementation.
 //!
 //! [1]: https://doc.rust-lang.org/rustc/tests/index.html
@@ -19,11 +17,7 @@ use crate::{
     Event, World, Writer, WriterExt as _, cli,
     event::{self},
     parser,
-    writer::{
-        self, Arbitrary, Normalize, Summarize,
-        basic::trim_path,
-        out::WriteStrExt as _,
-    },
+    writer::{self, Arbitrary, Normalize, Summarize, basic::trim_path, out::WriteStrExt as _},
 };
 
 /// CLI options of a [`Libtest`] [`Writer`].
@@ -65,12 +59,8 @@ impl FromStr for Format {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "json" => Ok(Self::Json),
-            s @ ("pretty" | "terse") => {
-                Err(format!("`{s}` option is not supported yet"))
-            }
-            s => Err(format!(
-                "Unknown option `{s}`, expected `pretty` or `json`",
-            )),
+            s @ ("pretty" | "terse") => Err(format!("`{s}` option is not supported yet")),
+            s => Err(format!("Unknown option `{s}`, expected `pretty` or `json`",)),
         }
     }
 }
@@ -240,9 +230,7 @@ impl<W: Debug + World> Libtest<W, io::Stdout> {
     /// [`Json`]: Format::Json
     /// [`Normalized`]: writer::Normalized
     #[must_use]
-    pub fn or<AnotherWriter: Writer<W>>(
-        writer: AnotherWriter,
-    ) -> Or<W, AnotherWriter> {
+    pub fn or<AnotherWriter: Writer<W>>(writer: AnotherWriter) -> Or<W, AnotherWriter> {
         Or::new(writer, Self::stdout(), |_, cli| {
             !matches!(cli.right.format, Some(Format::Json))
         })
@@ -315,23 +303,16 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
     ///
     /// [1]: https://doc.rust-lang.org/rustc/tests/index.html
     /// [`ParsingFinished`]: event::Namako::ParsingFinished
-    fn handle_namako_event(
-        &mut self,
-        event: parser::Result<Event<event::Namako<W>>>,
-        cli: &Cli,
-    ) {
-        use event::{Namako, Metadata};
+    fn handle_namako_event(&mut self, event: parser::Result<Event<event::Namako<W>>>, cli: &Cli) {
+        use event::{Metadata, Namako};
 
-        let unite = |ev: Result<(Namako<W>, Metadata), _>| {
-            ev.map(|(e, m)| m.insert(e))
-        };
+        let unite = |ev: Result<(Namako<W>, Metadata), _>| ev.map(|(e, m)| m.insert(e));
 
         match (event.map(Event::split), self.parsed_all) {
             (event @ Ok((Namako::ParsingFinished { .. }, _)), false) => {
                 self.parsed_all = true;
 
-                let all_events =
-                    iter::once(unite(event)).chain(mem::take(&mut self.events));
+                let all_events = iter::once(unite(event)).chain(mem::take(&mut self.events));
                 for ev in all_events {
                     self.output_event(ev, cli);
                 }
@@ -342,16 +323,13 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
     }
 
     /// Outputs the provided [`event::Namako`].
-    fn output_event(
-        &mut self,
-        event: parser::Result<Event<event::Namako<W>>>,
-        cli: &Cli,
-    ) {
+    fn output_event(&mut self, event: parser::Result<Event<event::Namako<W>>>, cli: &Cli) {
         for ev in self.expand_namako_event(event, cli) {
             self.output
-                .write_line(serde_json::to_string(&ev).unwrap_or_else(|e| {
-                    panic!("Failed to serialize `LibTestJsonEvent`: {e}")
-                }))
+                .write_line(
+                    serde_json::to_string(&ev)
+                        .unwrap_or_else(|e| panic!("Failed to serialize `LibTestJsonEvent`: {e}")),
+                )
                 .unwrap_or_else(|e| panic!("Failed to write: {e}"));
         }
     }
@@ -369,10 +347,19 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
                 self.started_at = Some(meta.at);
                 Vec::new()
             }
-            Ok((Namako::ParsingFinished { steps, parser_errors, .. }, _)) => {
+            Ok((
+                Namako::ParsingFinished {
+                    steps,
+                    parser_errors,
+                    ..
+                },
+                _,
+            )) => {
                 vec![
-                    SuiteEvent::Started { test_count: steps + parser_errors }
-                        .into(),
+                    SuiteEvent::Started {
+                        test_count: steps + parser_errors,
+                    }
+                    .into(),
                 ]
             }
             Ok((Namako::Finished, meta)) => {
@@ -382,8 +369,7 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
                     .as_ref()
                     .map(Duration::as_secs_f64);
 
-                let failed =
-                    self.failed + self.parsing_errors;
+                let failed = self.failed + self.parsing_errors;
                 let results = SuiteResults {
                     passed: self.passed,
                     failed,
@@ -410,9 +396,7 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
                 let path = match &e {
                     parser::Error::Parsing(e) => match &**e {
                         gherkin::ParseFileError::Parsing { path, .. }
-                        | gherkin::ParseFileError::Reading { path, .. } => {
-                            Some(path)
-                        }
+                        | gherkin::ParseFileError::Reading { path, .. } => Some(path),
                     },
                     parser::Error::ExampleExpansion(e) => e.path.as_ref(),
                 };
@@ -446,17 +430,12 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
             Feature::Started
             | Feature::Finished
             | Feature::Rule(_, Rule::Started | Rule::Finished) => Vec::new(),
-            Feature::Rule(rule, Rule::Scenario(scenario, ev)) => self
-                .expand_scenario_event(
-                    feature,
-                    Some(&rule),
-                    &scenario,
-                    ev,
-                    meta,
-                    cli,
-                ),
-            Feature::Scenario(scenario, ev) => self
-                .expand_scenario_event(feature, None, &scenario, ev, meta, cli),
+            Feature::Rule(rule, Rule::Scenario(scenario, ev)) => {
+                self.expand_scenario_event(feature, Some(&rule), &scenario, ev, meta, cli)
+            }
+            Feature::Scenario(scenario, ev) => {
+                self.expand_scenario_event(feature, None, &scenario, ev, meta, cli)
+            }
         }
     }
 
@@ -474,12 +453,12 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
 
         match ev {
             Scenario::Started | Scenario::Finished => Vec::new(),
-            Scenario::Background(step, ev) => self.expand_step_event(
-                feature, rule, scenario, &step, ev, true, meta, cli,
-            ),
-            Scenario::Step(step, ev) => self.expand_step_event(
-                feature, rule, scenario, &step, ev, false, meta, cli,
-            ),
+            Scenario::Background(step, ev) => {
+                self.expand_step_event(feature, rule, scenario, &step, ev, true, meta, cli)
+            }
+            Scenario::Step(step, ev) => {
+                self.expand_step_event(feature, rule, scenario, &step, ev, false, meta, cli)
+            }
             // We do use `print!()` intentionally here to support `libtest`
             // output capturing properly, which can only capture output from
             // the standard library’s `print!()` macro.
@@ -500,7 +479,6 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
     // TODO: Needs refactoring.
     #[expect(clippy::too_many_arguments, reason = "needs refactoring")]
 
-
     /// Converts the provided [`event::Step`] into [`LibTestJsonEvent`]s.
     // TODO: Needs refactoring.
     #[expect(clippy::too_many_arguments, reason = "needs refactoring")]
@@ -517,13 +495,7 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
     ) -> Vec<LibTestJsonEvent> {
         use event::Step;
 
-        let name = self.test_case_name(
-            feature,
-            rule,
-            scenario,
-            step,
-            is_background,
-        );
+        let name = self.test_case_name(feature, rule, scenario, step, is_background);
 
         let ev = match ev {
             Step::Started => {
@@ -544,11 +516,8 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
                             .unwrap_or(&feature.name),
                         step.position.line,
                         step.position.col,
-                        loc.map(|l| format!(
-                            "\n{}:{}:{} (matched)",
-                            l.path, l.line, l.column,
-                        ))
-                        .unwrap_or_default()
+                        loc.map(|l| format!("\n{}:{}:{} (matched)", l.path, l.line, l.column,))
+                            .unwrap_or_default()
                     ))
                 } else {
                     event
@@ -557,8 +526,7 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
             Step::Skipped => {
                 self.ignored += 1;
 
-                let event =
-                    TestEvent::ignored(name, self.step_exec_time(meta, cli));
+                let event = TestEvent::ignored(name, self.step_exec_time(meta, cli));
                 if cli.show_output {
                     event.with_stdout(format!(
                         "{}:{}:{} (defined)",
@@ -577,23 +545,19 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
             Step::Failed(_, loc, world, err) => {
                 self.failed += 1;
 
-                TestEvent::failed(name, self.step_exec_time(meta, cli))
-                    .with_stdout(format!(
-                        "{}:{}:{} (defined){}\n{err}{}",
-                        feature
-                            .path
-                            .as_ref()
-                            .and_then(|p| p.to_str().map(trim_path))
-                            .unwrap_or(&feature.name),
-                        step.position.line,
-                        step.position.col,
-                        loc.map(|l| format!(
-                            "\n{}:{}:{} (matched)",
-                            l.path, l.line, l.column,
-                        ))
+                TestEvent::failed(name, self.step_exec_time(meta, cli)).with_stdout(format!(
+                    "{}:{}:{} (defined){}\n{err}{}",
+                    feature
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.to_str().map(trim_path))
+                        .unwrap_or(&feature.name),
+                    step.position.line,
+                    step.position.col,
+                    loc.map(|l| format!("\n{}:{}:{} (matched)", l.path, l.line, l.column,))
                         .unwrap_or_default(),
-                        world.map(|w| format!("\n{w:#?}")).unwrap_or_default(),
-                    ))
+                    world.map(|w| format!("\n{w:#?}")).unwrap_or_default(),
+                ))
             }
         };
 
@@ -630,10 +594,7 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
             .map(|r| format!("{}: {}: {}", r.position.line, r.keyword, r.name));
         let scenario_name = format!(
             "{}: {}: {}{}",
-            scenario.position.line,
-            scenario.keyword,
-            scenario.name,
-            "",
+            scenario.position.line, scenario.keyword, scenario.name, "",
         );
         let step_name = format!(
             "{}: {} {}{}",
@@ -650,27 +611,27 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
             step.value,
         );
 
-        [Some(feature_name), rule_name, Some(scenario_name), Some(step_name)]
-            .into_iter()
-            .flatten()
-            .join("::")
+        [
+            Some(feature_name),
+            rule_name,
+            Some(scenario_name),
+            Some(step_name),
+        ]
+        .into_iter()
+        .flatten()
+        .join("::")
     }
 
     /// Saves [`Step`] starting [`SystemTime`].
     ///
     /// [`Step`]: gherkin::Step
     fn step_started_at(&mut self, meta: event::Metadata, cli: &Cli) {
-        self.step_started_at =
-            Some(meta.at).filter(|_| cli.report_time.is_some());
+        self.step_started_at = Some(meta.at).filter(|_| cli.report_time.is_some());
     }
 
     /// Retrieves [`Duration`] since the last [`Libtest::step_started_at()`]
     /// call.
-    fn step_exec_time(
-        &mut self,
-        meta: event::Metadata,
-        cli: &Cli,
-    ) -> Option<Duration> {
+    fn step_exec_time(&mut self, meta: event::Metadata, cli: &Cli) -> Option<Duration> {
         let started = self.step_started_at.take()?;
         meta.at
             .duration_since(started)
@@ -885,7 +846,12 @@ struct TestEventInner {
 impl TestEventInner {
     /// Creates a new [`TestEventInner`].
     const fn new(name: String) -> Self {
-        Self { name, stdout: None, stderr: None, exec_time: None }
+        Self {
+            name,
+            stdout: None,
+            stderr: None,
+            exec_time: None,
+        }
     }
 
     /// Adds a [`TestEventInner::exec_time`].

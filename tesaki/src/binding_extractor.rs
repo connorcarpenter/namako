@@ -4,8 +4,8 @@
 //! dynamic, relevant context for CreateMissingBindings missions. Instead of
 //! showing generic examples, we show real bindings from the same codebase.
 
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
 use anyhow::Result;
 use regex::Regex;
@@ -69,7 +69,8 @@ pub fn extract_binding_exemplars(
 #[allow(dead_code)]
 fn parse_bindings_from_file(path: &Path) -> Result<Vec<BindingExemplar>> {
     let content = fs::read_to_string(path)?;
-    let file_path = path.file_name()
+    let file_path = path
+        .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown.rs".to_string());
 
@@ -85,7 +86,7 @@ fn parse_bindings_from_content(content: &str, file_path: &str) -> Result<Vec<Bin
     // or: #[when("...")] fn name(...) { ... }
     // or: #[then("...")] fn name(...) { ... }
     let binding_re = Regex::new(
-        r#"(?s)#\[(given|when|then)\("([^"]+)"\)\]\s*fn\s+(\w+)\s*\([^)]*\)\s*(?:->[\s\w<>,()]+)?\s*\{"#
+        r#"(?s)#\[(given|when|then)\("([^"]+)"\)\]\s*fn\s+(\w+)\s*\([^)]*\)\s*(?:->[\s\w<>,()]+)?\s*\{"#,
     )?;
 
     for cap in binding_re.captures_iter(content) {
@@ -94,11 +95,8 @@ fn parse_bindings_from_content(content: &str, file_path: &str) -> Result<Vec<Bin
         // Find the function body (simplified: take up to closing brace at same indentation)
         if let Some(start) = cap.get(0) {
             if let Some(body) = extract_function_body(&content[start.start()..]) {
-                let binding_code = format!(
-                    "#[{}(\"{}\")]\n{}",
-                    macro_type, step_text, body
-                );
-                
+                let binding_code = format!("#[{}(\"{}\")]\n{}", macro_type, step_text, body);
+
                 exemplars.push(BindingExemplar {
                     step_text: step_text.to_string(),
                     binding_code,
@@ -173,7 +171,7 @@ fn word_overlap_score(a: &str, b: &str) -> f32 {
     let intersection = words_a.intersection(&words_b).count() as f32;
     let union = words_a.union(&words_b).count() as f32;
 
-    intersection / union  // Jaccard similarity
+    intersection / union // Jaccard similarity
 }
 
 #[cfg(test)]
@@ -218,12 +216,12 @@ fn then_connection_established(ctx: &TestWorldRef) -> AssertOutcome<()> {
     fn test_word_overlap_score() {
         // Identical
         assert!(word_overlap_score("the server is running", "the server is running") > 0.9);
-        
+
         // Similar
         let score = word_overlap_score("a server is running", "the server has started");
         assert!(score > 0.0);
         assert!(score < 1.0);
-        
+
         // Very different
         let score = word_overlap_score("a server is running", "the client sends message");
         assert!(score < 0.5);

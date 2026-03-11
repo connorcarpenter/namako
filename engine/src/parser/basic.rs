@@ -1,5 +1,3 @@
-
-
 //! Default [`Parser`] implementation.
 
 use std::{
@@ -42,17 +40,14 @@ pub struct Basic {}
 impl<I: AsRef<Path>> Parser<I> for Basic {
     type Cli = Cli;
 
-    type Output =
-        stream::Iter<vec::IntoIter<Result<gherkin::Feature, ParseError>>>;
+    type Output = stream::Iter<vec::IntoIter<Result<gherkin::Feature, ParseError>>>;
 
     fn parse(self, input: I, cli: Self::Cli) -> Self::Output {
         let walk = |walker: GlobWalker| {
             walker
                 .filter_map(Result::ok)
                 .sorted_by(|l, r| Ord::cmp(l.path(), r.path()))
-                .map(|file| {
-                    gherkin::Feature::parse_path(file.path(), GherkinEnv::default())
-                })
+                .map(|file| gherkin::Feature::parse_path(file.path(), GherkinEnv::default()))
                 .collect::<Vec<_>>()
         };
 
@@ -75,9 +70,10 @@ impl<I: AsRef<Path>> Parser<I> for Basic {
 
         let features = || {
             let features = if let Some(walker) = cli.features {
-                walk(globwalk::glob(walker.0).unwrap_or_else(|e| {
-                    unreachable!("invalid glob pattern: {e}")
-                }))
+                walk(
+                    globwalk::glob(walker.0)
+                        .unwrap_or_else(|e| unreachable!("invalid glob pattern: {e}")),
+                )
             } else {
                 let feats_path = match get_features_path() {
                     Ok(p) => p,
@@ -85,18 +81,18 @@ impl<I: AsRef<Path>> Parser<I> for Basic {
                 };
 
                 if feats_path.is_file() {
-                    vec![gherkin::Feature::parse_path(feats_path, GherkinEnv::default())]
+                    vec![gherkin::Feature::parse_path(
+                        feats_path,
+                        GherkinEnv::default(),
+                    )]
                 } else {
                     let w = GlobWalkerBuilder::new(feats_path, "*.feature")
                         .case_insensitive(true)
                         .build()
-                        .unwrap_or_else(|e| {
-                            unreachable!("`GlobWalkerBuilder` panicked: {e}")
-                        });
+                        .unwrap_or_else(|e| unreachable!("`GlobWalkerBuilder` panicked: {e}"));
                     walk(w)
                 }
             };
-
 
             features
                 .into_iter()

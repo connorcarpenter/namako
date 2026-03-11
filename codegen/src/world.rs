@@ -56,7 +56,12 @@ struct Attrs {
 /// Representation of a type implementing a `World` trait, used for code
 /// generation.
 #[derive(Debug, ToTokens)]
-#[to_tokens(append(impl_world_inventory, impl_world, impl_step_contexts, impl_step_constructors))]
+#[to_tokens(append(
+    impl_world_inventory,
+    impl_world,
+    impl_step_contexts,
+    impl_step_constructors
+))]
 struct Definition {
     /// Name of this type.
     ident: syn::Ident,
@@ -143,17 +148,20 @@ impl Definition {
         let world = &self.ident;
         let (impl_gens, ty_gens, where_clause) = self.generics.split_for_impl();
 
-        let init = self.init.clone().unwrap_or_else(
-            || parse_quote! { <Self as ::std::default::Default>::default },
-        );
+        let init = self
+            .init
+            .clone()
+            .unwrap_or_else(|| parse_quote! { <Self as ::std::default::Default>::default });
 
         // Context types - required for context-first ABI
-        let mut_ctx_ty = self.mut_ctx.clone().unwrap_or_else(
-            || parse_quote! { &'a mut Self },
-        );
-        let ref_ctx_ty = self.ref_ctx.clone().unwrap_or_else(
-            || parse_quote! { &'a Self },
-        );
+        let mut_ctx_ty = self
+            .mut_ctx
+            .clone()
+            .unwrap_or_else(|| parse_quote! { &'a mut Self });
+        let ref_ctx_ty = self
+            .ref_ctx
+            .clone()
+            .unwrap_or_else(|| parse_quote! { &'a Self });
 
         // Context factory expressions
         let ctx_mut_expr = if let Some(expr) = &self.ctx_mut {
@@ -228,7 +236,8 @@ impl Definition {
 
         // Generate StepContext impl for mut_ctx type
         if let Some(ref mut_ctx_ty) = self.mut_ctx {
-            if let Some(impl_tokens) = Self::generate_step_context_impl(mut_ctx_ty, world, &ty_gens) {
+            if let Some(impl_tokens) = Self::generate_step_context_impl(mut_ctx_ty, world, &ty_gens)
+            {
                 impls.extend(impl_tokens);
             }
         }
@@ -242,7 +251,9 @@ impl Definition {
             });
 
             if !is_same {
-                if let Some(impl_tokens) = Self::generate_step_context_impl(ref_ctx_ty, world, &ty_gens) {
+                if let Some(impl_tokens) =
+                    Self::generate_step_context_impl(ref_ctx_ty, world, &ty_gens)
+                {
                     impls.extend(impl_tokens);
                 }
             }
@@ -267,7 +278,10 @@ impl Definition {
 
                 // Check if it has generic arguments (lifetime)
                 if let Some(last_segment) = path.segments.last() {
-                    if matches!(last_segment.arguments, syn::PathArguments::AngleBracketed(_)) {
+                    if matches!(
+                        last_segment.arguments,
+                        syn::PathArguments::AngleBracketed(_)
+                    ) {
                         // Has generics - generate impl with wildcard lifetime
                         // e.g., `impl StepContext for WorldMut<'_>`
                         let base_path = {
@@ -278,7 +292,10 @@ impl Definition {
                                         colon2_token: None,
                                         lt_token: Default::default(),
                                         args: std::iter::once(syn::GenericArgument::Lifetime(
-                                            syn::Lifetime::new("'_", proc_macro2::Span::call_site()),
+                                            syn::Lifetime::new(
+                                                "'_",
+                                                proc_macro2::Span::call_site(),
+                                            ),
                                         ))
                                         .collect(),
                                         gt_token: Default::default(),
@@ -400,9 +417,9 @@ impl Definition {
     ///
     /// [`syn::Ident`]: struct@syn::Ident
     fn step_types(&self) -> impl Iterator<Item = syn::Ident> {
-        Self::STEPS.iter().map(|step| {
-            format_ident!("Namako{}{}", to_pascal_case(step), self.ident)
-        })
+        Self::STEPS
+            .iter()
+            .map(|step| format_ident!("Namako{}{}", to_pascal_case(step), self.ident))
     }
 }
 
@@ -421,12 +438,30 @@ mod spec {
         let result_str = result.to_string();
 
         // Check key elements are present
-        assert!(result_str.contains("WorldInventory"), "should implement WorldInventory");
-        assert!(result_str.contains("NamakoGivenWorld"), "should define Given step struct");
-        assert!(result_str.contains("NamakoWhenWorld"), "should define When step struct");
-        assert!(result_str.contains("NamakoThenWorld"), "should define Then step struct");
-        assert!(result_str.contains("binding_id"), "should include binding_id field");
-        assert!(result_str.contains("npap_metadata"), "should include npap_metadata method");
+        assert!(
+            result_str.contains("WorldInventory"),
+            "should implement WorldInventory"
+        );
+        assert!(
+            result_str.contains("NamakoGivenWorld"),
+            "should define Given step struct"
+        );
+        assert!(
+            result_str.contains("NamakoWhenWorld"),
+            "should define When step struct"
+        );
+        assert!(
+            result_str.contains("NamakoThenWorld"),
+            "should define Then step struct"
+        );
+        assert!(
+            result_str.contains("binding_id"),
+            "should include binding_id field"
+        );
+        assert!(
+            result_str.contains("npap_metadata"),
+            "should include npap_metadata method"
+        );
     }
 
     #[test]
@@ -438,9 +473,18 @@ mod spec {
         let result = super::derive(input).unwrap();
         let result_str = result.to_string();
 
-        assert!(result_str.contains("impl < T >"), "should have generic impl");
-        assert!(result_str.contains("WorldInventory"), "should implement WorldInventory");
-        assert!(result_str.contains("binding_id"), "should include binding_id field");
+        assert!(
+            result_str.contains("impl < T >"),
+            "should have generic impl"
+        );
+        assert!(
+            result_str.contains("WorldInventory"),
+            "should implement WorldInventory"
+        );
+        assert!(
+            result_str.contains("binding_id"),
+            "should include binding_id field"
+        );
     }
 
     #[test]
@@ -453,8 +497,17 @@ mod spec {
         let result = super::derive(input).unwrap();
         let result_str = result.to_string();
 
-        assert!(result_str.contains("Self :: custom"), "should use custom init");
-        assert!(result_str.contains("WorldInventory"), "should implement WorldInventory");
-        assert!(result_str.contains("npap_metadata"), "should include npap_metadata method");
+        assert!(
+            result_str.contains("Self :: custom"),
+            "should use custom init"
+        );
+        assert!(
+            result_str.contains("WorldInventory"),
+            "should implement WorldInventory"
+        );
+        assert!(
+            result_str.contains("npap_metadata"),
+            "should include npap_metadata method"
+        );
     }
 }

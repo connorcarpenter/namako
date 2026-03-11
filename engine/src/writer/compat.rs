@@ -2,7 +2,7 @@
 
 use derive_more::with_trait::{Deref, DerefMut};
 
-use crate::{event, parser, writer, World, Writer};
+use crate::{World, Writer, event, parser, writer};
 
 /// Wrapper for a [`Writer`] that adds compatibility CLI arguments that are ignored.
 #[derive(Clone, Debug, Deref, DerefMut)]

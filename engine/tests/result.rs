@@ -1,9 +1,6 @@
 mod test_utils;
 
-use namako_engine::{
-    StatsWriter as _, World as _,
-    given, then, when,
-};
+use namako_engine::{StatsWriter as _, World as _, given, then, when};
 
 use test_utils::{World, WorldMut, WorldRef};
 
@@ -35,8 +32,10 @@ fn then_error(ctx: WorldRef) -> Result<(), &'static str> {
 
 #[tokio::test]
 async fn fails() {
-    let writer =
-        World::namako().with_default_cli().run("tests/features/result").await;
+    let writer = World::namako()
+        .with_default_cli()
+        .run("tests/features/result")
+        .await;
 
     assert_eq!(writer.passed_steps(), 3);
     assert_eq!(writer.skipped_steps(), 0);

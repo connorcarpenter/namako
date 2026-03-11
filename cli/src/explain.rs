@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use gherkin::{Feature, GherkinEnv};
 use serde::Serialize;
@@ -119,8 +119,8 @@ pub struct Notes {
 pub fn run(args: ExplainArgs) -> Result<()> {
     let output = compute_explain(&args)?;
 
-    let json = serde_json::to_string_pretty(&output)
-        .context("Failed to serialize explain output")?;
+    let json =
+        serde_json::to_string_pretty(&output).context("Failed to serialize explain output")?;
 
     // Ensure parent directory exists
     if let Some(parent) = args.out.parent() {
@@ -174,16 +174,25 @@ fn compute_explain(args: &ExplainArgs) -> Result<ExplainOutput> {
     let plan = result.plan.unwrap();
 
     // Find the matching scenario
-    let resolved_scenario = plan.scenarios.iter()
+    let resolved_scenario = plan
+        .scenarios
+        .iter()
         .find(|s| s.scenario_key == args.scenario_key)
-        .ok_or_else(|| anyhow::anyhow!(
-            "Scenario key '{}' not found in resolved plan. Available keys: {}",
-            args.scenario_key,
-            plan.scenarios.iter().map(|s| s.scenario_key.as_str()).collect::<Vec<_>>().join(", ")
-        ))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Scenario key '{}' not found in resolved plan. Available keys: {}",
+                args.scenario_key,
+                plan.scenarios
+                    .iter()
+                    .map(|s| s.scenario_key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
 
     // Find the feature file content
-    let (_, feature_source) = features.iter()
+    let (_, feature_source) = features
+        .iter()
         .find(|(path, _)| path == &feature_rel_path)
         .ok_or_else(|| anyhow::anyhow!("Feature file not found: {}", feature_rel_path))?;
 
@@ -193,12 +202,8 @@ fn compute_explain(args: &ExplainArgs) -> Result<ExplainOutput> {
         .map_err(|e| anyhow::anyhow!("Failed to parse feature: {:?}", e))?;
 
     // Extract scenario info from parsed feature
-    let scenario_info = extract_scenario_info(
-        &feature,
-        &feature_rel_path,
-        target_line,
-        &args.scenario_key,
-    )?;
+    let scenario_info =
+        extract_scenario_info(&feature, &feature_rel_path, target_line, &args.scenario_key)?;
 
     // Build ExplainStep list with binding metadata
     let explain_steps = build_explain_steps(resolved_scenario, &registry)?;
@@ -232,10 +237,14 @@ fn parse_scenario_key(key: &str) -> Result<(String, u32)> {
     // Format: "features/path.feature:L<line>"
     let parts: Vec<&str> = key.rsplitn(2, ":L").collect();
     if parts.len() != 2 {
-        bail!("Invalid scenario key format: '{}'. Expected 'path:L<line>'", key);
+        bail!(
+            "Invalid scenario key format: '{}'. Expected 'path:L<line>'",
+            key
+        );
     }
 
-    let line: u32 = parts[0].parse()
+    let line: u32 = parts[0]
+        .parse()
         .with_context(|| format!("Invalid line number in scenario key: {}", parts[0]))?;
     let path = parts[1].to_string();
 
@@ -251,12 +260,14 @@ fn extract_scenario_info(
     // Search in top-level scenarios
     for scenario in &feature.scenarios {
         if scenario.position.line as u32 == target_line {
-            let steps: Vec<StepInfo> = scenario.steps.iter().map(|s| {
-                StepInfo {
+            let steps: Vec<StepInfo> = scenario
+                .steps
+                .iter()
+                .map(|s| StepInfo {
                     kind: normalize_step_keyword(&s.keyword),
                     text: s.value.clone(),
-                }
-            }).collect();
+                })
+                .collect();
 
             let end_line = if let Some(last) = scenario.steps.last() {
                 last.position.line as u32
@@ -283,12 +294,14 @@ fn extract_scenario_info(
     for rule in &feature.rules {
         for scenario in &rule.scenarios {
             if scenario.position.line as u32 == target_line {
-                let steps: Vec<StepInfo> = scenario.steps.iter().map(|s| {
-                    StepInfo {
+                let steps: Vec<StepInfo> = scenario
+                    .steps
+                    .iter()
+                    .map(|s| StepInfo {
                         kind: normalize_step_keyword(&s.keyword),
                         text: s.value.clone(),
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 let end_line = if let Some(last) = scenario.steps.last() {
                     last.position.line as u32
@@ -312,7 +325,11 @@ fn extract_scenario_info(
         }
     }
 
-    bail!("Scenario not found at line {} in {}", target_line, feature_path);
+    bail!(
+        "Scenario not found at line {} in {}",
+        target_line,
+        feature_path
+    );
 }
 
 fn normalize_step_keyword(keyword: &str) -> String {
@@ -333,7 +350,9 @@ fn build_explain_steps(
 
     for step in &scenario.steps {
         // Find the binding in the registry
-        let binding = registry.bindings.iter()
+        let binding = registry
+            .bindings
+            .iter()
             .find(|b| b.binding_id == step.binding_id);
 
         let (expression, impl_hash, source_symbol) = if let Some(b) = binding {
@@ -348,8 +367,12 @@ fn build_explain_steps(
 
         // Source location: use source_symbol if available (per TODO.md §3),
         // otherwise fall back to binding_id prefix
-        let source_location = source_symbol
-            .unwrap_or_else(|| format!("binding:{}:0", &step.binding_id[..16.min(step.binding_id.len())]));
+        let source_location = source_symbol.unwrap_or_else(|| {
+            format!(
+                "binding:{}:0",
+                &step.binding_id[..16.min(step.binding_id.len())]
+            )
+        });
 
         steps.push(ExplainStep {
             step_kind: step.effective_kind.clone(),
@@ -503,10 +526,7 @@ fn discover_features(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Read feature files and return (relative_path, content) pairs.
-fn read_features(
-    specs_dir: &std::path::Path,
-    paths: &[PathBuf],
-) -> Result<Vec<(String, String)>> {
+fn read_features(specs_dir: &std::path::Path, paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
     let mut features = Vec::with_capacity(paths.len());
 
     for path in paths {
@@ -548,8 +568,7 @@ fn fetch_adapter_manifest(adapter_cmd: &str) -> Result<SemanticStepRegistry> {
         bail!("Adapter command failed: {}", stderr);
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("Adapter output is not valid UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("Adapter output is not valid UTF-8")?;
 
     serde_json::from_str(&stdout).context("Failed to parse adapter manifest JSON")
 }

@@ -1,9 +1,6 @@
 use std::{cell::Cell, fs, io::Read as _};
 
-use namako_engine::{
-    World as _, WriterExt as _, cli,
-    given, then, when, writer,
-};
+use namako_engine::{World as _, WriterExt as _, cli, given, then, when, writer};
 use regex::Regex;
 use tempfile::NamedTempFile;
 
@@ -13,8 +10,16 @@ struct WorldMut<'a>(&'a mut World);
 #[derive(Clone, Copy)]
 struct WorldRef<'a>(&'a World);
 
-impl<'a> WorldMut<'a> { fn new(world: &'a mut World) -> Self { Self(world) } }
-impl<'a> WorldRef<'a> { fn new(world: &'a World) -> Self { Self(world) } }
+impl<'a> WorldMut<'a> {
+    fn new(world: &'a mut World) -> Self {
+        Self(world)
+    }
+}
+impl<'a> WorldRef<'a> {
+    fn new(world: &'a World) -> Self {
+        Self(world)
+    }
+}
 
 #[given("{int} sec(s)")]
 #[when("{int} sec(s)")]
@@ -37,9 +42,7 @@ async fn output() {
     let mut file = NamedTempFile::new().unwrap();
     drop(
         World::namako()
-            .with_writer(
-                writer::Libtest::new(file.reopen().unwrap()).normalized(),
-            )
+            .with_writer(writer::Libtest::new(file.reopen().unwrap()).normalized())
             .fail_on_skipped()
             .with_default_cli()
             .run("tests/features/wait")
@@ -74,9 +77,7 @@ async fn output_report_time() {
     let mut file = NamedTempFile::new().unwrap();
     drop(
         World::namako()
-            .with_writer(
-                writer::Libtest::new(file.reopen().unwrap()).normalized(),
-            )
+            .with_writer(writer::Libtest::new(file.reopen().unwrap()).normalized())
             .fail_on_skipped()
             .with_cli(cli)
             .run("tests/features/wait")
@@ -98,8 +99,7 @@ async fn output_report_time() {
     assert_eq!(
         non_deterministic.replace_all(&buffer, ""),
         non_deterministic.replace_all(
-            &fs::read_to_string("tests/libtest/correct-report-time.stdout")
-                .unwrap(),
+            &fs::read_to_string("tests/libtest/correct-report-time.stdout").unwrap(),
             "",
         ),
     );

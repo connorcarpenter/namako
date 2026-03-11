@@ -1,5 +1,3 @@
-
-
 //! Key occurrences in a lifecycle of [Namako] execution.
 //!
 //! The top-level enum here is [`Namako`].
@@ -19,9 +17,7 @@ use std::{
     sync::Arc,
 };
 
-use derive_more::with_trait::{
-    AsRef, Debug, Deref, DerefMut, Display, Error, From, Into,
-};
+use derive_more::with_trait::{AsRef, Debug, Deref, DerefMut, Display, Error, From, Into};
 use ref_cast::RefCast;
 
 use crate::{step, writer::basic::coerce_error};
@@ -114,8 +110,6 @@ impl Metadata {
         self.replace(value).1
     }
 }
-
-
 
 /// Top-level [Namako] run event.
 ///
@@ -391,8 +385,6 @@ pub enum StepError {
     Panic(#[error(not(source))] Info),
 }
 
-
-
 /// Event specific to a particular [Scenario].
 ///
 /// [Scenario]: https://cucumber.io/docs/gherkin/reference#example
@@ -426,9 +418,7 @@ impl<World> Clone for Scenario<World> {
     fn clone(&self) -> Self {
         match self {
             Self::Started => Self::Started,
-            Self::Background(bg, ev) => {
-                Self::Background(bg.clone(), ev.clone())
-            }
+            Self::Background(bg, ev) => Self::Background(bg.clone(), ev.clone()),
             Self::Step(st, ev) => Self::Step(st.clone(), ev.clone()),
             Self::Log(msg) => Self::Log(msg.clone()),
             Self::Finished => Self::Finished,
@@ -450,9 +440,7 @@ impl<World> Scenario<World> {
     /// [`Background`]: gherkin::Background
     /// [`Step`]: gherkin::Step
     #[must_use]
-    pub fn background_step_started(
-        step: impl Into<Source<gherkin::Step>>,
-    ) -> Self {
+    pub fn background_step_started(step: impl Into<Source<gherkin::Step>>) -> Self {
         Self::Background(step.into(), Step::Started)
     }
 
@@ -493,9 +481,7 @@ impl<World> Scenario<World> {
     /// [`Background`]: gherkin::Background
     /// [`Step`]: gherkin::Step
     #[must_use]
-    pub fn background_step_skipped(
-        step: impl Into<Source<gherkin::Step>>,
-    ) -> Self {
+    pub fn background_step_skipped(step: impl Into<Source<gherkin::Step>>) -> Self {
         Self::Background(step.into(), Step::Skipped)
     }
 
@@ -525,10 +511,7 @@ impl<World> Scenario<World> {
         world: Option<Arc<World>>,
         info: impl Into<StepError>,
     ) -> Self {
-        Self::Background(
-            step.into(),
-            Step::Failed(captures, loc, world, info.into()),
-        )
+        Self::Background(step.into(), Step::Failed(captures, loc, world, info.into()))
     }
 }
 

@@ -57,7 +57,11 @@ pub fn validate_plan(
             "⚠️  The following files are in LOCKED surfaces and cannot be modified:\n{}\n\n\
             RECOMMENDATION: Focus only on files in UNLOCKED surfaces, or request that the \
             appropriate surface be unlocked if this change is necessary.",
-            violations.iter().map(|v| format!("  - {}", v)).collect::<Vec<_>>().join("\n")
+            violations
+                .iter()
+                .map(|v| format!("  - {}", v))
+                .collect::<Vec<_>>()
+                .join("\n")
         )
     };
 
@@ -119,8 +123,17 @@ mod tests {
 
     #[test]
     fn test_glob_matching() {
-        assert!(matches_any_pattern("test/steps.rs", &["test/**".to_string()]));
-        assert!(matches_any_pattern("specs/feature.feature", &["specs/**/*.feature".to_string()]));
-        assert!(!matches_any_pattern("src/main.rs", &["test/**".to_string()]));
+        assert!(matches_any_pattern(
+            "test/steps.rs",
+            &["test/**".to_string()]
+        ));
+        assert!(matches_any_pattern(
+            "specs/feature.feature",
+            &["specs/**/*.feature".to_string()]
+        ));
+        assert!(!matches_any_pattern(
+            "src/main.rs",
+            &["test/**".to_string()]
+        ));
     }
 }

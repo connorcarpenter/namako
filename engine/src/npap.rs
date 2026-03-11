@@ -280,8 +280,8 @@ where
         .collect();
 
     // Serialize to canonical JSON and hash
-    let json = canonical_json_encode(&fingerprint)
-        .expect("file fingerprint should always serialize");
+    let json =
+        canonical_json_encode(&fingerprint).expect("file fingerprint should always serialize");
     blake3_256_lowerhex(json.as_bytes())
 }
 
@@ -425,8 +425,7 @@ impl SemanticStepRegistry {
             bindings: &bindings,
         };
 
-        let json = canonical_json_encode(&for_hashing)
-            .expect("registry should serialize");
+        let json = canonical_json_encode(&for_hashing).expect("registry should serialize");
         let step_registry_hash = blake3_256_lowerhex(json.as_bytes());
 
         Self {
@@ -530,8 +529,7 @@ impl ResolvedPlan {
             scenarios: &scenarios,
         };
 
-        let json = canonical_json_encode(&for_hashing)
-            .expect("plan should serialize");
+        let json = canonical_json_encode(&for_hashing).expect("plan should serialize");
         let resolved_plan_hash = blake3_256_lowerhex(json.as_bytes());
 
         let header = ResolvedPlanHeader {
@@ -613,8 +611,7 @@ impl PlannedStep {
             datatable: datatable.as_ref(),
         };
 
-        let json = canonical_json_encode(&payload)
-            .expect("payload should serialize");
+        let json = canonical_json_encode(&payload).expect("payload should serialize");
         let payload_hash = blake3_256_lowerhex(json.as_bytes());
 
         Self {
@@ -695,8 +692,7 @@ impl RunReport {
             scenarios: &scenarios,
         };
 
-        let json = canonical_json_encode(&for_hashing)
-            .expect("report should serialize");
+        let json = canonical_json_encode(&for_hashing).expect("report should serialize");
         let run_report_hash = blake3_256_lowerhex(json.as_bytes());
 
         let header = RunReportHeader {
@@ -967,10 +963,7 @@ mod tests {
 
     #[test]
     fn test_feature_fingerprint_deterministic() {
-        let files = vec![
-            ("a.feature", "Feature: A"),
-            ("b.feature", "Feature: B"),
-        ];
+        let files = vec![("a.feature", "Feature: A"), ("b.feature", "Feature: B")];
         let h1 = compute_feature_fingerprint(files.clone().into_iter());
         let h2 = compute_feature_fingerprint(files.into_iter());
         assert_eq!(h1, h2);
@@ -979,14 +972,8 @@ mod tests {
     #[test]
     fn test_feature_fingerprint_order_independent() {
         // Files should be sorted by path, so order of input shouldn't matter
-        let files1 = vec![
-            ("b.feature", "Feature: B"),
-            ("a.feature", "Feature: A"),
-        ];
-        let files2 = vec![
-            ("a.feature", "Feature: A"),
-            ("b.feature", "Feature: B"),
-        ];
+        let files1 = vec![("b.feature", "Feature: B"), ("a.feature", "Feature: A")];
+        let files2 = vec![("a.feature", "Feature: A"), ("b.feature", "Feature: B")];
         let h1 = compute_feature_fingerprint(files1.into_iter());
         let h2 = compute_feature_fingerprint(files2.into_iter());
         assert_eq!(h1, h2);
@@ -1238,13 +1225,12 @@ mod tests {
             "sr_hash".to_string(),
             scenarios.clone(),
         );
-        let plan2 = ResolvedPlan::new(
-            "ff_hash".to_string(),
-            "sr_hash".to_string(),
-            scenarios,
-        );
+        let plan2 = ResolvedPlan::new("ff_hash".to_string(), "sr_hash".to_string(), scenarios);
 
-        assert_eq!(plan1.header.resolved_plan_hash, plan2.header.resolved_plan_hash);
+        assert_eq!(
+            plan1.header.resolved_plan_hash,
+            plan2.header.resolved_plan_hash
+        );
         assert_eq!(plan1.header.resolved_plan_hash.len(), 64);
 
         // Scenarios should be sorted by scenario_key
@@ -1254,13 +1240,11 @@ mod tests {
 
     #[test]
     fn test_run_report_hash() {
-        let results = vec![
-            ScenarioResult {
-                scenario_key: "test:L1".to_string(),
-                status: ScenarioStatus::Passed,
-                steps: vec![],
-            },
-        ];
+        let results = vec![ScenarioResult {
+            scenario_key: "test:L1".to_string(),
+            status: ScenarioStatus::Passed,
+            steps: vec![],
+        }];
 
         let report = RunReport::new(
             "ff_hash".to_string(),

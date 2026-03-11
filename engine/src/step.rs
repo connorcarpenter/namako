@@ -1,5 +1,3 @@
-
-
 //! Definitions for a [`Collection`] which is used to store [`Step`] [`Fn`]s and
 //! corresponding [`Regex`] patterns.
 //!
@@ -20,13 +18,16 @@ use itertools::Itertools as _;
 use regex::Regex;
 
 /// Alias for a [`gherkin::Step`] function that returns a [`LocalBoxFuture`].
-pub type Step<World> =
-    for<'a> fn(&'a mut World, Context) -> LocalBoxFuture<'a, ()>;
+pub type Step<World> = for<'a> fn(&'a mut World, Context) -> LocalBoxFuture<'a, ()>;
 
 /// Alias for a [`Step`] with [`regex::CaptureLocations`], [`Location`] and
 /// [`Context`] returned by [`Collection::find()`].
-pub type WithContext<'me, World> =
-    (&'me Step<World>, regex::CaptureLocations, Option<Location>, Context);
+pub type WithContext<'me, World> = (
+    &'me Step<World>,
+    regex::CaptureLocations,
+    Option<Location>,
+    Context,
+);
 
 /// Collection of [`Step`]s.
 ///
@@ -99,12 +100,7 @@ impl<World> Collection<World> {
     ///
     /// [Given]: https://cucumber.io/docs/gherkin/reference#given
     #[must_use]
-    pub fn given(
-        mut self,
-        loc: Option<Location>,
-        regex: Regex,
-        step: Step<World>,
-    ) -> Self {
+    pub fn given(mut self, loc: Option<Location>, regex: Regex, step: Step<World>) -> Self {
         _ = self.given.insert((regex.into(), loc), step);
         self
     }
@@ -113,12 +109,7 @@ impl<World> Collection<World> {
     ///
     /// [When]: https://cucumber.io/docs/gherkin/reference#when
     #[must_use]
-    pub fn when(
-        mut self,
-        loc: Option<Location>,
-        regex: Regex,
-        step: Step<World>,
-    ) -> Self {
+    pub fn when(mut self, loc: Option<Location>, regex: Regex, step: Step<World>) -> Self {
         _ = self.when.insert((regex.into(), loc), step);
         self
     }
@@ -127,12 +118,7 @@ impl<World> Collection<World> {
     ///
     /// [Then]: https://cucumber.io/docs/gherkin/reference#then
     #[must_use]
-    pub fn then(
-        mut self,
-        loc: Option<Location>,
-        regex: Regex,
-        step: Step<World>,
-    ) -> Self {
+    pub fn then(mut self, loc: Option<Location>, regex: Regex, step: Step<World>) -> Self {
         _ = self.then.insert((regex.into(), loc), step);
         self
     }
@@ -163,21 +149,20 @@ impl<World> Collection<World> {
             })
             .collect::<Vec<_>>();
 
-        let (_, loc, whole_match, captures, names, step_fn) =
-            match captures.len() {
-                0 => return Ok(None),
-                // Instead of `.unwrap()` to avoid documenting `# Panics`.
-                1 => captures.pop().unwrap_or_else(|| unreachable!()),
-                _ => {
-                    return Err(AmbiguousMatchError {
-                        possible_matches: captures
-                            .into_iter()
-                            .map(|(re, loc, ..)| (re.clone(), *loc))
-                            .sorted()
-                            .collect(),
-                    });
-                }
-            };
+        let (_, loc, whole_match, captures, names, step_fn) = match captures.len() {
+            0 => return Ok(None),
+            // Instead of `.unwrap()` to avoid documenting `# Panics`.
+            1 => captures.pop().unwrap_or_else(|| unreachable!()),
+            _ => {
+                return Err(AmbiguousMatchError {
+                    possible_matches: captures
+                        .into_iter()
+                        .map(|(re, loc, ..)| (re.clone(), *loc))
+                        .sorted()
+                        .collect(),
+                });
+            }
+        };
 
         #[expect( // intentional
             clippy::string_slice,
@@ -185,21 +170,26 @@ impl<World> Collection<World> {
         )]
         let matches = names
             .map(|opt| opt.map(str::to_owned))
-            .zip(iter::once(whole_match.as_str().to_owned()).chain(
-                (1..captures.len()).map(|group_id| {
-                    captures
-                        .get(group_id)
-                        .map_or("", |(s, e)| &step.value[s..e])
-                        .to_owned()
-                }),
-            ))
+            .zip(
+                iter::once(whole_match.as_str().to_owned()).chain((1..captures.len()).map(
+                    |group_id| {
+                        captures
+                            .get(group_id)
+                            .map_or("", |(s, e)| &step.value[s..e])
+                            .to_owned()
+                    },
+                )),
+            )
             .collect();
 
         Ok(Some((
             step_fn,
             captures,
             *loc,
-            Context { step: step.clone(), matches },
+            Context {
+                step: step.clone(),
+                matches,
+            },
         )))
     }
 }

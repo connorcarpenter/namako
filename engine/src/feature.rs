@@ -1,5 +1,3 @@
-
-
 //! [`gherkin::Feature`] extension.
 
 use std::{
@@ -105,8 +103,7 @@ impl Ext for gherkin::Feature {
     }
 
     fn count_scenarios(&self) -> usize {
-        self.scenarios.len()
-            + self.rules.iter().map(|r| r.scenarios.len()).sum::<usize>()
+        self.scenarios.len() + self.rules.iter().map(|r| r.scenarios.len()).sum::<usize>()
     }
 
     fn count_steps(&self) -> usize {
@@ -143,9 +140,8 @@ fn expand_scenario(
     // TODO: Switch back to `lazy-regex::regex!()` once it migrates to `std`:
     //       https://github.com/Canop/lazy-regex/issues/10
     #[expect(clippy::unwrap_used, reason = "regex is valid")]
-    static TEMPLATE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"<([^>\s](?:[^>\s]?|[^>\t\n\r\v\f]*[^>\s]))>").unwrap()
-    });
+    static TEMPLATE_REGEX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"<([^>\s](?:[^>\s]?|[^>\t\n\r\v\f]*[^>\s]))>").unwrap());
 
     if scenario.examples.is_empty() {
         return vec![Ok(scenario)];
@@ -155,7 +151,11 @@ fn expand_scenario(
         .examples
         .iter()
         .filter_map(|ex| {
-            ex.table.as_ref()?.rows.split_first().map(|(h, v)| (h, v, ex))
+            ex.table
+                .as_ref()?
+                .rows
+                .split_first()
+                .map(|(h, v)| (h, v, ex))
         })
         .flat_map(|(header, vals, example)| {
             vals.iter()
@@ -178,9 +178,7 @@ fn expand_scenario(
                         let name = cap.get(1).unwrap().as_str();
 
                         row.clone()
-                            .find_map(|(k, v)| {
-                                (name == k).then_some(v.as_str())
-                            })
+                            .find_map(|(k, v)| (name == k).then_some(v.as_str()))
                             .unwrap_or_else(|| {
                                 err = Some(ExpandExamplesError {
                                     pos,
@@ -204,14 +202,15 @@ fn expand_scenario(
 
             expanded.tags.extend(tags.cloned());
 
-            expanded.name =
-                replace_templates(&expanded.name, expanded.position)?;
+            expanded.name = replace_templates(&expanded.name, expanded.position)?;
             for s in &mut expanded.steps {
                 for value in iter::once(&mut s.value)
                     .chain(s.docstring.iter_mut())
-                    .chain(s.table.iter_mut().flat_map(|t| {
-                        t.rows.iter_mut().flat_map(|r| r.iter_mut())
-                    }))
+                    .chain(
+                        s.table
+                            .iter_mut()
+                            .flat_map(|t| t.rows.iter_mut().flat_map(|r| r.iter_mut())),
+                    )
                 {
                     *value = replace_templates(value, s.position)?;
                 }

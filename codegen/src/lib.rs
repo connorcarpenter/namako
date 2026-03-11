@@ -157,9 +157,9 @@ mod world;
 // TODO: Remove once tests run without complains about it.
 #[cfg(test)]
 mod only_used_in_doc_tests {
-    use namako_engine as _;
     use derive_more as _;
     use futures as _;
+    use namako_engine as _;
     use tempfile as _;
     use tokio as _;
 }

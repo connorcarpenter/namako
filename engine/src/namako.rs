@@ -1,5 +1,3 @@
-
-
 //! Top-level [Namako] executor.
 //!
 //! [Namako]: https://cucumber.io
@@ -11,12 +9,8 @@ use futures::StreamExt as _;
 use regex::Regex;
 
 use crate::{
-    Event, Parser, Runner, ScenarioType, Step, World, Writer, WriterExt as _,
-    cli, event, parser,
-    runner,
-    step,
-    tag::Ext as _,
-    writer,
+    Event, Parser, Runner, ScenarioType, Step, World, Writer, WriterExt as _, cli, event, parser,
+    runner, step, tag::Ext as _, writer,
 };
 
 /// Top-level [Namako] executor.
@@ -95,10 +89,7 @@ where
 
     /// Replaces [`Parser`].
     #[must_use]
-    pub fn with_parser<NewP, NewI>(
-        self,
-        parser: NewP,
-    ) -> Namako<W, NewP, NewI, R, Wr, Cli>
+    pub fn with_parser<NewP, NewI>(self, parser: NewP) -> Namako<W, NewP, NewI, R, Wr, Cli>
     where
         NewP: Parser<NewI>,
     {
@@ -115,10 +106,7 @@ where
 
     /// Replaces [`Runner`].
     #[must_use]
-    pub fn with_runner<NewR>(
-        self,
-        runner: NewR,
-    ) -> Namako<W, P, I, NewR, Wr, Cli>
+    pub fn with_runner<NewR>(self, runner: NewR) -> Namako<W, P, I, NewR, Wr, Cli>
     where
         NewR: Runner<W>,
     {
@@ -135,10 +123,7 @@ where
 
     /// Replaces [`Writer`].
     #[must_use]
-    pub fn with_writer<NewWr>(
-        self,
-        writer: NewWr,
-    ) -> Namako<W, P, I, R, NewWr, Cli>
+    pub fn with_writer<NewWr>(self, writer: NewWr) -> Namako<W, P, I, R, NewWr, Cli>
     where
         NewWr: Writer<W>,
     {
@@ -188,9 +173,7 @@ where
     /// [`Scenario`]: gherkin::Scenario
     /// [`Skipped`]: event::Step::Skipped
     #[must_use]
-    pub fn repeat_skipped(
-        self,
-    ) -> Namako<W, P, I, R, writer::Repeat<W, Wr>, Cli>
+    pub fn repeat_skipped(self) -> Namako<W, P, I, R, writer::Repeat<W, Wr>, Cli>
     where
         Wr: writer::NonTransforming,
     {
@@ -253,9 +236,7 @@ where
     ///
     /// [`Failed`]: event::Step::Failed
     #[must_use]
-    pub fn repeat_failed(
-        self,
-    ) -> Namako<W, P, I, R, writer::Repeat<W, Wr>, Cli>
+    pub fn repeat_failed(self) -> Namako<W, P, I, R, writer::Repeat<W, Wr>, Cli>
     where
         Wr: writer::NonTransforming,
     {
@@ -346,10 +327,7 @@ where
     ///
     /// [`Failed`]: event::Step::Failed
     #[must_use]
-    pub fn repeat_if<F>(
-        self,
-        filter: F,
-    ) -> Namako<W, P, I, R, writer::Repeat<W, Wr, F>, Cli>
+    pub fn repeat_if<F>(self, filter: F) -> Namako<W, P, I, R, writer::Repeat<W, Wr, F>, Cli>
     where
         F: Fn(&parser::Result<Event<event::Namako<W>>>) -> bool,
         Wr: writer::NonTransforming,
@@ -422,9 +400,7 @@ where
     /// [`Skipped`]: event::Step::Skipped
     /// [`Step`]: gherkin::Step
     #[must_use]
-    pub fn fail_on_skipped(
-        self,
-    ) -> Namako<W, P, I, R, writer::FailOnSkipped<Wr>, Cli> {
+    pub fn fail_on_skipped(self) -> Namako<W, P, I, R, writer::FailOnSkipped<Wr>, Cli> {
         Namako {
             parser: self.parser,
             runner: self.runner,
@@ -509,11 +485,7 @@ where
         filter: Filter,
     ) -> Namako<W, P, I, R, writer::FailOnSkipped<Wr, Filter>, Cli>
     where
-        Filter: Fn(
-            &gherkin::Feature,
-            Option<&gherkin::Rule>,
-            &gherkin::Scenario,
-        ) -> bool,
+        Filter: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool,
     {
         Namako {
             parser: self.parser,
@@ -611,7 +583,12 @@ where
     where
         CustomCli: clap::Args,
     {
-        let Self { parser, runner, writer, .. } = self;
+        let Self {
+            parser,
+            runner,
+            writer,
+            ..
+        } = self;
         Namako {
             parser,
             runner,
@@ -683,12 +660,7 @@ where
     /// [`Scenario`]: gherkin::Scenario
     pub async fn filter_run<F>(self, input: I, filter: F) -> Wr
     where
-        F: Fn(
-                &gherkin::Feature,
-                Option<&gherkin::Rule>,
-                &gherkin::Scenario,
-            ) -> bool
-            + 'static,
+        F: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool + 'static,
     {
         let cli::Opts {
             re_filter,
@@ -722,7 +694,12 @@ where
             )
         };
 
-        let Self { parser, runner, mut writer, .. } = self;
+        let Self {
+            parser,
+            runner,
+            mut writer,
+            ..
+        } = self;
 
         let features = parser.parse(input, parser_cli);
 
@@ -843,30 +820,20 @@ where
 {
 }
 
-impl<W, I, P, Wr, F, Cli>
-
-    Namako<W, P, I, runner::Basic<W, F>, Wr, Cli>
+impl<W, I, P, Wr, F, Cli> Namako<W, P, I, runner::Basic<W, F>, Wr, Cli>
 where
     W: World,
     P: Parser<I>,
     Wr: Writer<W>,
     Cli: clap::Args,
-    F: Fn(
-            &gherkin::Feature,
-            Option<&gherkin::Rule>,
-            &gherkin::Scenario,
-        ) -> ScenarioType
-        + 'static,
+    F: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> ScenarioType + 'static,
 {
     /// If `max` is [`Some`] number of concurrently executed [`Scenario`]s will
     /// be limited.
     ///
     /// [`Scenario`]: gherkin::Scenario
     #[must_use]
-    pub fn max_concurrent_scenarios(
-        mut self,
-        max: impl Into<Option<usize>>,
-    ) -> Self {
+    pub fn max_concurrent_scenarios(mut self, max: impl Into<Option<usize>>) -> Self {
         self.runner = self.runner.max_concurrent_scenarios(max);
         self
     }
@@ -892,14 +859,16 @@ where
         func: Which,
     ) -> Namako<W, P, I, runner::Basic<W, Which>, Wr, Cli>
     where
-        Which: Fn(
-                &gherkin::Feature,
-                Option<&gherkin::Rule>,
-                &gherkin::Scenario,
-            ) -> ScenarioType
+        Which: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> ScenarioType
             + 'static,
     {
-        let Self { parser, runner, writer, cli, .. } = self;
+        let Self {
+            parser,
+            runner,
+            writer,
+            cli,
+            ..
+        } = self;
         Namako {
             parser,
             runner: runner.which_scenario(func),
@@ -909,12 +878,6 @@ where
             _parser_input: PhantomData,
         }
     }
-
-
-
-
-
-
 
     /// Replaces [`Collection`] of [`Step`]s.
     ///
@@ -1033,12 +996,7 @@ where
     /// [`Scenario`]: gherkin::Scenario
     pub async fn filter_run_and_exit<Filter>(self, input: I, filter: Filter)
     where
-        Filter: Fn(
-                &gherkin::Feature,
-                Option<&gherkin::Rule>,
-                &gherkin::Scenario,
-            ) -> bool
-            + 'static,
+        Filter: Fn(&gherkin::Feature, Option<&gherkin::Rule>, &gherkin::Scenario) -> bool + 'static,
     {
         let writer = self.filter_run(input, filter).await;
         if writer.execution_has_failed() {

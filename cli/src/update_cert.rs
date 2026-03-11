@@ -9,15 +9,14 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use walkdir::WalkDir;
 
 use namako_engine::engine::ResolutionEngine;
 use namako_engine::npap::{
-    Certification, CertificationIdentity, CertificationMetadata,
-    RunReport, SemanticStepRegistry, ScenarioStatus,
-    HASH_CONTRACT_VERSION, NPAP_VERSION,
+    Certification, CertificationIdentity, CertificationMetadata, RunReport, ScenarioStatus,
+    SemanticStepRegistry, HASH_CONTRACT_VERSION, NPAP_VERSION,
 };
 
 /// Arguments for the update-cert command.
@@ -53,11 +52,13 @@ pub fn run(args: UpdateCertArgs) -> Result<()> {
     // Step 1: Read the run report
     let run_report_json = std::fs::read_to_string(&args.run_report)
         .with_context(|| format!("Failed to read run report: {}", args.run_report.display()))?;
-    let run_report: RunReport = serde_json::from_str(&run_report_json)
-        .context("Failed to parse run report JSON")?;
+    let run_report: RunReport =
+        serde_json::from_str(&run_report_json).context("Failed to parse run report JSON")?;
 
     // Step 2: Check that all scenarios passed
-    let failed_scenarios: Vec<_> = run_report.scenarios.iter()
+    let failed_scenarios: Vec<_> = run_report
+        .scenarios
+        .iter()
         .filter(|s| s.status != ScenarioStatus::Passed)
         .map(|s| &s.scenario_key)
         .collect();
@@ -65,7 +66,8 @@ pub fn run(args: UpdateCertArgs) -> Result<()> {
     if !failed_scenarios.is_empty() {
         bail!(
             "REFUSED: Cannot update certification with failing scenarios:\n  {}",
-            failed_scenarios.iter()
+            failed_scenarios
+                .iter()
                 .map(|s| s.as_str())
                 .collect::<Vec<_>>()
                 .join("\n  ")

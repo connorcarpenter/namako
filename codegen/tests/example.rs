@@ -1,9 +1,7 @@
 use std::{fs, io};
 
 use namako_engine::{
-    StatsWriter as _, World,
-    codegen::AssertOutcome,
-    gherkin::Step, given, then, when,
+    StatsWriter as _, World, codegen::AssertOutcome, gherkin::Step, given, then, when,
 };
 
 use tempfile::TempDir;
@@ -17,7 +15,10 @@ pub struct MyWorld {
 
 impl MyWorld {
     fn new() -> io::Result<Self> {
-        Ok(Self { foo: 0, dir: TempDir::new()? })
+        Ok(Self {
+            foo: 0,
+            dir: TempDir::new()?,
+        })
     }
 }
 
@@ -28,8 +29,16 @@ pub struct MyWorldMut<'a>(&'a mut MyWorld);
 #[derive(Clone, Copy)]
 pub struct MyWorldRef<'a>(&'a MyWorld);
 
-impl<'a> MyWorldMut<'a> { fn new(world: &'a mut MyWorld) -> Self { Self(world) } }
-impl<'a> MyWorldRef<'a> { fn new(world: &'a MyWorld) -> Self { Self(world) } }
+impl<'a> MyWorldMut<'a> {
+    fn new(world: &'a mut MyWorld) -> Self {
+        Self(world)
+    }
+}
+impl<'a> MyWorldRef<'a> {
+    fn new(world: &'a MyWorld) -> Self {
+        Self(world)
+    }
+}
 
 #[given("non-regex")]
 fn test_non_regex_sync(w: MyWorldMut) {
@@ -48,12 +57,7 @@ fn test_foo_is_not_bar(_w: MyWorldMut, _foo: String, _bar: String) {}
 
 #[given("{word} is {int}")]
 #[when(r"{word} is {int}")]
-async fn test_regex_async(
-    w: MyWorldMut,
-    step: String,
-    #[step] ctx: &Step,
-    num: usize,
-) {
+async fn test_regex_async(w: MyWorldMut, step: String, #[step] ctx: &Step, num: usize) {
     assert_eq!(step, "foo");
     assert_eq!(num, 0);
     assert_eq!(ctx.value, "foo is 0");
@@ -71,21 +75,14 @@ fn test_regex_sync_slice(w: MyWorldMut, step: &Step, matches: &[String]) {
 }
 
 #[when("I write \"{word}\" to '{word}'")]
-fn test_return_result_write(
-    w: MyWorldMut,
-    what: String,
-    filename: String,
-) -> io::Result<()> {
+fn test_return_result_write(w: MyWorldMut, what: String, filename: String) -> io::Result<()> {
     let mut path = w.0.dir.path().to_path_buf();
     path.push(filename);
     fs::write(path, what)
 }
 
 #[then("the file {string} should contain {string}")]
-fn test_return_result_read(
-    w: MyWorldRef,
-    inputs: &[String],
-) {
+fn test_return_result_read(w: MyWorldRef, inputs: &[String]) {
     let mut path = w.0.dir.path().to_path_buf();
     path.push(inputs[0].clone());
 
@@ -94,10 +91,7 @@ fn test_return_result_read(
 }
 
 #[then("{string} contains {string}")]
-fn test_return_result_read_slice(
-    w: MyWorldRef,
-    inputs: &[String],
-) {
+fn test_return_result_read_slice(w: MyWorldRef, inputs: &[String]) {
     let mut path = w.0.dir.path().to_path_buf();
     path.push(inputs[0].clone());
 
@@ -116,8 +110,7 @@ fn test_then_assert_outcome(_w: MyWorldRef, word: String) -> AssertOutcome<()> {
 
 #[tokio::main]
 async fn main() {
-    let features = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/features");
+    let features = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/features");
 
     let writer = MyWorld::namako()
         .max_concurrent_scenarios(None)

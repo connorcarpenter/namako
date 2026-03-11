@@ -3,11 +3,8 @@ mod test_utils;
 use std::{env, panic::AssertUnwindSafe};
 
 use clap::Parser;
-use namako_engine::{
-    World as _, cli,
-    given, then,
-};
 use futures::FutureExt as _;
+use namako_engine::{World as _, cli, given, then};
 use serial_test::{parallel, serial};
 
 use test_utils::{World, WorldMut, WorldRef};
@@ -53,11 +50,14 @@ async fn tags_option_filters_all_scenarios_with_subcommand() {
     ])
     .expect("Invalid command line");
 
-    let res =
-        World::namako().with_cli(cli).run_and_exit("tests/features/cli");
+    let res = World::namako()
+        .with_cli(cli)
+        .run_and_exit("tests/features/cli");
 
-    let err =
-        AssertUnwindSafe(res).catch_unwind().await.expect_err("should err");
+    let err = AssertUnwindSafe(res)
+        .catch_unwind()
+        .await
+        .expect_err("should err");
     let err = err.downcast_ref::<String>().unwrap();
 
     assert_eq!(err, "2 steps failed");
@@ -76,11 +76,14 @@ async fn tags_option_filters_scenario1_with_subcommand() {
     ])
     .expect("Invalid command line");
 
-    let res =
-        World::namako().with_cli(cli).run_and_exit("tests/features/cli");
+    let res = World::namako()
+        .with_cli(cli)
+        .run_and_exit("tests/features/cli");
 
-    let err =
-        AssertUnwindSafe(res).catch_unwind().await.expect_err("should err");
+    let err = AssertUnwindSafe(res)
+        .catch_unwind()
+        .await
+        .expect_err("should err");
     let err = err.downcast_ref::<String>().unwrap();
 
     assert_eq!(err, "1 step failed");
@@ -91,17 +94,17 @@ async fn tags_option_filters_scenario1_with_subcommand() {
 #[tokio::test]
 #[parallel]
 async fn tags_option_filters_scenario1_no_subcommand() {
-    let cli = cli::Opts::<_, _, _, CustomCli>::try_parse_from([
-        "test",
-        "--tags=@scenario-1",
-    ])
-    .expect("Invalid command line");
+    let cli = cli::Opts::<_, _, _, CustomCli>::try_parse_from(["test", "--tags=@scenario-1"])
+        .expect("Invalid command line");
 
-    let res =
-        World::namako().with_cli(cli).run_and_exit("tests/features/cli");
+    let res = World::namako()
+        .with_cli(cli)
+        .run_and_exit("tests/features/cli");
 
-    let err =
-        AssertUnwindSafe(res).catch_unwind().await.expect_err("should err");
+    let err = AssertUnwindSafe(res)
+        .catch_unwind()
+        .await
+        .expect_err("should err");
     let err = err.downcast_ref::<String>().unwrap();
 
     assert_eq!(err, "1 step failed");
@@ -116,14 +119,17 @@ async fn tags_option_filters_scenario1_via_env() {
         env::set_var("NAMAKO_FILTER_TAGS", "@scenario-1");
     }
 
-    let cli = cli::Opts::<_, _, _, CustomCli>::try_parse_from(["test"])
-        .expect("Invalid command line");
+    let cli =
+        cli::Opts::<_, _, _, CustomCli>::try_parse_from(["test"]).expect("Invalid command line");
 
-    let res =
-        World::namako().with_cli(cli).run_and_exit("tests/features/cli");
+    let res = World::namako()
+        .with_cli(cli)
+        .run_and_exit("tests/features/cli");
 
-    let err =
-        AssertUnwindSafe(res).catch_unwind().await.expect_err("should err");
+    let err = AssertUnwindSafe(res)
+        .catch_unwind()
+        .await
+        .expect_err("should err");
     let err = err.downcast_ref::<String>().unwrap();
 
     assert_eq!(err, "1 step failed");
