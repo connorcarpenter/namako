@@ -94,6 +94,7 @@ impl<T: Servling + ?Sized> ChatPlanner for T {
             prompt,
             model: None,
             working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            writable_roots: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
             max_runtime_seconds: 60,
             stream_output: false,
             input_file: None,
