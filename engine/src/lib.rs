@@ -157,8 +157,8 @@ pub mod parser;
 pub mod runner;
 pub mod step;
 pub mod tag;
-pub mod writer;
 pub mod world;
+pub mod writer;
 
 #[cfg(feature = "macros")]
 pub mod codegen;
@@ -203,6 +203,6 @@ pub use self::{
     parser::Parser,
     runner::{Runner, ScenarioType},
     step::Step,
-    writer::{Arbitrary as ArbitraryWriter, Ext as WriterExt, Stats as StatsWriter, Writer},
     world::World,
+    writer::{Arbitrary as ArbitraryWriter, Ext as WriterExt, Stats as StatsWriter, Writer},
 };
