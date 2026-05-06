@@ -8,8 +8,6 @@ use crate::{
     namako::DefaultNamako,
     step,
 };
-#[cfg(feature = "macros")]
-use namako_codegen::{given, then, when};
 
 /// Represents a shared user-defined state for a [Namako] run.
 /// It lives on per-[scenario][0] basis.

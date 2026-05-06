@@ -505,8 +505,7 @@ async fn execute<W>(
             }
         }
 
-        while let Ok(Some((id, feat, rule, scenario_failed))) = storage.finished_receiver.try_next()
-        {
+        while let Ok((id, feat, rule, scenario_failed)) = storage.finished_receiver.try_recv() {
             if let Some(rule) = rule
                 && let Some(f) = storage.rule_scenario_finished(feat.clone(), rule)
             {

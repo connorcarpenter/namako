@@ -179,9 +179,6 @@ mod only_used_in_doc_tests_and_book {
     use tokio as _;
 }
 
-use std::fmt::Display;
-#[cfg(feature = "macros")]
-use std::{fmt::Debug, path::Path};
 
 pub use gherkin;
 #[cfg(feature = "macros")]
@@ -191,11 +188,6 @@ pub use namako_codegen::{Parameter, World, given, then, when};
 #[cfg(feature = "macros")]
 #[doc(inline)]
 pub use self::codegen::Parameter;
-#[cfg(feature = "macros")]
-use self::{
-    codegen::{StepConstructor as _, WorldInventory},
-    namako::DefaultNamako,
-};
 #[doc(inline)]
 pub use self::{
     event::Event,
