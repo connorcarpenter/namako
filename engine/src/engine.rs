@@ -349,7 +349,7 @@ impl ResolutionEngine {
 
         for binding in &registry.bindings {
             // Convert cucumber expression to regex pattern
-            match cucumber_expression_to_regex(&binding.expression) {
+            match cucumber_expression_to_regex(&binding.expression, &registry.custom_parameters) {
                 Ok((regex, capture_count)) => {
                     let compiled = CompiledBinding {
                         binding: binding.clone(),
@@ -832,9 +832,20 @@ fn is_deferred_scenario(scenario: &gherkin::Scenario) -> bool {
 /// Converts a cucumber expression to a regex pattern.
 ///
 /// Returns (compiled regex, number of capture groups).
-fn cucumber_expression_to_regex(expr: &str) -> Result<(Regex, usize), String> {
-    // Use cucumber_expressions crate's regex() static method
-    let regex = Expression::regex(expr).map_err(|e| format!("Failed to parse expression: {e}"))?;
+fn cucumber_expression_to_regex(
+    expr: &str,
+    custom_params: &[crate::npap::CustomParameterDef],
+) -> Result<(Regex, usize), String> {
+    let regex = if custom_params.is_empty() {
+        Expression::regex(expr).map_err(|e| format!("Failed to parse expression: {e}"))?
+    } else {
+        let params: HashMap<&str, &str> = custom_params
+            .iter()
+            .map(|p| (p.name.as_str(), p.regex.as_str()))
+            .collect();
+        Expression::regex_with_parameters(expr, &params)
+            .map_err(|e| format!("Failed to parse expression: {e}"))?
+    };
 
     // Count capture groups (subtract 1 for the full match group 0)
     let capture_count = regex.captures_len().saturating_sub(1);
@@ -1054,14 +1065,14 @@ Feature: Signature mismatch
 
     #[test]
     fn test_cucumber_expression_to_regex() {
-        let (regex, count) = cucumber_expression_to_regex("a user named {string}").unwrap();
+        let (regex, count) = cucumber_expression_to_regex("a user named {string}", &[]).unwrap();
         assert!(regex.is_match("a user named \"Alice\""));
         assert!(
             count >= 1,
             "expected at least 1 capture for {{string}}, got {count}"
         );
 
-        let (regex, count) = cucumber_expression_to_regex("I have {int} apples").unwrap();
+        let (regex, count) = cucumber_expression_to_regex("I have {int} apples", &[]).unwrap();
         assert!(regex.is_match("I have 5 apples"));
         // {int} may have multiple internal groups, just verify it works
         assert!(

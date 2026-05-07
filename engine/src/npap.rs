@@ -388,6 +388,22 @@ fn normalize_path(path: &str) -> String {
 
 use serde::Deserialize;
 
+/// A custom cucumber expression parameter type (e.g. `{client}` → `[A-Za-z][A-Za-z0-9_]*`).
+///
+/// These are emitted by adapters that define typed vocabulary parameters beyond the
+/// built-in `{int}`, `{string}`, `{word}`, `{float}`. The engine uses them when
+/// compiling binding expressions into regexes for resolution.
+///
+/// Not included in the `step_registry_hash` so that adding a new vocab type does
+/// not invalidate existing certification artifacts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomParameterDef {
+    /// The parameter name, as it appears inside `{…}` in cucumber expressions.
+    pub name: String,
+    /// The regex fragment (without anchors) that this parameter matches.
+    pub regex: String,
+}
+
 /// Semantic Step Registry returned by adapter manifest command.
 ///
 /// Per GOLD_PLAN §6.2.1, this is the authoritative list of bindings
@@ -406,17 +422,33 @@ pub struct SemanticStepRegistry {
     pub step_registry_hash: String,
     /// All registered step bindings, sorted by binding_id
     pub bindings: Vec<SemanticBinding>,
+    /// Custom parameter type definitions for expression resolution.
+    ///
+    /// Not included in `step_registry_hash`. Defaults to empty (built-in params only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_parameters: Vec<CustomParameterDef>,
 }
 
 impl SemanticStepRegistry {
     /// Creates a new registry and computes its hash.
     ///
     /// The `bindings` will be sorted by `binding_id` before hashing.
-    pub fn new(mut bindings: Vec<SemanticBinding>) -> Self {
+    pub fn new(bindings: Vec<SemanticBinding>) -> Self {
+        Self::new_with_params(bindings, Vec::new())
+    }
+
+    /// Creates a new registry with custom parameter definitions.
+    ///
+    /// `custom_parameters` are used by the resolution engine to expand
+    /// adapter-specific `{param}` types; they are NOT included in the hash.
+    pub fn new_with_params(
+        mut bindings: Vec<SemanticBinding>,
+        custom_parameters: Vec<CustomParameterDef>,
+    ) -> Self {
         // Sort bindings by binding_id for deterministic ordering
         bindings.sort_by(|a, b| a.binding_id.cmp(&b.binding_id));
 
-        // Build a temporary struct for hashing (without step_registry_hash)
+        // Build a temporary struct for hashing (without step_registry_hash or custom_parameters)
         let for_hashing = RegistryForHashing {
             npap_version: NPAP_VERSION,
             hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
@@ -435,11 +467,12 @@ impl SemanticStepRegistry {
             impl_hash_scheme: IMPL_HASH_SCHEME.to_string(),
             step_registry_hash,
             bindings,
+            custom_parameters,
         }
     }
 }
 
-/// Helper struct for computing registry hash (excludes step_registry_hash field).
+/// Helper struct for computing registry hash (excludes step_registry_hash and custom_parameters).
 #[derive(Serialize)]
 struct RegistryForHashing<'a> {
     npap_version: u32,
