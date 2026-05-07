@@ -4,28 +4,47 @@ Procedural macros for Namako step bindings.
 
 ## Usage
 
-```rust,ignore
-use namako_codegen::{given, when, then};
+Define a world type to hold shared scenario state, declare context wrappers for
+mutable (`given`/`when`) and read-only (`then`) access, then write step functions:
 
-#[given("a precondition")]
-fn setup(mut ctx: WorldMut) {
-    // ...
+```rust
+use namako_engine::{World, given, when, then};
+
+/// Holds state shared across all steps in a scenario.
+#[derive(Debug, Default, World)]
+#[world(mut_ctx = MyWorldMut<'a>, ref_ctx = MyWorldRef<'a>)]
+pub struct MyWorld {
+    pub value: i32,
 }
 
-#[when("an action occurs")]
-fn action(mut ctx: WorldMut) {
-    // ...
+/// Mutable context — given/when steps receive this.
+pub struct MyWorldMut<'a>(&'a mut MyWorld);
+impl<'a> MyWorldMut<'a> {
+    fn new(world: &'a mut MyWorld) -> Self { Self(world) }
 }
 
-#[then("an outcome is observed")]
-fn verify(ctx: WorldRef) {
-    assert!(ctx.world().result.is_ok());
+/// Read-only context — then steps receive this.
+#[derive(Clone, Copy)]
+pub struct MyWorldRef<'a>(&'a MyWorld);
+impl<'a> MyWorldRef<'a> {
+    fn new(world: &'a MyWorld) -> Self { Self(world) }
+}
+
+#[given("the value is {int}")]
+fn set_value(ctx: MyWorldMut, n: i32) {
+    ctx.0.value = n;
+}
+
+#[when("the value is doubled")]
+fn double_value(ctx: MyWorldMut) {
+    ctx.0.value *= 2;
+}
+
+#[then("the value is {int}")]
+fn check_value(ctx: MyWorldRef, expected: i32) {
+    assert_eq!(ctx.0.value, expected);
 }
 ```
-
-`WorldMut` and `WorldRef` are the associated context types produced by
-`#[derive(World)]` on your world struct. `given` and `when` steps receive
-mutable context; `then` steps receive shared (read-only) context.
 
 ## Testing
 
