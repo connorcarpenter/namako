@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 pub use servling::token_usage::TokenUsage;
 pub use servling::OutcomeClassification;
-pub use servling::{LLMRequest, LLMResponse, Servling};
+pub use servling::{
+    Backend, BackendMetadata, LLMRequest, LLMResponse, ProviderCapabilities, ProviderKind,
+    Servling, TransportKind, TurnRunner,
+};
 
 /// Configuration for mission execution.
 #[derive(Debug, Clone)]
@@ -66,7 +69,7 @@ pub struct RunnerInvocation {
 /// Blanket implementation: Every Servling is a Runner.
 impl<T: Servling + ?Sized> Runner for T {
     fn name(&self) -> &'static str {
-        self.name()
+        Backend::name(self)
     }
 
     fn run(&self, mission_dir: &Path, config: &RunnerConfig) -> Result<RunnerOutcome> {
@@ -78,10 +81,15 @@ impl<T: Servling + ?Sized> Runner for T {
             prompt,
             model: config.model.clone(),
             working_dir: config.working_dir.clone(),
-            writable_roots: vec![config.working_dir.clone()],
+            source_writable_roots: vec![config.working_dir.clone()],
+            runtime_writable_roots: Vec::new(),
+            runtime_env: Vec::new(),
+            runtime_profile: None,
+            reasoning_effort: None,
             max_runtime_seconds: config.max_runtime_seconds,
             stream_output: config.stream_output,
             input_file: Some(mission_path),
+            temp_dir_override: None,
         };
 
         let resp = self.execute(&request)?;
@@ -106,19 +114,23 @@ impl<T: Servling + ?Sized> Runner for T {
             prompt: String::new(),
             model: config.model.clone(),
             working_dir: config.working_dir.clone(),
-            writable_roots: vec![config.working_dir.clone()],
+            source_writable_roots: vec![config.working_dir.clone()],
+            runtime_writable_roots: Vec::new(),
+            runtime_env: Vec::new(),
+            runtime_profile: None,
+            reasoning_effort: None,
             max_runtime_seconds: config.max_runtime_seconds,
             stream_output: config.stream_output,
             input_file: Some(mission_path),
+            temp_dir_override: None,
         };
 
-        self.planned_invocation(&request)
-            .map(|inv| RunnerInvocation {
-                program: inv.program,
-                args: inv.args,
-                working_dir: inv.working_dir,
-                env: inv.env,
-            })
+        TurnRunner::planned_invocation(self, &request).map(|inv| RunnerInvocation {
+            program: inv.program,
+            args: inv.args,
+            working_dir: inv.working_dir,
+            env: inv.env,
+        })
     }
 }
 
@@ -197,15 +209,23 @@ impl MockAgent {
     }
 }
 
-impl Servling for MockAgent {
-    fn name(&self) -> &'static str {
-        "mock"
+impl Backend for MockAgent {
+    fn metadata(&self) -> BackendMetadata {
+        BackendMetadata {
+            name: "mock",
+            provider_kind: ProviderKind::Composite,
+            transport_kind: TransportKind::CliBatch,
+            capabilities: ProviderCapabilities::batch_only(),
+        }
     }
+}
 
+impl TurnRunner for MockAgent {
     fn execute(&self, _request: &LLMRequest) -> Result<LLMResponse> {
         Ok(LLMResponse {
             text: self.response_text.clone(),
             classification: OutcomeClassification::Ok,
+            backend_name: Some("mock".to_string()),
             exit_code: Some(0),
             token_usage: None,
             elapsed_seconds: 0.1,
@@ -327,7 +347,7 @@ pub fn build_runner(candidates: Vec<servling::AgentCandidate>) -> anyhow::Result
             self.0.run(mission_dir, config)
         }
         fn name(&self) -> &'static str {
-            Servling::name(&*self.0)
+            Backend::name(&*self.0)
         }
         fn planned_invocation(
             &self,
@@ -339,12 +359,17 @@ pub fn build_runner(candidates: Vec<servling::AgentCandidate>) -> anyhow::Result
                 prompt: String::new(),
                 model: config.model.clone(),
                 working_dir: config.working_dir.clone(),
-                writable_roots: vec![config.working_dir.clone()],
+                source_writable_roots: vec![config.working_dir.clone()],
+                runtime_writable_roots: Vec::new(),
+                runtime_env: Vec::new(),
+                runtime_profile: None,
+                reasoning_effort: None,
                 max_runtime_seconds: config.max_runtime_seconds,
                 stream_output: config.stream_output,
                 input_file: Some(mission_dir.join("MISSION.md")),
+                temp_dir_override: None,
             };
-            Servling::planned_invocation(&*self.0, &request).map(|inv| RunnerInvocation {
+            TurnRunner::planned_invocation(&*self.0, &request).map(|inv| RunnerInvocation {
                 program: inv.program,
                 args: inv.args,
                 working_dir: inv.working_dir,

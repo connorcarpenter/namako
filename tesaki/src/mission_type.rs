@@ -305,12 +305,12 @@ impl MissionType {
                     .filter(|b| matches!(b.kind, crate::repo_state::BindingIssueKind::MissingBinding))
                     .filter_map(|b| b.step_text.clone())
                     .collect();
-                
+
                 // Deduplicate (same step text may appear multiple times)
                 let mut unique_steps: Vec<String> = all_missing.clone();
                 unique_steps.sort();
                 unique_steps.dedup();
-                
+
                 let step_list = if unique_steps.is_empty() {
                     "No missing steps listed - check namako lint output.".to_string()
                 } else {
@@ -322,7 +322,7 @@ impl MissionType {
                         .collect::<Vec<_>>()
                         .join("\n")
                 };
-                
+
                 let total = state.binding_issues.len();
 
                 MissionBrief {
@@ -347,7 +347,7 @@ impl MissionType {
             Self::ImplementBehaviorForScenario { scenario_key, scenario_name, failure_info } => {
                 // Build context with failure details if available
                 let mut context = format!("Scenario '{}' is failing in the last run.", scenario_name);
-                
+
                 if let Some(ref failure) = failure_info {
                     context.push_str(&format!("\n\n**Failure Kind:** {}", failure.failure_kind));
                     if let Some(ref err_msg) = failure.error_message {
@@ -360,7 +360,7 @@ impl MissionType {
                         context.push_str(&format!("\n\n**Error Message:**\n```\n{}\n```", truncated_msg));
                     }
                 }
-                
+
                 MissionBrief {
                     mission_type: self.clone(),
                     title: format!("Implement behavior for {}", scenario_key),
@@ -377,7 +377,7 @@ impl MissionType {
                     "**Failure kind:** {}\n**Scenario key:** {}",
                     failure.failure_kind, failure.scenario_key
                 );
-                
+
                 if let Some(ref err_msg) = failure.error_message {
                     let truncated_msg = if err_msg.len() > 2000 {
                         format!("{}...\n(truncated)", &err_msg[..2000])
@@ -386,7 +386,7 @@ impl MissionType {
                     };
                     context.push_str(&format!("\n\n**Error Message:**\n```\n{}\n```", truncated_msg));
                 }
-                
+
                 MissionBrief {
                     mission_type: self.clone(),
                     title: format!("Fix regression for {}", failure.scenario_key),
@@ -497,7 +497,7 @@ impl MissionType {
                         ));
                     }
                 }
-                
+
                 MissionBrief {
                     mission_type: self.clone(),
                     title: format!("Add scenarios to {}", feature_path),

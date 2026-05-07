@@ -1,11 +1,11 @@
-# Namako + Tesaki
+# Namako
 
-**Spec-Driven Development toolchain for Rust projects**
+**Spec-Driven Development testing framework for Rust projects**
 
 | Tool | Purpose |
 |------|---------|
 | **Namako** | BDD testing framework + CLI (measures truth) |
-| **Tesaki** | AI task orchestrator (drives autonomous development) |
+| **Tesaki** | AI task orchestrator — see [standalone repo](https://github.com/connorcarpenter/tesaki) |
 
 ---
 
@@ -20,9 +20,11 @@ This file contains everything you need to understand and work on this codebase e
 ## Quick Start (Human Users)
 
 ```bash
-# Install dev shims (from namako/)
-cargo install --path tesaki --force
+# Install namako CLI (from namako/)
 cargo install --path cli --force
+
+# Install Tesaki (from standalone tesaki repo)
+cargo install --git https://github.com/connorcarpenter/tesaki.git --force
 
 # Configure a target repo
 cd <target-repo>
@@ -46,9 +48,6 @@ namako/
 ├── src/              # Namako core library
 ├── cli/              # namako_cli binary
 ├── codegen/          # Step macros (#[given], #[when], #[then])
-├── tesaki/           # Tesaki AI orchestrator
-│   ├── src/          # Rust source
-│   └── prompts/      # Jinja2 mission templates
 ├── _AGENTS/          # AI agent documentation (START HERE)
 └── _WORKSPACE/       # Operational docs & archives
 ```
@@ -73,8 +72,7 @@ tesaki diagnose ID  # Debug a specific mission
 ## Testing
 
 ```bash
-cargo test              # All tests (~222 tests)
-cargo test -p tesaki    # Tesaki only
+cargo test              # All tests
 cargo test -p namako_cli
 ```
 
@@ -84,8 +82,6 @@ cargo test -p namako_cli
 |------|---------|
 | `_AGENTS/AGENT_GUIDE.md` | **Single entrypoint for AI agents** |
 | `_WORKSPACE/RUNBOOK.md` | Operational checklist for loop execution |
-| `tesaki/README.md` | Tesaki configuration & dev setup |
-| `tesaki/prompts/README.md` | Mission template authoring guide |
 
 Historical/archived docs are in `_WORKSPACE/ARCHIVE/`.
 

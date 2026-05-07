@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub use servling::{LLMRequest, Servling};
+pub use servling::{Backend, LLMRequest, Servling};
 
 /// A single allowlisted command request from the chat planner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,14 +90,20 @@ impl<T: Servling + ?Sized> ChatPlanner for T {
 
     fn plan_turn(&self, input: &ChatTurnInput) -> Result<ChatPlan> {
         let prompt = format_planner_prompt(input);
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let request = LLMRequest {
             prompt,
             model: None,
-            working_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            writable_roots: vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))],
+            working_dir: working_dir.clone(),
+            source_writable_roots: vec![working_dir],
+            runtime_writable_roots: Vec::new(),
+            runtime_env: Vec::new(),
+            runtime_profile: None,
+            reasoning_effort: None,
             max_runtime_seconds: 60,
             stream_output: false,
             input_file: None,
+            temp_dir_override: None,
         };
 
         let resp = self.execute(&request)?;
@@ -231,7 +237,7 @@ pub fn build_planner(
             self.0.plan_turn(input)
         }
         fn name(&self) -> &'static str {
-            Servling::name(&*self.0)
+            Backend::name(&*self.0)
         }
     }
     Ok(Box::new(PlannerWrap(agent)))
