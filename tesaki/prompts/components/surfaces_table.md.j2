@@ -1,8 +1,0 @@
-{# Reusable surface policy table component #}
-## Surface Policy
-
-| Surface | Policy | Paths |
-|---------|--------|-------|
-| Spec | {{ surface_policy.spec | upper }} | `{{ surface_definitions.spec.patterns | join("`, `") }}` |
-| Tests/Bindings | {{ surface_policy.tests_bindings | upper }} | `{{ surface_definitions.tests_bindings.patterns | join("`, `") }}` |
-| SUT | {{ surface_policy.sut | upper }} | `{{ surface_definitions.sut.patterns | join("`, `") }}` |

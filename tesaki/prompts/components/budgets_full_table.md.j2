@@ -1,9 +1,0 @@
-{# Budget limits table with consequences (for POLICY.md) #}
-## Budget Limits
-
-| Limit | Value | What Happens If Exceeded |
-|-------|-------|-------------------------|
-| Max files changed | {{ budgets.max_files_changed }} | Mission fails with BUDGET stop condition |
-| Max scenarios promoted | {{ budgets.max_scenarios_promoted }} | Mission fails with BUDGET stop condition |
-| Max runtime (seconds) | {{ budgets.max_runtime_seconds }} | Runner process killed, BUDGET stop condition |
-| Max retries | {{ budgets.max_retries }} | Mission fails after this many attempts |
