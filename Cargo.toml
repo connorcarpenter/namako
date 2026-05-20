@@ -1,3 +1,3 @@
 [workspace]
-members = ["engine", "codegen", "cli"]
+members = ["engine", "codegen", "cli", "benches"]
 resolver = "3"
