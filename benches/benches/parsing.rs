@@ -44,23 +44,26 @@ fn bench_multi_file_parse(c: &mut Criterion) {
         let total_bytes: u64 = batch.iter().map(|s| s.len() as u64).sum();
 
         group.throughput(Throughput::Bytes(total_bytes));
-        group.bench_with_input(
-            BenchmarkId::new("files", count),
-            &batch,
-            |b, batch| {
-                b.iter(|| {
-                    batch.iter().map(|content| {
+        group.bench_with_input(BenchmarkId::new("files", count), &batch, |b, batch| {
+            b.iter(|| {
+                batch
+                    .iter()
+                    .map(|content| {
                         namako_engine::gherkin::Feature::parse(
                             criterion::black_box(*content),
                             namako_engine::gherkin::GherkinEnv::default(),
                         )
-                    }).collect::<Vec<_>>()
-                });
-            },
-        );
+                    })
+                    .collect::<Vec<_>>()
+            });
+        });
     }
 
     group.finish();
 }
 
-criterion_group!(parsing_benchmarks, bench_gherkin_parse, bench_multi_file_parse);
+criterion_group!(
+    parsing_benchmarks,
+    bench_gherkin_parse,
+    bench_multi_file_parse
+);

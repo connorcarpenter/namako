@@ -179,7 +179,6 @@ mod only_used_in_doc_tests_and_book {
     use tokio as _;
 }
 
-
 pub use gherkin;
 #[cfg(feature = "macros")]
 #[doc(inline)]
