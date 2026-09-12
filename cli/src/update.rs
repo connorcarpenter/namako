@@ -42,9 +42,49 @@ enum Freshness {
     Unknown(String),
 }
 
+/// Staleness check budget for the every-invocation warning path.
+const WARN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Staleness check budget for the explicit `update` command.
+const UPDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Best-effort staleness warning for every other subcommand execution. Prints
+/// to stderr and returns normally on all paths: a check that cannot answer
+/// (offline, slow network, unstamped build) stays silent, and the whole check
+/// is abandoned after a short timeout rather than held. Never touches stdout.
+pub fn warn_if_stale() {
+    if let Some(remote_main) = should_warn(&bounded_check(WARN_TIMEOUT)) {
+        eprintln!(
+            "warning: namako is outdated (built from {}, origin HEAD is {}). \
+             Run `namako update` as soon as possible.",
+            short(BUILT_FROM),
+            short(&remote_main)
+        );
+    }
+}
+
+/// Pure warn decision, so tests can prove silence on non-stale states.
+fn should_warn(freshness: &Freshness) -> Option<String> {
+    match freshness {
+        Freshness::Stale { remote_main } => Some(remote_main.clone()),
+        _ => None,
+    }
+}
+
+/// Whole `check()` abandoned after `timeout`: bounds `ls-remote` AND the
+/// local git legs together. A timed-out wait is orphaned, not killed, and
+/// surfaces as UNKNOWN, never as current.
+fn bounded_check(timeout: std::time::Duration) -> Freshness {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(check());
+    });
+    rx.recv_timeout(timeout)
+        .unwrap_or(Freshness::Unknown("freshness check timed out".into()))
+}
+
 /// Run the update command.
 pub fn run(_args: UpdateArgs) -> Result<()> {
-    match check() {
+    match bounded_check(UPDATE_TIMEOUT) {
         Freshness::Current => {
             println!("namako is current (built from {}).", short(BUILT_FROM));
             Ok(())
@@ -103,6 +143,10 @@ fn check() -> Freshness {
     )
 }
 
+/// `Stale` requires ancestry proof: both commits must resolve locally, differ,
+/// and the remote must not be an ancestor of the build. Anything unprovable
+/// (unresolvable stamp, remote object absent locally as in shallow clones) is
+/// UNKNOWN — a warning without proof would be a guess.
 fn inspect(source_dir: &Path, built_from: &str, remote: &Result<String>) -> Freshness {
     if built_from == "unknown" || !source_dir.join(".git").exists() {
         return Freshness::Unknown("unstamped build or missing source tree".into());
@@ -115,7 +159,10 @@ fn inspect(source_dir: &Path, built_from: &str, remote: &Result<String>) -> Fres
         return Freshness::Current;
     }
     if rev_parse(source_dir, &format!("{built_from}^{{commit}}")).is_none() {
-        return Freshness::Stale { remote_main };
+        return Freshness::Unknown("build commit not present locally".into());
+    }
+    if rev_parse(source_dir, &format!("{remote_main}^{{commit}}")).is_none() {
+        return Freshness::Unknown("remote commit not present locally".into());
     }
     if is_ancestor(source_dir, &remote_main, built_from) {
         Freshness::Current
@@ -126,20 +173,34 @@ fn inspect(source_dir: &Path, built_from: &str, remote: &Result<String>) -> Fres
 
 /// Latest commit on the remote's default branch, without fetching.
 fn remote_head(source_dir: &Path) -> Result<String> {
-    let out = Command::new("git")
-        .args(["ls-remote", "origin", "HEAD"])
-        .current_dir(source_dir)
-        .output()
-        .context("failed to run git ls-remote")?;
-    if !out.status.success() {
-        bail!("git ls-remote exited with {}", out.status);
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    stdout
-        .split_whitespace()
-        .next()
-        .map(str::to_string)
-        .context("empty ls-remote output")
+    ls_remote_with_timeout(source_dir, std::time::Duration::from_secs(30))
+}
+
+/// `git ls-remote origin HEAD`, abandoned after `timeout`. An abandoned wait is
+/// reported as an error so callers treat it as UNKNOWN, never as current.
+fn ls_remote_with_timeout(source_dir: &Path, timeout: std::time::Duration) -> Result<String> {
+    let dir = source_dir.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<String> {
+            let out = Command::new("git")
+                .args(["ls-remote", "origin", "HEAD"])
+                .current_dir(&dir)
+                .output()
+                .context("failed to run git ls-remote")?;
+            if !out.status.success() {
+                bail!("git ls-remote exited with {}", out.status);
+            }
+            String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .next()
+                .map(str::to_string)
+                .context("empty ls-remote output")
+        })();
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(timeout)
+        .context("git ls-remote timed out")?
 }
 
 /// Whether rebuilding could actually clear the staleness: the local checkout
@@ -283,18 +344,79 @@ mod tests {
     }
 
     #[test]
-    fn built_commit_gone_locally_is_stale() {
+    fn ls_remote_without_origin_fails_fast() {
+        use std::time::{Duration, Instant};
         let repo = repo_with_commits(1);
-        // A stamp that resolves nowhere locally with a differing remote.
-        assert_eq!(
+        let start = Instant::now();
+        let result = ls_remote_with_timeout(repo.path(), Duration::from_secs(20));
+        assert!(result.is_err(), "no origin configured, must fail");
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "must not hang when the remote is missing"
+        );
+    }
+
+    #[test]
+    fn built_commit_gone_locally_is_unknown() {
+        let repo = repo_with_commits(1);
+        // A stamp that resolves nowhere locally proves nothing: UNKNOWN,
+        // never a Stale guess.
+        assert!(matches!(
             inspect(
                 repo.path(),
                 "0000000000000000000000000000000000000000",
                 &Ok(head(repo.path()))
             ),
-            Freshness::Stale {
-                remote_main: head(repo.path())
-            }
+            Freshness::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn remote_commit_absent_locally_is_unknown() {
+        let repo = repo_with_commits(1);
+        let sha = head(repo.path());
+        // Remote object missing locally (e.g. shallow clone): no ancestry
+        // proof possible, so UNKNOWN rather than a Stale false positive.
+        assert!(matches!(
+            inspect(
+                repo.path(),
+                &sha,
+                &Ok("1111111111111111111111111111111111111111".into())
+            ),
+            Freshness::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn warn_decision_fires_only_on_stale() {
+        let sha = "abc123".to_string();
+        assert_eq!(
+            should_warn(&Freshness::Stale {
+                remote_main: sha.clone()
+            }),
+            Some(sha)
+        );
+        assert_eq!(should_warn(&Freshness::Current), None);
+        assert_eq!(should_warn(&Freshness::Unknown("offline".into())), None);
+    }
+
+    #[test]
+    fn hanging_remote_is_abandoned_by_timeout() {
+        use std::time::{Duration, Instant};
+        let repo = repo_with_commits(1);
+        git(
+            repo.path(),
+            &["remote", "add", "origin", "http://10.255.255.1/x.git"],
+        );
+        // 10.255.255.1 is non-routable: without the bound this blocks for
+        // git's own long TCP timeout. The bound must fire first.
+        let start = Instant::now();
+        let result = ls_remote_with_timeout(repo.path(), Duration::from_secs(2));
+        let elapsed = start.elapsed();
+        assert!(result.is_err(), "unroutable remote must fail");
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "bound must fire long before git gives up (took {elapsed:?})"
         );
     }
 

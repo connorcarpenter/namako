@@ -61,6 +61,14 @@ pub enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Every subcommand execution warns when behind origin HEAD; `update`
+    // handles itself, and --help/--version exit inside clap before this runs
+    // (help must stay instant and offline-safe). Best-effort and stderr-only
+    // with a bounded stall; panic-contained so exit codes never change.
+    if !matches!(cli.command, Commands::Update(_)) {
+        let _ = std::panic::catch_unwind(update::warn_if_stale);
+    }
+
     match cli.command {
         Commands::Lint(args) => lint::run(args),
         Commands::Verify(args) => verify::run(args),
