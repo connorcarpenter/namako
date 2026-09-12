@@ -60,6 +60,7 @@ namako lint    # Parse specs, resolve bindings
 namako gate    # Full CI: lint → run → verify
 namako status  # JSON status packet
 namako review  # Work backlog packet
+namako update  # Reinstall binary when behind origin HEAD
 ```
 
 ### Tesaki CLI

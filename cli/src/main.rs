@@ -10,6 +10,7 @@
 //! - `namako explain` — Scenario fidelity packet for Tesaki (v2)
 //! - `namako stub` — Generate placeholder scenarios for orphan bindings (v1.5)
 //! - `namako gate` — Single entrypoint for CI: lint → run → verify (+ optional determinism)
+//! - `namako update` — Reinstall the binary from the source tree when behind origin HEAD
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -20,6 +21,7 @@ mod lint;
 mod review;
 mod status;
 mod stub;
+mod update;
 mod update_cert;
 mod verify;
 
@@ -52,6 +54,8 @@ pub enum Commands {
     Stub(stub::StubArgs),
     /// Single CI gate: lint → run → verify (+ optional determinism check).
     Gate(gate::GateArgs),
+    /// Reinstall this binary from the source tree when behind origin HEAD.
+    Update(update::UpdateArgs),
 }
 
 fn main() -> Result<()> {
@@ -66,5 +70,6 @@ fn main() -> Result<()> {
         Commands::Explain(args) => explain::run(args),
         Commands::Stub(args) => stub::run(args),
         Commands::Gate(args) => gate::run(args),
+        Commands::Update(args) => update::run(args),
     }
 }
