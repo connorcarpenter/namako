@@ -185,9 +185,23 @@ mod spec {
             .map(|entry| entry.file_name().to_str().unwrap().to_owned())
             .collect::<Vec<String>>();
 
+        // Count only `.feature` entries: the `*.out` companions this test
+        // writes are gitignored side effects, so a raw entry count divided
+        // by 4 passes only when stale outputs linger from a previous run.
+        let expected = fs::read_dir("tests/features/output")
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("feature"))
+            })
+            .count();
         assert_eq!(
             files.len(),
-            fs::read_dir("tests/features/output").unwrap().count() / 4,
+            expected,
             "Not all `.feature` files were collected",
         );
 
