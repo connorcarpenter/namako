@@ -9,7 +9,7 @@
 //! - With `--determinism`: runs twice and compares evidence bundles
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
@@ -18,7 +18,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tempfile::TempDir;
 
-use namako_engine::engine::ResolutionEngine;
+use namako_engine::engine::Resolver;
 use namako_engine::npap::{
     Certification, CertificationIdentity, CertificationMetadata, RunReport, ScenarioStatus,
     SemanticStepRegistry, HASH_CONTRACT_VERSION, NPAP_VERSION,
@@ -408,7 +408,7 @@ fn run_with_determinism(args: &GateArgs, num_runs: usize) -> Result<()> {
 }
 
 /// Run a single gate pass for determinism checking (doesn't print final summary)
-fn run_single_for_determinism(args: &GateArgs, artifact_root: &PathBuf) -> Result<()> {
+fn run_single_for_determinism(args: &GateArgs, artifact_root: &Path) -> Result<()> {
     let resolved_plan_path = artifact_root.join("resolved_plan.json");
     let run_report_path = artifact_root.join("run_report.json");
     let status_path = artifact_root.join("status.json");
@@ -474,7 +474,7 @@ fn run_lint(args: &GateArgs, output_path: &PathBuf) -> Result<()> {
     let registry = fetch_adapter_manifest(&args.adapter_cmd)?;
 
     // Build resolution engine
-    let engine = ResolutionEngine::new(&registry)
+    let engine = Resolver::new(&registry)
         .map_err(|errs| anyhow::anyhow!("Failed to build resolution engine: {:?}", errs))?;
 
     // Resolve features
@@ -660,17 +660,13 @@ fn auto_update_certification(
 }
 
 /// Generate status.json for determinism evidence
-fn generate_status(
-    args: &GateArgs,
-    run_report_path: &PathBuf,
-    output_path: &PathBuf,
-) -> Result<()> {
+fn generate_status(args: &GateArgs, run_report_path: &Path, output_path: &Path) -> Result<()> {
     let status_args = StatusArgs {
         specs_dir: args.specs_dir.clone(),
         adapter_cmd: args.adapter_cmd.clone(),
         certification: args.certification.clone(),
-        run_report: run_report_path.clone(),
-        out: Some(output_path.clone()),
+        run_report: run_report_path.to_path_buf(),
+        out: Some(output_path.to_path_buf()),
         json: true,
         verbose: false,
     };
@@ -678,11 +674,11 @@ fn generate_status(
 }
 
 /// Generate review.json for determinism evidence
-fn generate_review(args: &GateArgs, output_path: &PathBuf) -> Result<()> {
+fn generate_review(args: &GateArgs, output_path: &Path) -> Result<()> {
     let review_args = ReviewArgs {
         specs_dir: args.specs_dir.clone(),
         adapter_cmd: args.adapter_cmd.clone(),
-        out: Some(output_path.clone()),
+        out: Some(output_path.to_path_buf()),
         top: 25,
         include_deferred: true,
         verbose: false,
@@ -695,7 +691,7 @@ fn generate_review(args: &GateArgs, output_path: &PathBuf) -> Result<()> {
 // ============================================================================
 
 /// Collect evidence bundle from a run directory
-fn collect_evidence_bundle(run_dir: &PathBuf) -> Result<EvidenceBundle> {
+fn collect_evidence_bundle(run_dir: &Path) -> Result<EvidenceBundle> {
     let mut contents = BTreeMap::new();
 
     // Evidence files to collect
@@ -952,7 +948,7 @@ fn recompute_identity(args: &GateArgs) -> Result<CertificationIdentity> {
     let features = read_features(&args.specs_dir, &feature_paths)?;
     let registry = fetch_adapter_manifest(&args.adapter_cmd)?;
 
-    let engine = ResolutionEngine::new(&registry)
+    let engine = Resolver::new(&registry)
         .map_err(|errs| anyhow::anyhow!("Failed to build engine: {:?}", errs))?;
 
     let feature_refs: Vec<(&str, &str)> = features

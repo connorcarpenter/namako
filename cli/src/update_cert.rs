@@ -13,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use walkdir::WalkDir;
 
-use namako_engine::engine::ResolutionEngine;
+use namako_engine::engine::Resolver;
 use namako_engine::npap::{
     Certification, CertificationIdentity, CertificationMetadata, RunReport, ScenarioStatus,
     SemanticStepRegistry, HASH_CONTRACT_VERSION, NPAP_VERSION,
@@ -151,8 +151,8 @@ fn recompute_identity(args: &UpdateCertArgs) -> Result<CertificationIdentity> {
     let features = read_features(&args.specs_dir, &feature_paths)?;
     let registry = fetch_adapter_manifest(&args.adapter_cmd)?;
 
-    let engine = ResolutionEngine::new(&registry)
-        .map_err(|errs| anyhow::anyhow!("Lint failed: {:?}", errs))?;
+    let engine =
+        Resolver::new(&registry).map_err(|errs| anyhow::anyhow!("Lint failed: {:?}", errs))?;
 
     let feature_refs: Vec<(&str, &str)> = features
         .iter()

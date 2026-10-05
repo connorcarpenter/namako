@@ -15,7 +15,7 @@ use gherkin::{Feature, GherkinEnv, Rule, Scenario};
 use serde::Serialize;
 use walkdir::WalkDir;
 
-use namako_engine::engine::ResolutionEngine;
+use namako_engine::engine::Resolver;
 use namako_engine::npap::{SemanticStepRegistry, HASH_CONTRACT_VERSION};
 
 /// Arguments for the review command.
@@ -287,7 +287,7 @@ fn compute_review(args: &ReviewArgs) -> Result<ReviewOutput> {
     let registry = fetch_adapter_manifest(&args.adapter_cmd)?;
 
     // Build resolution engine for identity computation
-    let engine = ResolutionEngine::new(&registry)
+    let engine = Resolver::new(&registry)
         .map_err(|errs| anyhow::anyhow!("Failed to build engine: {:?}", errs))?;
 
     let feature_refs: Vec<(&str, &str)> = features
@@ -670,8 +670,8 @@ fn normalize_step_kind<'a>(keyword: &str, last_keyword: &mut &'a str) -> &'a str
             *last_keyword = "Then";
             "Then"
         }
-        "And" | "But" | "*" => *last_keyword,
-        _ => *last_keyword,
+        "And" | "But" | "*" => last_keyword,
+        _ => last_keyword,
     }
 }
 
@@ -914,12 +914,11 @@ fn build_deferred_items_section(candidates: &[PromotionCandidate]) -> Vec<Deferr
             let feature_name = c
                 .feature_path
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or(&c.feature_path)
                 .trim_end_matches(".feature")
                 .to_lowercase()
-                .replace(' ', "_")
-                .replace('-', "_");
+                .replace([' ', '-'], "_");
 
             let rule_part = if c.rule_name == "default" {
                 "".to_string()

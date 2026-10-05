@@ -35,7 +35,7 @@ pub struct Cli {
 /// As there is no async runtime-agnostic way to interact with IO, this
 /// [`Parser`] is blocking.
 #[derive(Copy, Clone, Debug, Default)]
-pub struct Basic {}
+pub struct Basic;
 
 impl<I: AsRef<Path>> Parser<I> for Basic {
     type Cli = Cli;

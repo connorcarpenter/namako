@@ -281,3 +281,50 @@ impl Ord for HashableRegex {
         self.0.as_str().cmp(other.0.as_str())
     }
 }
+
+#[cfg(test)]
+mod hashable_regex_stability_tests {
+    use super::*;
+    use std::collections::hash_map::DefaultHasher;
+
+    fn hash_of(value: &HashableRegex) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn test_regex() -> Option<Regex> {
+        Regex::new(r"^user (\w+)$").ok()
+    }
+
+    /// `Hash`/`Eq` must stay stable after the inner `Regex` cache pool is
+    /// exercised. This is the proof behind the `ignore-interior-mutability`
+    /// exemption in the workspace clippy.toml.
+    #[test]
+    fn hash_and_eq_stable_after_match_use() {
+        let Some(pattern) = test_regex() else {
+            panic!("test pattern must compile");
+        };
+        let exercised = HashableRegex::from(pattern);
+        // Exercise the inner Regex cache pool with a real match.
+        assert!(
+            exercised.0.is_match("user alice"),
+            "test input must match the pattern"
+        );
+
+        let Some(fresh_pattern) = test_regex() else {
+            panic!("test pattern must compile");
+        };
+        let fresh = HashableRegex::from(fresh_pattern);
+
+        assert_eq!(
+            exercised, fresh,
+            "same pattern must stay Eq after cache use"
+        );
+        assert_eq!(
+            hash_of(&exercised),
+            hash_of(&fresh),
+            "same pattern must stay hash-equal after cache use"
+        );
+    }
+}

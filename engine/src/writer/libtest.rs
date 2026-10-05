@@ -60,7 +60,7 @@ impl FromStr for Format {
         match s.to_lowercase().as_str() {
             "json" => Ok(Self::Json),
             s @ ("pretty" | "terse") => Err(format!("`{s}` option is not supported yet")),
-            s => Err(format!("Unknown option `{s}`, expected `pretty` or `json`",)),
+            s => Err(format!("Unknown option `{s}`, expected `pretty` or `json`")),
         }
     }
 }
@@ -475,10 +475,6 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
         }
     }
 
-    /// Converts the provided [`event::Hook`] into [`LibTestJsonEvent`]s.
-    // TODO: Needs refactoring.
-    #[expect(clippy::too_many_arguments, reason = "needs refactoring")]
-
     /// Converts the provided [`event::Step`] into [`LibTestJsonEvent`]s.
     // TODO: Needs refactoring.
     #[expect(clippy::too_many_arguments, reason = "needs refactoring")]
@@ -516,7 +512,7 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
                             .unwrap_or(&feature.name),
                         step.position.line,
                         step.position.col,
-                        loc.map(|l| format!("\n{}:{}:{} (matched)", l.path, l.line, l.column,))
+                        loc.map(|l| format!("\n{}:{}:{} (matched)", l.path, l.line, l.column))
                             .unwrap_or_default()
                     ))
                 } else {
@@ -554,7 +550,7 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
                         .unwrap_or(&feature.name),
                     step.position.line,
                     step.position.col,
-                    loc.map(|l| format!("\n{}:{}:{} (matched)", l.path, l.line, l.column,))
+                    loc.map(|l| format!("\n{}:{}:{} (matched)", l.path, l.line, l.column))
                         .unwrap_or_default(),
                     world.map(|w| format!("\n{w:#?}")).unwrap_or_default(),
                 ))

@@ -13,6 +13,10 @@ use crate::{
     runner, step, tag::Ext as _, writer,
 };
 
+/// CLI options bundle for a [`Namako`] executor.
+type CliOpts<P, I, R, W, Wr, Cli> =
+    cli::Opts<<P as Parser<I>>::Cli, <R as Runner<W>>::Cli, <Wr as Writer<W>>::Cli, Cli>;
+
 /// Top-level [Namako] executor.
 ///
 /// Most of the time you don't need to work with it directly, just use
@@ -54,7 +58,7 @@ where
     /// CLI options this [`Namako`] has been run with.
     ///
     /// If empty, then will be parsed from a command line.
-    cli: Option<cli::Opts<P::Cli, R::Cli, Wr::Cli, Cli>>,
+    cli: Option<CliOpts<P, I, R, W, Wr, Cli>>,
 
     /// Type of the [`World`] this [`Namako`] run on.
     #[debug(ignore)]
@@ -578,7 +582,7 @@ where
     #[must_use]
     pub fn with_cli<CustomCli>(
         self,
-        cli: cli::Opts<P::Cli, R::Cli, Wr::Cli, CustomCli>,
+        cli: CliOpts<P, I, R, W, Wr, CustomCli>,
     ) -> Namako<W, P, I, R, Wr, CustomCli>
     where
         CustomCli: clap::Args,
@@ -606,7 +610,7 @@ where
     #[must_use]
     pub fn with_default_cli(mut self) -> Self
     where
-        cli::Opts<P::Cli, R::Cli, Wr::Cli, Cli>: Default,
+        CliOpts<P, I, R, W, Wr, Cli>: Default,
     {
         self.cli = Some(cli::Opts::default());
         self

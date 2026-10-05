@@ -13,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use walkdir::WalkDir;
 
-use namako_engine::engine::ResolutionEngine;
+use namako_engine::engine::Resolver;
 use namako_engine::npap::{
     Certification, CertificationIdentity, RunReport, ScenarioStatus, SemanticStepRegistry,
     HASH_CONTRACT_VERSION,
@@ -212,7 +212,7 @@ fn recompute_identity(args: &VerifyArgs) -> Result<CertificationIdentity> {
     let registry = fetch_adapter_manifest(&args.adapter_cmd)?;
 
     // Step 3: Resolve plan
-    let engine = ResolutionEngine::new(&registry)
+    let engine = Resolver::new(&registry)
         .map_err(|errs| anyhow::anyhow!("Failed to build engine: {:?}", errs))?;
 
     let feature_refs: Vec<(&str, &str)> = features

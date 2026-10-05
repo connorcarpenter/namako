@@ -335,11 +335,6 @@ impl<Out: io::Write> Basic<Out> {
         self.output.write_str(msg)
     }
 
-    /// Outputs the [failed] [`Scenario`]'s hook.
-    ///
-    /// [failed]: event::Hook::Failed
-    /// [`Scenario`]: gherkin::Scenario
-
     /// Outputs the [started] [`Scenario`].
     ///
     /// [started]: event::Scenario::Started
@@ -515,7 +510,6 @@ impl<Out: io::Write> Basic<Out> {
     /// [failed]: event::Step::Failed
     /// [`Step`]: gherkin::Step
     // TODO: Needs refactoring.
-    #[expect(clippy::too_many_arguments, reason = "needs refactoring")]
     pub(crate) fn step_failed<W: Debug>(
         &mut self,
         feat: &gherkin::Feature,
@@ -566,7 +560,7 @@ impl<Out: io::Write> Basic<Out> {
                 .unwrap_or(&feat.name),
             step.position.line,
             step.position.col,
-            loc.map(|l| format!("\n{indent}   Matched: {}:{}:{}", l.path, l.line, l.column,))
+            loc.map(|l| format!("\n{indent}   Matched: {}:{}:{}", l.path, l.line, l.column))
                 .unwrap_or_default(),
             format_str_with_indent(err.to_string(), self.indent.saturating_sub(3) + 3,),
             world
@@ -747,7 +741,6 @@ impl<Out: io::Write> Basic<Out> {
     /// [`Background`]: gherkin::Background
     /// [`Step`]: gherkin::Step
     // TODO: Needs refactoring.
-    #[expect(clippy::too_many_arguments, reason = "needs refactoring")]
     pub(crate) fn bg_step_failed<W: Debug>(
         &mut self,
         feat: &gherkin::Feature,
@@ -798,7 +791,7 @@ impl<Out: io::Write> Basic<Out> {
                 .unwrap_or(&feat.name),
             step.position.line,
             step.position.col,
-            loc.map(|l| format!("\n{indent}   Matched: {}:{}:{}", l.path, l.line, l.column,))
+            loc.map(|l| format!("\n{indent}   Matched: {}:{}:{}", l.path, l.line, l.column))
                 .unwrap_or_default(),
             format_str_with_indent(err.to_string(), self.indent.saturating_sub(3) + 3,),
             world

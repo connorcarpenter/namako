@@ -4,7 +4,9 @@ use inflections::case::to_pascal_case;
 use itertools::Itertools as _;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+use std::iter;
 use syn::parse_quote;
+use syn::token::{Gt, Lt};
 use synthez::{ParseAttrs, ToTokens};
 
 /// Generates code of `#[derive(World)]` macro expansion.
@@ -164,24 +166,24 @@ impl Definition {
             .unwrap_or_else(|| parse_quote! { &'a Self });
 
         // Context factory expressions
-        let ctx_mut_expr = if let Some(expr) = &self.ctx_mut {
-            quote! { #expr(self) }
-        } else if self.mut_ctx.is_some() {
+        let ctx_mut_expr = match &self.ctx_mut {
+            Some(expr) => quote! { #expr(self) },
             // If mut_ctx is specified, assume it has a `new` constructor
-            quote! { <Self::MutCtx<'_>>::new(self) }
-        } else {
+            None if self.mut_ctx.is_some() => {
+                quote! { <Self::MutCtx<'_>>::new(self) }
+            }
             // Default: return &mut self
-            quote! { self }
+            None => quote! { self },
         };
 
-        let ctx_ref_expr = if let Some(expr) = &self.ctx_ref {
-            quote! { #expr(self) }
-        } else if self.ref_ctx.is_some() {
+        let ctx_ref_expr = match &self.ctx_ref {
+            Some(expr) => quote! { #expr(self) },
             // If ref_ctx is specified, assume it has a `new` constructor
-            quote! { <Self::RefCtx<'_>>::new(self) }
-        } else {
+            None if self.ref_ctx.is_some() => {
+                quote! { <Self::RefCtx<'_>>::new(self) }
+            }
             // Default: return &self
-            quote! { self }
+            None => quote! { self },
         };
 
         quote! {
@@ -235,27 +237,25 @@ impl Definition {
         let mut impls = TokenStream::new();
 
         // Generate StepContext impl for mut_ctx type
-        if let Some(ref mut_ctx_ty) = self.mut_ctx {
-            if let Some(impl_tokens) = Self::generate_step_context_impl(mut_ctx_ty, world, &ty_gens)
-            {
-                impls.extend(impl_tokens);
-            }
+        if let Some(mut_ctx_ty) = &self.mut_ctx
+            && let Some(impl_tokens) = Self::generate_step_context_impl(mut_ctx_ty, world, &ty_gens)
+        {
+            impls.extend(impl_tokens);
         }
 
         // Generate StepContext impl for ref_ctx type (only if different from mut_ctx)
-        if let Some(ref ref_ctx_ty) = self.ref_ctx {
+        if let Some(ref_ctx_ty) = &self.ref_ctx {
             // Check if ref_ctx is the same as mut_ctx to avoid duplicate impls
-            let is_same = self.mut_ctx.as_ref().map_or(false, |mut_ty| {
+            let is_same = self.mut_ctx.as_ref().is_some_and(|mut_ty| {
                 // Compare type string representations for simplicity
                 quote!(#mut_ty).to_string() == quote!(#ref_ctx_ty).to_string()
             });
 
-            if !is_same {
-                if let Some(impl_tokens) =
+            if !is_same
+                && let Some(impl_tokens) =
                     Self::generate_step_context_impl(ref_ctx_ty, world, &ty_gens)
-                {
-                    impls.extend(impl_tokens);
-                }
+            {
+                impls.extend(impl_tokens);
             }
         }
 
@@ -271,61 +271,56 @@ impl Definition {
         world: &syn::Ident,
         world_ty_gens: &syn::TypeGenerics<'_>,
     ) -> Option<TokenStream> {
-        match ctx_ty {
-            syn::Type::Path(type_path) => {
-                // Type like `WorldMut<'a>` - extract base path
-                let path = &type_path.path;
+        // Reference types are not wrapper types, skip them.
+        let syn::Type::Path(type_path) = ctx_ty else {
+            // Reference types are not wrapper types, skip them.
+            return None;
+        };
+        // Type like `WorldMut<'a>` - extract base path
+        let path = &type_path.path;
 
-                // Check if it has generic arguments (lifetime)
-                if let Some(last_segment) = path.segments.last() {
-                    if matches!(
-                        last_segment.arguments,
-                        syn::PathArguments::AngleBracketed(_)
-                    ) {
-                        // Has generics - generate impl with wildcard lifetime
-                        // e.g., `impl StepContext for WorldMut<'_>`
-                        let base_path = {
-                            let mut p = path.clone();
-                            if let Some(seg) = p.segments.last_mut() {
-                                seg.arguments = syn::PathArguments::AngleBracketed(
-                                    syn::AngleBracketedGenericArguments {
-                                        colon2_token: None,
-                                        lt_token: Default::default(),
-                                        args: std::iter::once(syn::GenericArgument::Lifetime(
-                                            syn::Lifetime::new(
-                                                "'_",
-                                                proc_macro2::Span::call_site(),
-                                            ),
-                                        ))
-                                        .collect(),
-                                        gt_token: Default::default(),
-                                    },
-                                );
-                            }
-                            p
-                        };
-
-                        return Some(quote! {
-                            #[automatically_derived]
-                            impl ::namako_engine::codegen::StepContext for #base_path {
-                                type World = #world #world_ty_gens;
-                            }
+        // Check if it has generic arguments (lifetime)
+        if let Some(last_segment) = path.segments.last()
+            && matches!(
+                last_segment.arguments,
+                syn::PathArguments::AngleBracketed(_)
+            )
+        {
+            // Has generics - generate impl with wildcard lifetime
+            // e.g., `impl StepContext for WorldMut<'_>`
+            let base_path = {
+                let mut p = path.clone();
+                if let Some(seg) = p.segments.last_mut() {
+                    seg.arguments =
+                        syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+                            colon2_token: None,
+                            lt_token: Lt::default(),
+                            args: iter::once(syn::GenericArgument::Lifetime(syn::Lifetime::new(
+                                "'_",
+                                proc_macro2::Span::call_site(),
+                            )))
+                            .collect(),
+                            gt_token: Gt::default(),
                         });
-                    }
                 }
+                p
+            };
 
-                // No generics - generate simple impl
-                Some(quote! {
-                    #[automatically_derived]
-                    impl ::namako_engine::codegen::StepContext for #path {
-                        type World = #world #world_ty_gens;
-                    }
-                })
-            }
-            // Reference types are not wrapper types, skip them
-            syn::Type::Reference(_) => None,
-            _ => None,
+            return Some(quote! {
+                #[automatically_derived]
+                impl ::namako_engine::codegen::StepContext for #base_path {
+                    type World = #world #world_ty_gens;
+                }
+            });
         }
+
+        // No generics - generate simple impl
+        Some(quote! {
+            #[automatically_derived]
+            impl ::namako_engine::codegen::StepContext for #path {
+                type World = #world #world_ty_gens;
+            }
+        })
     }
 
     /// Generates code for additional struct implementing `StepConstructor`
@@ -434,7 +429,10 @@ mod spec {
         };
 
         // Just verify it compiles and produces non-empty output
-        let result = super::derive(input).unwrap();
+        let result = match super::derive(input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
         let result_str = result.to_string();
 
         // Check key elements are present
@@ -470,7 +468,10 @@ mod spec {
             pub struct World<T>(T);
         };
 
-        let result = super::derive(input).unwrap();
+        let result = match super::derive(input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
         let result_str = result.to_string();
 
         assert!(
@@ -494,7 +495,10 @@ mod spec {
             pub struct World<T>(T);
         };
 
-        let result = super::derive(input).unwrap();
+        let result = match super::derive(input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
         let result_str = result.to_string();
 
         assert!(

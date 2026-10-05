@@ -3,7 +3,7 @@
 //! This module implements the core resolution logic that matches Gherkin steps
 //! to registered bindings, producing a `ResolvedPlan`.
 //!
-//! Per GOLD_PLAN §5.3, the engine:
+//! Per `GOLD_PLAN` §5.3, the engine:
 //! - Parses all `.feature` files
 //! - Fetches adapter manifest (semantic registry)
 //! - Resolves each step to exactly one binding
@@ -11,14 +11,16 @@
 //! - Generates `resolved_plan.json`
 
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt::{self, Debug, Display, Formatter};
 
 use cucumber_expressions::Expression;
 use gherkin::{Feature, GherkinEnv};
 use regex::Regex;
 
 use crate::npap::{
-    PlannedStep, ResolvedPlan, ResolvedScenario, SemanticBinding, SemanticStepRegistry,
-    compute_feature_fingerprint,
+    CustomParameterDef, PlannedStep, ResolvedPlan, ResolvedScenario, SemanticBinding,
+    SemanticStepRegistry, compute_feature_fingerprint,
 };
 
 #[cfg(not(feature = "npap"))]
@@ -26,7 +28,8 @@ use crate::npap::derive_scenario_key;
 
 #[cfg(feature = "npap")]
 use crate::id_tags::{
-    derive_scenario_key_from_ids, extract_feature_id, extract_rule_id, extract_scenario_id,
+    FeatureId, RuleId, derive_scenario_key_from_ids, extract_feature_id, extract_rule_id,
+    extract_scenario_id,
 };
 
 /// Errors that can occur during resolution.
@@ -109,8 +112,8 @@ pub enum ResolutionError {
     },
 }
 
-impl std::fmt::Display for ResolutionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ResolutionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingStep {
                 step_text,
@@ -156,10 +159,10 @@ impl std::fmt::Display for ResolutionError {
                     ));
                 }
                 if *step_has_docstring && !binding_accepts_docstring {
-                    reasons.push("step has docstring but binding doesn't accept it".to_string());
+                    reasons.push("step has docstring but binding doesn't accept it".to_owned());
                 }
                 if *step_has_datatable && !binding_accepts_datatable {
-                    reasons.push("step has datatable but binding doesn't accept it".to_string());
+                    reasons.push("step has datatable but binding doesn't accept it".to_owned());
                 }
                 write!(
                     f,
@@ -181,6 +184,22 @@ impl std::fmt::Display for ResolutionError {
                      \"{expression}\" - {message}"
                 )
             }
+            Self::MissingFeatureId { .. }
+            | Self::MissingRuleSection { .. }
+            | Self::ScenarioOutsideRule { .. }
+            | Self::MissingRuleId { .. }
+            | Self::MissingScenarioId { .. }
+            | Self::DuplicateScenarioKey { .. }
+            | Self::DuplicateRuleId { .. }
+            | Self::DuplicateScenarioId { .. } => Self::fmt_tag_error(self, f),
+        }
+    }
+}
+
+impl ResolutionError {
+    /// Formats tag and section-structure errors (`@Feature`/`@Rule`/`@Scenario`).
+    fn fmt_tag_error(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
             Self::MissingFeatureId {
                 feature_path,
                 feature_name,
@@ -266,11 +285,18 @@ impl std::fmt::Display for ResolutionError {
                     "Duplicate @Scenario({scenario_id:02}) tag{context} in {feature_path}"
                 )
             }
+            Self::MissingStep { .. }
+            | Self::AmbiguousStep { .. }
+            | Self::SignatureMismatch { .. }
+            | Self::ParseError { .. }
+            | Self::InvalidExpression { .. } => {
+                unreachable!("step error routed to tag formatter")
+            }
         }
     }
 }
 
-impl std::error::Error for ResolutionError {}
+impl Error for ResolutionError {}
 
 /// Result of resolving all features against a registry.
 #[derive(Debug)]
@@ -281,14 +307,14 @@ pub struct ResolutionResult {
     pub errors: Vec<ResolutionError>,
     /// Warnings (non-fatal)
     pub warnings: Vec<String>,
-    /// Orphan bindings (binding_id, kind, expression) — bindings in registry not used by any scenario
+    /// Orphan bindings (`binding_id`, kind, expression) — bindings in registry not used by any scenario
     pub orphan_bindings: Vec<OrphanBinding>,
     /// Binding IDs used by @Deferred scenarios (for orphan detection but not in executable plan)
     pub deferred_binding_ids: Vec<String>,
 }
 
 /// An orphan binding — a binding in the registry that is not used by any scenario.
-/// Per GOLD_PLAN §10.5.2, orphans are a hard error in v1.5.
+/// Per `GOLD_PLAN` §10.5.2, orphans are a hard error in v1.5.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrphanBinding {
     /// The binding ID
@@ -309,9 +335,37 @@ struct CompiledBinding {
     capture_count: usize,
 }
 
+/// Per-scenario inputs threaded through scenario resolution (parameter object).
+struct ScenarioCtx<'a> {
+    /// Scenario under resolution.
+    scenario: &'a gherkin::Scenario,
+    /// Name of the enclosing rule (for error context).
+    rule_name: &'a str,
+    /// Repo-relative feature file path.
+    path: &'a str,
+    /// Pre-resolved feature-level background steps.
+    feature_background_steps: &'a [PlannedStep],
+    /// Pre-resolved rule-level background steps.
+    rule_background_steps: &'a [PlannedStep],
+    /// Scenario keys already seen in this feature (duplicate detection).
+    seen_scenario_keys: &'a mut HashSet<String>,
+    /// Accumulator for resolved scenarios.
+    resolved_scenarios: &'a mut Vec<ResolvedScenario>,
+    /// Accumulator for `@Deferred` binding IDs (orphan detection).
+    deferred_binding_ids: &'a mut Vec<String>,
+    /// Accumulator for resolution errors.
+    errors: &'a mut Vec<ResolutionError>,
+    /// Validated feature ID (explicit-ID mode).
+    #[cfg(feature = "npap")]
+    feature_id: &'a FeatureId,
+    /// Validated rule ID (explicit-ID mode).
+    #[cfg(feature = "npap")]
+    rule_id: &'a RuleId,
+}
+
 /// Main resolution engine.
 #[derive(Debug)]
-pub struct ResolutionEngine {
+pub struct Resolver {
     /// Compiled bindings indexed by kind
     bindings_by_kind: HashMap<String, Vec<CompiledBinding>>,
     /// Step registry hash for inclusion in plan
@@ -320,8 +374,8 @@ pub struct ResolutionEngine {
     all_binding_ids: Vec<(String, String, String)>, // (binding_id, kind, expression)
 }
 
-impl std::fmt::Debug for CompiledBinding {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for CompiledBinding {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompiledBinding")
             .field("binding", &self.binding)
             .field("regex", &self.regex.as_str())
@@ -330,7 +384,7 @@ impl std::fmt::Debug for CompiledBinding {
     }
 }
 
-impl ResolutionEngine {
+impl Resolver {
     /// Creates a new resolution engine from a semantic step registry.
     ///
     /// # Errors
@@ -386,7 +440,7 @@ impl ResolutionEngine {
     ///
     /// # Arguments
     ///
-    /// * `features` - Iterator of (relative_path, gherkin_source) pairs
+    /// * `features` - Iterator of (`relative_path`, `gherkin_source`) pairs.
     pub fn resolve<'a, I>(&self, features: I) -> ResolutionResult
     where
         I: Iterator<Item = (&'a str, &'a str)>,
@@ -415,7 +469,7 @@ impl ResolutionEngine {
                 }
                 Err(e) => {
                     errors.push(ResolutionError::ParseError {
-                        path: path.to_string(),
+                        path: path.to_owned(),
                         message: format!("{e:?}"),
                     });
                 }
@@ -457,7 +511,7 @@ impl ResolutionEngine {
 
     /// Computes orphan bindings — bindings in the registry not used by any scenario.
     ///
-    /// Per GOLD_PLAN §10.5.2, orphans are detected by comparing registry binding IDs
+    /// Per `GOLD_PLAN` §10.5.2, orphans are detected by comparing registry binding IDs
     /// against binding IDs used in the resolved plan AND in @Deferred scenarios.
     fn compute_orphan_bindings(
         &self,
@@ -501,15 +555,12 @@ impl ResolutionEngine {
     ) {
         // PHASE 2.2a: Extract and validate feature-level ID tags
         #[cfg(feature = "npap")]
-        let feature_id = match extract_feature_id(&feature.tags) {
-            Some(id) => id,
-            None => {
-                errors.push(ResolutionError::MissingFeatureId {
-                    feature_path: path.to_string(),
-                    feature_name: feature.name.clone(),
-                });
-                return; // Cannot proceed without feature ID
-            }
+        let Some(feature_id) = extract_feature_id(&feature.tags) else {
+            errors.push(ResolutionError::MissingFeatureId {
+                feature_path: path.to_owned(),
+                feature_name: feature.name.clone(),
+            });
+            return; // Cannot proceed without feature ID
         };
 
         // PHASE 2.2b: Track scenario keys to detect duplicates within this feature
@@ -518,7 +569,7 @@ impl ResolutionEngine {
 
         if feature.rules.is_empty() {
             errors.push(ResolutionError::MissingRuleSection {
-                feature_path: path.to_string(),
+                feature_path: path.to_owned(),
                 feature_name: feature.name.clone(),
             });
         }
@@ -526,7 +577,7 @@ impl ResolutionEngine {
         if !feature.scenarios.is_empty() {
             for scenario in &feature.scenarios {
                 errors.push(ResolutionError::ScenarioOutsideRule {
-                    feature_path: path.to_string(),
+                    feature_path: path.to_owned(),
                     scenario_name: scenario.name.clone(),
                     line: u32::try_from(scenario.position.line).unwrap_or(0),
                 });
@@ -541,22 +592,19 @@ impl ResolutionEngine {
         for rule in &feature.rules {
             // Extract and validate rule-level ID tags
             #[cfg(feature = "npap")]
-            let rule_id = match extract_rule_id(&rule.tags) {
-                Some(id) => id,
-                None => {
-                    errors.push(ResolutionError::MissingRuleId {
-                        feature_path: path.to_string(),
-                        rule_name: rule.name.clone(),
-                    });
-                    continue; // Skip this rule
-                }
+            let Some(rule_id) = extract_rule_id(&rule.tags) else {
+                errors.push(ResolutionError::MissingRuleId {
+                    feature_path: path.to_owned(),
+                    rule_name: rule.name.clone(),
+                });
+                continue; // Skip this rule
             };
 
             // Check for duplicate rule IDs within this feature
             #[cfg(feature = "npap")]
             if !seen_rule_ids.insert(rule_id.0) {
                 errors.push(ResolutionError::DuplicateRuleId {
-                    feature_path: path.to_string(),
+                    feature_path: path.to_owned(),
                     rule_id: rule_id.0,
                 });
                 continue; // Skip this rule
@@ -567,71 +615,102 @@ impl ResolutionEngine {
                 self.resolve_background_steps(rule.background.as_ref(), path, errors);
 
             for scenario in &rule.scenarios {
-                // For @Deferred scenarios: resolve steps to get binding IDs for orphan detection
-                // but don't add to the executable plan
-                if is_deferred_scenario(scenario) {
-                    self.collect_deferred_binding_ids(scenario, path, deferred_binding_ids);
-                    continue;
-                }
-
-                // Extract and validate scenario-level ID tags
-                #[cfg(feature = "npap")]
-                let scenario_id = match extract_scenario_id(&scenario.tags) {
-                    Some(id) => id,
-                    None => {
-                        errors.push(ResolutionError::MissingScenarioId {
-                            feature_path: path.to_string(),
-                            scenario_name: scenario.name.clone(),
-                            rule_name: Some(rule.name.clone()),
-                        });
-                        continue; // Skip this scenario
-                    }
-                };
-
-                // Derive scenario key from explicit IDs (v1.5 format)
-                #[cfg(feature = "npap")]
-                let scenario_key =
-                    derive_scenario_key_from_ids(&feature_id, Some(&rule_id), &scenario_id);
-
-                // Fallback to line-based key if feature flag not enabled (v1 compat)
-                #[cfg(not(feature = "npap"))]
-                let scenario_key = {
-                    let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
-                    derive_scenario_key(path, line_u32)
-                };
-
-                // Check for duplicate scenario keys within this rule
-                if !seen_scenario_keys.insert(scenario_key.clone()) {
-                    errors.push(ResolutionError::DuplicateScenarioKey {
-                        scenario_key: scenario_key.clone(),
-                        feature_path: path.to_string(),
-                        scenario_name: scenario.name.clone(),
-                    });
-                    continue; // Skip this scenario
-                }
-
-                // Feature background first, then rule background, then scenario steps
-                let mut resolved_steps = feature_background_steps.clone();
-                resolved_steps.extend(rule_background_steps.clone());
-                let mut last_keyword = "Given";
-
-                for step in &scenario.steps {
-                    let effective_kind = resolve_effective_kind(&step.keyword, &mut last_keyword);
-
-                    match self.resolve_step(step, path, &effective_kind) {
-                        Ok(planned) => resolved_steps.push(planned),
-                        Err(e) => errors.push(e),
-                    }
-                }
-
-                resolved_scenarios.push(ResolvedScenario {
-                    scenario_key,
-                    feature_path: path.to_string(),
-                    scenario_name: scenario.name.clone(),
-                    steps: resolved_steps,
+                self.resolve_scenario(ScenarioCtx {
+                    scenario,
+                    rule_name: &rule.name,
+                    path,
+                    feature_background_steps: &feature_background_steps,
+                    rule_background_steps: &rule_background_steps,
+                    seen_scenario_keys: &mut seen_scenario_keys,
+                    resolved_scenarios,
+                    deferred_binding_ids,
+                    errors,
+                    #[cfg(feature = "npap")]
+                    feature_id: &feature_id,
+                    #[cfg(feature = "npap")]
+                    rule_id: &rule_id,
                 });
             }
         }
+    }
+
+    /// Resolves one scenario inside a rule, pushing to the plan or error list.
+    fn resolve_scenario(&self, ctx: ScenarioCtx<'_>) {
+        let ScenarioCtx {
+            scenario,
+            rule_name,
+            path,
+            feature_background_steps,
+            rule_background_steps,
+            seen_scenario_keys,
+            resolved_scenarios,
+            deferred_binding_ids,
+            errors,
+            #[cfg(feature = "npap")]
+            feature_id,
+            #[cfg(feature = "npap")]
+            rule_id,
+        } = ctx;
+
+        // For @Deferred scenarios: resolve steps to get binding IDs for orphan detection
+        // but don't add to the executable plan
+        if is_deferred_scenario(scenario) {
+            self.collect_deferred_binding_ids(scenario, path, deferred_binding_ids);
+            return;
+        }
+
+        // Extract and validate scenario-level ID tags
+        #[cfg(feature = "npap")]
+        let Some(scenario_id) = extract_scenario_id(&scenario.tags) else {
+            errors.push(ResolutionError::MissingScenarioId {
+                feature_path: path.to_owned(),
+                scenario_name: scenario.name.clone(),
+                rule_name: Some(rule_name.to_owned()),
+            });
+            return; // Skip this scenario
+        };
+
+        // Derive scenario key from explicit IDs (v1.5 format)
+        #[cfg(feature = "npap")]
+        let scenario_key = derive_scenario_key_from_ids(feature_id, Some(rule_id), &scenario_id);
+
+        // Fallback to line-based key if feature flag not enabled (v1 compat)
+        #[cfg(not(feature = "npap"))]
+        let scenario_key = {
+            let line_u32 = u32::try_from(scenario.position.line).unwrap_or(0);
+            derive_scenario_key(path, line_u32)
+        };
+
+        // Check for duplicate scenario keys within this rule
+        if !seen_scenario_keys.insert(scenario_key.clone()) {
+            errors.push(ResolutionError::DuplicateScenarioKey {
+                scenario_key,
+                feature_path: path.to_owned(),
+                scenario_name: scenario.name.clone(),
+            });
+            return; // Skip this scenario
+        }
+
+        // Feature background first, then rule background, then scenario steps
+        let mut resolved_steps = feature_background_steps.to_vec();
+        resolved_steps.extend(rule_background_steps.iter().cloned());
+        let mut last_keyword = "Given";
+
+        for step in &scenario.steps {
+            let effective_kind = resolve_effective_kind(&step.keyword, &mut last_keyword);
+
+            match self.resolve_step(step, path, &effective_kind) {
+                Ok(planned) => resolved_steps.push(planned),
+                Err(e) => errors.push(e),
+            }
+        }
+
+        resolved_scenarios.push(ResolvedScenario {
+            scenario_key,
+            feature_path: path.to_owned(),
+            scenario_name: scenario.name.clone(),
+            steps: resolved_steps,
+        });
     }
 
     /// Collects binding IDs from @Deferred scenario steps for orphan detection.
@@ -693,30 +772,25 @@ impl ResolutionEngine {
         match matching.len() {
             0 => Err(ResolutionError::MissingStep {
                 step_text: step_text.clone(),
-                step_kind: effective_kind.to_string(),
-                feature_path: feature_path.to_string(),
+                step_kind: effective_kind.to_owned(),
+                feature_path: feature_path.to_owned(),
                 line,
             }),
             1 => {
                 let (binding, captures) = &matching[0];
 
                 // Validate signature
-                self.validate_signature(step, binding, captures)?;
+                Self::validate_signature(step, binding, captures)?;
 
                 // Extract docstring content (gherkin 0.15 uses Option<String>)
                 let docstring = step.docstring.clone();
 
                 // Extract datatable
-                let datatable = step.table.as_ref().map(|t| {
-                    t.rows
-                        .iter()
-                        .map(|row| row.iter().cloned().collect())
-                        .collect()
-                });
+                let datatable = step.table.as_ref().map(|t| t.rows.clone());
 
                 // Build planned step with all 6 required arguments
                 Ok(PlannedStep::new(
-                    effective_kind.to_string(),
+                    effective_kind.to_owned(),
                     step_text.clone(),
                     binding.binding_id.clone(),
                     captures.clone(),
@@ -726,8 +800,8 @@ impl ResolutionEngine {
             }
             _ => Err(ResolutionError::AmbiguousStep {
                 step_text: step_text.clone(),
-                step_kind: effective_kind.to_string(),
-                feature_path: feature_path.to_string(),
+                step_kind: effective_kind.to_owned(),
+                feature_path: feature_path.to_owned(),
                 line,
                 matching_bindings: matching.iter().map(|(b, _)| b.binding_id.clone()).collect(),
             }),
@@ -747,7 +821,7 @@ impl ResolutionEngine {
                 if let Some(caps) = compiled.regex.captures(step_text) {
                     // Extract captured values (skip group 0 which is the full match)
                     let captures: Vec<String> = (1..=compiled.capture_count)
-                        .filter_map(|i| caps.get(i).map(|m| m.as_str().to_string()))
+                        .filter_map(|i| caps.get(i).map(|m| m.as_str().to_owned()))
                         .collect();
                     matches.push((&compiled.binding, captures));
                 }
@@ -759,7 +833,6 @@ impl ResolutionEngine {
 
     /// Validates that step requirements match binding signature.
     fn validate_signature(
-        &self,
         step: &gherkin::Step,
         binding: &SemanticBinding,
         captures: &[String],
@@ -800,27 +873,27 @@ fn resolve_effective_kind(keyword: &str, last_keyword: &mut &str) -> String {
     match trimmed {
         "Given" | "given" => {
             *last_keyword = "Given";
-            "Given".to_string()
+            "Given".to_owned()
         }
         "When" | "when" => {
             *last_keyword = "When";
-            "When".to_string()
+            "When".to_owned()
         }
         "Then" | "then" => {
             *last_keyword = "Then";
-            "Then".to_string()
+            "Then".to_owned()
         }
         "And" | "and" | "But" | "but" | "*" => {
             // Inherit from previous step
-            (*last_keyword).to_string()
+            (*last_keyword).to_owned()
         }
-        _ => trimmed.to_string(),
+        _ => trimmed.to_owned(),
     }
 }
 
 /// Checks if a scenario has the @Deferred tag and should be excluded from execution.
 ///
-/// Per GOLD_PLAN, scenarios tagged with @Deferred are excluded from the executable
+/// Per `GOLD_PLAN`, scenarios tagged with `@Deferred` are excluded from the executable
 /// plan but included in review as promotion candidates.
 fn is_deferred_scenario(scenario: &gherkin::Scenario) -> bool {
     scenario.tags.iter().any(|tag| {
@@ -834,7 +907,7 @@ fn is_deferred_scenario(scenario: &gherkin::Scenario) -> bool {
 /// Returns (compiled regex, number of capture groups).
 fn cucumber_expression_to_regex(
     expr: &str,
-    custom_params: &[crate::npap::CustomParameterDef],
+    custom_params: &[CustomParameterDef],
 ) -> Result<(Regex, usize), String> {
     let regex = if custom_params.is_empty() {
         Expression::regex(expr).map_err(|e| format!("Failed to parse expression: {e}"))?
@@ -856,62 +929,74 @@ fn cucumber_expression_to_regex(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::npap::{BindingSignature, SemanticBinding};
+    use crate::npap::{BindingSignature, SemanticBinding, generate_binding_id};
+
+    /// Builds a `Resolver` from a test registry, panicking with the errors on failure.
+    fn must_resolve(registry: &SemanticStepRegistry) -> Resolver {
+        match Resolver::new(registry) {
+            Ok(engine) => engine,
+            Err(errors) => panic!("test registry should resolve: {errors:?}"),
+        }
+    }
 
     fn make_binding(kind: &str, expression: &str, captures_arity: u32) -> SemanticBinding {
         SemanticBinding {
-            binding_id: crate::npap::generate_binding_id(kind, expression),
-            kind: kind.to_string(),
-            expression: expression.to_string(),
+            binding_id: generate_binding_id(kind, expression),
+            kind: kind.to_owned(),
+            expression: expression.to_owned(),
             signature: BindingSignature {
                 captures_arity,
                 accepts_docstring: false,
                 accepts_datatable: false,
             },
-            impl_hash: "test_hash".to_string(),
+            impl_hash: "test_hash".to_owned(),
             source_symbol: None,
         }
     }
 
     #[test]
-    fn test_resolution_engine_creation() {
+    fn resolution_engine_creation() {
         let registry = SemanticStepRegistry::new(vec![
             make_binding("Given", "a server is running", 0),
             make_binding("When", "a client connects", 0),
         ]);
 
-        let engine = ResolutionEngine::new(&registry);
-        assert!(engine.is_ok());
+        match Resolver::new(&registry) {
+            Ok(_) => {}
+            Err(errors) => panic!("registry should resolve: {errors:?}"),
+        }
     }
 
     #[test]
-    fn test_resolution_engine_invalid_expression() {
+    fn resolution_engine_invalid_expression() {
         let mut binding = make_binding("Given", "valid expression", 0);
-        binding.expression = "invalid {".to_string(); // Unclosed placeholder
+        binding.expression = "invalid {".to_owned(); // Unclosed placeholder
 
         let registry = SemanticStepRegistry::new(vec![binding]);
-        let engine = ResolutionEngine::new(&registry);
 
-        assert!(engine.is_err());
-        let errors = engine.unwrap_err();
-        assert_eq!(errors.len(), 1);
-        assert!(matches!(
-            errors[0],
-            ResolutionError::InvalidExpression { .. }
-        ));
+        match Resolver::new(&registry) {
+            Err(errors) => {
+                assert_eq!(errors.len(), 1);
+                assert!(matches!(
+                    errors[0],
+                    ResolutionError::InvalidExpression { .. }
+                ));
+            }
+            Ok(_) => panic!("invalid expression should fail resolution"),
+        }
     }
 
     #[test]
-    fn test_simple_resolution() {
+    fn simple_resolution() {
         let registry = SemanticStepRegistry::new(vec![
             make_binding("Given", "a server is running", 0),
             make_binding("When", "a client connects", 0),
             make_binding("Then", "the client is connected", 0),
         ]);
 
-        let engine = ResolutionEngine::new(&registry).unwrap();
+        let engine = must_resolve(&registry);
 
-        let feature_source = r#"
+        let feature_source = "
 @Feature(simple_test)
 Feature: Simple test
 
@@ -922,7 +1007,7 @@ Feature: Simple test
       Given a server is running
       When a client connects
       Then the client is connected
-"#;
+";
 
         let features = vec![("test.feature", feature_source)];
         let result = engine.resolve(features.into_iter());
@@ -930,7 +1015,9 @@ Feature: Simple test
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         assert!(result.plan.is_some());
 
-        let plan = result.plan.unwrap();
+        let Some(plan) = result.plan else {
+            panic!("expected a plan, errors: {:?}", result.errors);
+        };
         assert_eq!(plan.scenarios.len(), 1);
         assert_eq!(plan.scenarios[0].steps.len(), 3);
 
@@ -941,7 +1028,7 @@ Feature: Simple test
     }
 
     #[test]
-    fn test_and_but_resolution() {
+    fn and_but_resolution() {
         let registry = SemanticStepRegistry::new(vec![
             make_binding("Given", "a server is running", 0),
             make_binding("Given", "the server is configured", 0),
@@ -950,9 +1037,9 @@ Feature: Simple test
             make_binding("Then", "the server accepts it", 0),
         ]);
 
-        let engine = ResolutionEngine::new(&registry).unwrap();
+        let engine = must_resolve(&registry);
 
-        let feature_source = r#"
+        let feature_source = "
 @Feature(and_but_test)
 Feature: And/But test
 
@@ -965,13 +1052,15 @@ Feature: And/But test
       When a client connects
       Then the client is connected
       But the server accepts it
-"#;
+";
 
         let features = vec![("test.feature", feature_source)];
         let result = engine.resolve(features.into_iter());
 
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let plan = result.plan.unwrap();
+        let Some(plan) = result.plan else {
+            panic!("expected a plan, errors: {:?}", result.errors);
+        };
 
         // And after Given should be Given
         assert_eq!(plan.scenarios[0].steps[1].effective_kind, "Given");
@@ -980,13 +1069,13 @@ Feature: And/But test
     }
 
     #[test]
-    fn test_missing_step_error() {
+    fn missing_step_error() {
         let registry =
             SemanticStepRegistry::new(vec![make_binding("Given", "a server is running", 0)]);
 
-        let engine = ResolutionEngine::new(&registry).unwrap();
+        let engine = must_resolve(&registry);
 
-        let feature_source = r#"
+        let feature_source = "
 @Feature(missing_step)
 Feature: Missing step
 
@@ -996,7 +1085,7 @@ Feature: Missing step
     Scenario: No binding
       Given a server is running
       When no binding exists for this
-"#;
+";
 
         let features = vec![("test.feature", feature_source)];
         let result = engine.resolve(features.into_iter());
@@ -1009,11 +1098,11 @@ Feature: Missing step
     }
 
     #[test]
-    fn test_captures_extraction() {
+    fn captures_extraction() {
         let registry =
             SemanticStepRegistry::new(vec![make_binding("Given", "a user named {string}", 1)]);
 
-        let engine = ResolutionEngine::new(&registry).unwrap();
+        let engine = must_resolve(&registry);
 
         let feature_source = r#"
 @Feature(captures)
@@ -1030,17 +1119,19 @@ Feature: Captures
         let result = engine.resolve(features.into_iter());
 
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let plan = result.plan.unwrap();
+        let Some(plan) = result.plan else {
+            panic!("expected a plan, errors: {:?}", result.errors);
+        };
         assert_eq!(plan.scenarios[0].steps[0].captures, vec!["Alice"]);
     }
 
     #[test]
-    fn test_signature_mismatch_captures() {
+    fn signature_mismatch_captures() {
         let registry = SemanticStepRegistry::new(vec![
             make_binding("Given", "a user named {string}", 2), // expects 2 captures
         ]);
 
-        let engine = ResolutionEngine::new(&registry).unwrap();
+        let engine = must_resolve(&registry);
 
         let feature_source = r#"
 @Feature(signature_mismatch)
@@ -1064,25 +1155,32 @@ Feature: Signature mismatch
     }
 
     #[test]
-    fn test_cucumber_expression_to_regex() {
-        let (regex, count) = cucumber_expression_to_regex("a user named {string}", &[]).unwrap();
+    fn expression_to_regex_compiles() {
+        let (regex, count) = match cucumber_expression_to_regex("a user named {string}", &[]) {
+            Ok(pair) => pair,
+            Err(e) => panic!("expression should compile: {e}"),
+        };
         assert!(regex.is_match("a user named \"Alice\""));
         assert!(
             count >= 1,
             "expected at least 1 capture for {{string}}, got {count}"
         );
 
-        let (regex, count) = cucumber_expression_to_regex("I have {int} apples", &[]).unwrap();
-        assert!(regex.is_match("I have 5 apples"));
+        let (int_regex, int_count) = match cucumber_expression_to_regex("I have {int} apples", &[])
+        {
+            Ok(pair) => pair,
+            Err(e) => panic!("expression should compile: {e}"),
+        };
+        assert!(int_regex.is_match("I have 5 apples"));
         // {int} may have multiple internal groups, just verify it works
         assert!(
-            count >= 1,
-            "expected at least 1 capture for {{int}}, got {count}"
+            int_count >= 1,
+            "expected at least 1 capture for {{int}}, got {int_count}"
         );
     }
 
     #[test]
-    fn test_orphan_binding_detection() {
+    fn orphan_binding_detection() {
         // Registry has 4 bindings, but only 3 are used
         let registry = SemanticStepRegistry::new(vec![
             make_binding("Given", "a server is running", 0),
@@ -1091,9 +1189,9 @@ Feature: Signature mismatch
             make_binding("Then", "an orphan binding that is never used", 0), // orphan
         ]);
 
-        let engine = ResolutionEngine::new(&registry).unwrap();
+        let engine = must_resolve(&registry);
 
-        let feature_source = r#"
+        let feature_source = "
 @Feature(orphan_test)
 Feature: Simple test
 
@@ -1104,7 +1202,7 @@ Feature: Simple test
       Given a server is running
       When a client connects
       Then the client is connected
-"#;
+";
 
         let features = vec![("test.feature", feature_source)];
         let result = engine.resolve(features.into_iter());
@@ -1122,16 +1220,16 @@ Feature: Simple test
     }
 
     #[test]
-    fn test_no_orphans_when_all_used() {
+    fn no_orphans_when_all_used() {
         // Registry has exactly the bindings used
         let registry = SemanticStepRegistry::new(vec![
             make_binding("Given", "a server is running", 0),
             make_binding("When", "a client connects", 0),
         ]);
 
-        let engine = ResolutionEngine::new(&registry).unwrap();
+        let engine = must_resolve(&registry);
 
-        let feature_source = r#"
+        let feature_source = "
 @Feature(all_used)
 Feature: All used
 
@@ -1141,7 +1239,7 @@ Feature: All used
     Scenario: Both bindings used
       Given a server is running
       When a client connects
-"#;
+";
 
         let features = vec![("test.feature", feature_source)];
         let result = engine.resolve(features.into_iter());
@@ -1151,20 +1249,20 @@ Feature: All used
     }
 
     #[test]
-    fn test_requires_rule_sections() {
+    fn requires_rule_sections() {
         let registry =
             SemanticStepRegistry::new(vec![make_binding("Given", "a server is running", 0)]);
 
-        let engine = ResolutionEngine::new(&registry).unwrap();
+        let engine = must_resolve(&registry);
 
-        let feature_source = r#"
+        let feature_source = "
 @Feature(missing_rule)
 Feature: Missing rule
 
   @Scenario(01)
   Scenario: Top level
     Given a server is running
-"#;
+";
 
         let features = vec![("test.feature", feature_source)];
         let result = engine.resolve(features.into_iter());

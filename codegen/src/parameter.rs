@@ -94,6 +94,14 @@ mod spec {
     use quote::quote;
     use syn::parse_quote;
 
+    /// Runs the `#[param]` derive in tests, panicking with the error on failure.
+    fn must_derive(input: proc_macro2::TokenStream) -> String {
+        match super::derive(input) {
+            Ok(tokens) => tokens.to_string(),
+            Err(e) => panic!("derive should succeed: {e}"),
+        }
+    }
+
     #[test]
     fn derives_impl() {
         let input = parse_quote! {
@@ -109,10 +117,7 @@ mod spec {
             }
         };
 
-        assert_eq!(
-            super::derive(input).unwrap().to_string(),
-            output.to_string(),
-        );
+        assert_eq!(must_derive(input), output.to_string(),);
     }
 
     #[test]
@@ -130,10 +135,7 @@ mod spec {
             }
         };
 
-        assert_eq!(
-            super::derive(input).unwrap().to_string(),
-            output.to_string(),
-        );
+        assert_eq!(must_derive(input), output.to_string(),);
     }
 
     #[test]
@@ -151,10 +153,7 @@ mod spec {
             }
         };
 
-        assert_eq!(
-            super::derive(input).unwrap().to_string(),
-            output.to_string(),
-        );
+        assert_eq!(must_derive(input), output.to_string(),);
     }
 
     #[test]
@@ -172,10 +171,7 @@ mod spec {
             }
         };
 
-        assert_eq!(
-            super::derive(input).unwrap().to_string(),
-            output.to_string(),
-        );
+        assert_eq!(must_derive(input), output.to_string(),);
     }
 
     #[test]
@@ -193,10 +189,7 @@ mod spec {
             }
         };
 
-        assert_eq!(
-            super::derive(input).unwrap().to_string(),
-            output.to_string(),
-        );
+        assert_eq!(must_derive(input), output.to_string(),);
     }
 
     #[test]
@@ -206,7 +199,9 @@ mod spec {
             struct Parameter;
         };
 
-        let err = super::derive(input).unwrap_err();
+        let Err(err) = super::derive(input) else {
+            panic!("derive should fail without a regex argument")
+        };
 
         assert_eq!(
             err.to_string(),

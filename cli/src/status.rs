@@ -13,7 +13,7 @@ use clap::Args;
 use serde::Serialize;
 use walkdir::WalkDir;
 
-use namako_engine::engine::ResolutionEngine;
+use namako_engine::engine::Resolver;
 use namako_engine::npap::{
     Certification, CertificationIdentity, RunReport, ScenarioStatus, SemanticStepRegistry,
     HASH_CONTRACT_VERSION,
@@ -446,7 +446,7 @@ fn recompute_identity(args: &StatusArgs) -> Result<IdentityFields> {
     let features = read_features(&args.specs_dir, &feature_paths)?;
     let registry = fetch_adapter_manifest(&args.adapter_cmd)?;
 
-    let engine = ResolutionEngine::new(&registry)
+    let engine = Resolver::new(&registry)
         .map_err(|errs| anyhow::anyhow!("Failed to build engine: {:?}", errs))?;
 
     let feature_refs: Vec<(&str, &str)> = features

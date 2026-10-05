@@ -13,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use walkdir::WalkDir;
 
-use namako_engine::engine::ResolutionEngine;
+use namako_engine::engine::Resolver;
 use namako_engine::npap::SemanticStepRegistry;
 
 /// Arguments for the lint command.
@@ -84,7 +84,7 @@ pub fn run(args: LintArgs) -> Result<()> {
     }
 
     // Step 4: Build resolution engine
-    let engine = ResolutionEngine::new(&registry)
+    let engine = Resolver::new(&registry)
         .map_err(|errs| anyhow::anyhow!("Failed to build resolution engine: {:?}", errs))?;
 
     // Step 5: Resolve features - engine expects (relative_path, source) pairs

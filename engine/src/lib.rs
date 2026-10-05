@@ -171,14 +171,6 @@ pub mod npap;
 #[cfg(feature = "tracing")]
 pub mod tracing;
 
-// TODO: Remove once tests run without complains about it.
-#[cfg(test)]
-mod only_used_in_doc_tests_and_book {
-    use rand as _;
-    use tempfile as _;
-    use tokio as _;
-}
-
 pub use gherkin;
 #[cfg(feature = "macros")]
 #[doc(inline)]
@@ -197,3 +189,11 @@ pub use self::{
     world::World,
     writer::{Arbitrary as ArbitraryWriter, Ext as WriterExt, Stats as StatsWriter, Writer},
 };
+
+// TODO: Remove once tests run without complains about it.
+#[cfg(test)]
+mod only_used_in_doc_tests_and_book {
+    use rand as _;
+    use tempfile as _;
+    use tokio as _;
+}

@@ -696,9 +696,9 @@ impl<W: World> Executor<W> {
 
                 let feature_background = stream::iter(feature_background)
                     .map(Ok)
-                    .try_fold(before_hook, |world, bg_step| {
+                    .try_fold(before_hook, |acc, bg_step| {
                         self.run_step(
-                            world,
+                            acc,
                             bg_step,
                             true,
                             into_bg_step_ev,
@@ -724,9 +724,9 @@ impl<W: World> Executor<W> {
 
                 let rule_background = stream::iter(rule_background)
                     .map(Ok)
-                    .try_fold(feature_background, |world, bg_step| {
+                    .try_fold(feature_background, |acc, bg_step| {
                         self.run_step(
-                            world,
+                            acc,
                             bg_step,
                             true,
                             into_bg_step_ev,
@@ -740,9 +740,9 @@ impl<W: World> Executor<W> {
 
                 stream::iter(scenario.steps.iter().map(|s| Source::new(s.clone())))
                     .map(Ok)
-                    .try_fold(rule_background, |world, step| {
+                    .try_fold(rule_background, |acc, step| {
                         self.run_step(
-                            world,
+                            acc,
                             step,
                             false,
                             into_step_ev,
@@ -774,7 +774,7 @@ impl<W: World> Executor<W> {
                     feature.clone(),
                     rule.clone(),
                     scenario.clone(),
-                    world.clone(),
+                    world,
                     exec_error,
                 );
             }
@@ -1370,7 +1370,7 @@ impl Features {
                 .extract_if(.., |(_, _, _, _)| {
                     // Because of retries involved, we cannot just specify
                     // `..count` range to `.extract_if()`.
-                    if count.filter(|c| i >= *c).is_some() {
+                    if count.as_ref().is_some_and(|c| i >= *c) {
                         return false;
                     }
 
@@ -1382,16 +1382,18 @@ impl Features {
             (!drained.is_empty()).then_some(drained)
         };
 
-        let mut guard = self.scenarios.lock().await;
-        let scenarios = guard
-            .get_mut(&Serial)
-            .and_then(|storage| drain(storage, Serial, Some(1)))
-            .or_else(|| {
-                guard
-                    .get_mut(&Concurrent)
-                    .and_then(|storage| drain(storage, Concurrent, max_concurrent_scenarios))
-            })
-            .unwrap_or_default();
+        let scenarios = {
+            let mut guard = self.scenarios.lock().await;
+            guard
+                .get_mut(&Serial)
+                .and_then(|storage| drain(storage, Serial, Some(1)))
+                .or_else(|| {
+                    guard
+                        .get_mut(&Concurrent)
+                        .and_then(|storage| drain(storage, Concurrent, max_concurrent_scenarios))
+                })
+                .unwrap_or_default()
+        };
 
         (scenarios, min_dur)
     }

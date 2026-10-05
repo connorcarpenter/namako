@@ -299,7 +299,7 @@ impl<Writer> Summarize<Writer> {
             Step::Started => {}
             Step::Passed(..) => {
                 self.steps.passed += 1;
-                if scenario.steps.last().filter(|s| *s == step).is_some() {
+                if scenario.steps.last().as_ref().is_some_and(|s| *s == step) {
                     _ = self.handled_scenarios.remove(&(feature, rule, scenario));
                 }
             }
@@ -347,9 +347,7 @@ impl<Writer> Summarize<Writer> {
             }
         }
     }
-}
 
-impl<Writer> Summarize<Writer> {
     /// Wraps the given [`Writer`] into a new [`Summarize`]d one.
     #[must_use]
     pub fn new(writer: Writer) -> Self {
@@ -507,7 +505,7 @@ impl Styles {
         if formatted.is_empty() {
             "".into()
         } else {
-            self.bold(format!(" {}{formatted}{}", self.bold("("), self.bold(")"),))
+            self.bold(format!(" {}{formatted}{}", self.bold("("), self.bold(")")))
         }
     }
 

@@ -1,4 +1,4 @@
-# namako_codegen
+# `namako_codegen`
 
 Procedural macros for Namako step bindings.
 

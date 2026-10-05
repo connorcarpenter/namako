@@ -14,7 +14,7 @@ use gherkin::{Feature, GherkinEnv};
 use serde::Serialize;
 use walkdir::WalkDir;
 
-use namako_engine::engine::ResolutionEngine;
+use namako_engine::engine::Resolver;
 use namako_engine::npap::SemanticStepRegistry;
 
 /// Arguments for the explain command.
@@ -157,7 +157,7 @@ fn compute_explain(args: &ExplainArgs) -> Result<ExplainOutput> {
     let registry = fetch_adapter_manifest(&args.adapter_cmd)?;
 
     // Build resolution engine
-    let engine = ResolutionEngine::new(&registry)
+    let engine = Resolver::new(&registry)
         .map_err(|errs| anyhow::anyhow!("Failed to build engine: {:?}", errs))?;
 
     // Resolve all features

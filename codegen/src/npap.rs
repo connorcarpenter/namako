@@ -1,11 +1,11 @@
 //! NPAP v1 hashing utilities for proc-macro code generation.
 //!
 //! This module provides compile-time hashing functions for generating
-//! binding IDs and impl hashes per GOLD_PLAN.md specifications.
+//! binding IDs and impl hashes per `GOLD_PLAN.md` specifications.
 
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::UnicodeNormalization as _;
 
-/// Normalizes a string per GOLD_PLAN §7.0.2:
+/// Normalizes a string per `GOLD_PLAN` §7.0.2:
 /// 1. Unicode NFC normalization
 /// 2. Newline normalization (`\r\n` and `\r` → `\n`)
 pub(crate) fn normalize_string(s: &str) -> String {
@@ -38,7 +38,7 @@ pub(crate) fn blake3_256_lowerhex(data: &[u8]) -> String {
     hash.to_hex().to_string()
 }
 
-/// Generates a binding ID from kind and expression per GOLD_PLAN §4.2.1.
+/// Generates a binding ID from `kind` and `expression` per `GOLD_PLAN` §4.2.1.
 ///
 /// Formula: `blake3_256_lowerhex("namako-binding-id-v1|" + kind + "|" + expr_norm)`
 pub(crate) fn generate_binding_id(kind: &str, expression: &str) -> String {
@@ -47,7 +47,7 @@ pub(crate) fn generate_binding_id(kind: &str, expression: &str) -> String {
     blake3_256_lowerhex(input.as_bytes())
 }
 
-/// Generates an impl_hash from a function body token stream per GOLD_PLAN §6.2.2.
+/// Generates an `impl_hash` from a function body token stream per `GOLD_PLAN` §6.2.2.
 ///
 /// The token-fingerprint-v1 scheme:
 /// 1. Token stream of function body (excluding signature and attributes)
@@ -86,7 +86,7 @@ fn collapse_whitespace(s: &str) -> String {
         }
     }
 
-    result.trim().to_string()
+    result.trim().to_owned()
 }
 
 #[cfg(test)]
@@ -94,40 +94,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_binding_id_format() {
+    fn binding_id_format() {
         let id = generate_binding_id("Given", "a server is running");
         assert_eq!(id.len(), 64);
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
-    fn test_binding_id_deterministic() {
+    fn binding_id_deterministic() {
         let id1 = generate_binding_id("When", "a client connects");
         let id2 = generate_binding_id("When", "a client connects");
         assert_eq!(id1, id2);
     }
 
     #[test]
-    fn test_binding_id_different_kinds() {
+    fn binding_id_different_kinds() {
         let given = generate_binding_id("Given", "something");
         let when = generate_binding_id("When", "something");
         assert_ne!(given, when);
     }
 
     #[test]
-    fn test_normalize_crlf() {
+    fn normalize_crlf() {
         assert_eq!(normalize_string("a\r\nb"), "a\nb");
         assert_eq!(normalize_string("a\rb"), "a\nb");
     }
 
     #[test]
-    fn test_collapse_whitespace() {
+    fn whitespace_collapses() {
         assert_eq!(collapse_whitespace("a   b  c"), "a b c");
         assert_eq!(collapse_whitespace("  a  \n\n  b  "), "a b");
     }
 
     #[test]
-    fn test_golden_binding_id() {
+    fn golden_binding_id() {
         // Must match the value in namako/src/npap.rs
         let id = generate_binding_id("Given", "a server is running");
         assert_eq!(

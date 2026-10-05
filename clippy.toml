@@ -1,0 +1,10 @@
+# Namako workspace Clippy configuration.
+#
+# `ignore-interior-mutability` for `mutable_key_type` (Usher 48154):
+# `HashableRegex` is exempt because its `Hash`/`Eq`/`Ord` impls operate on
+# `as_str()` only (engine/src/step.rs, `impl Hash for HashableRegex` and
+# neighbors) — the inner `Regex` cache pool never participates in hashing or
+# equality. Proven by the `hash_and_eq_stable_after_match_use` unit test at
+# the bottom of engine/src/step.rs, which exercises the cache pool via a real
+# match and then asserts `Eq` + hash equality against a fresh instance.
+ignore-interior-mutability = ["namako_engine::step::HashableRegex"]

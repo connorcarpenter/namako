@@ -1,5 +1,5 @@
-/// Synthetic Gherkin feature content for parsing benchmarks.
-/// Content is representative of the naia BDD suite scale and patterns.
+//! Synthetic Gherkin feature content for parsing benchmarks.
+//! Content is representative of the naia BDD suite scale and patterns.
 
 /// Small feature: 3 scenarios, ~10 steps. Exercises the minimal parse path.
 pub const FEATURE_SMALL: &str = r#"@Feature(lifecycle)

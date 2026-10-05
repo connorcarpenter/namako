@@ -1,6 +1,6 @@
-use std::fmt::Display;
 #[cfg(feature = "macros")]
 use std::{fmt::Debug, path::Path};
+use std::{fmt::Display, thread, time};
 
 #[cfg(feature = "macros")]
 use crate::{
@@ -75,7 +75,7 @@ pub trait World: Sized + 'static {
     where
         F: FnMut(&Self::RefCtx<'_>) -> codegen::AssertOutcome<T>,
     {
-        const MAX_ATTEMPTS: usize = 100;
+        const MAX_ATTEMPTS: u64 = 100;
         const POLL_INTERVAL_MS: u64 = 10;
 
         for _attempt in 0..MAX_ATTEMPTS {
@@ -83,7 +83,7 @@ pub trait World: Sized + 'static {
             match f(&ctx) {
                 codegen::AssertOutcome::Passed(v) => return v,
                 codegen::AssertOutcome::Pending => {
-                    std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
+                    thread::sleep(time::Duration::from_millis(POLL_INTERVAL_MS));
                 }
                 codegen::AssertOutcome::Failed(msg) => panic!("{msg}"),
             }
@@ -91,7 +91,7 @@ pub trait World: Sized + 'static {
         panic!(
             "Then assertion timed out after {} attempts ({}ms total)",
             MAX_ATTEMPTS,
-            MAX_ATTEMPTS as u64 * POLL_INTERVAL_MS
+            MAX_ATTEMPTS * POLL_INTERVAL_MS
         );
     }
 

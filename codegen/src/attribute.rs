@@ -2,6 +2,7 @@
 
 use std::{iter, mem};
 
+use crate::npap::{generate_binding_id, generate_impl_hash};
 use cucumber_expressions::{Expression, Parameter, SingleExpression, Spanned};
 use inflections::case::to_pascal_case;
 use proc_macro2::TokenStream;
@@ -11,6 +12,7 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_quote,
     spanned::Spanned as _,
+    token::{Gt, Lt},
 };
 
 /// Names of default [`Parameter`]s.
@@ -24,6 +26,24 @@ pub(crate) fn step(
     input: TokenStream,
 ) -> syn::Result<TokenStream> {
     Step::parse(attr_name, args, input).and_then(Step::expand)
+}
+
+/// NPAP v1 compile-time metadata for one step function.
+struct NpapParts {
+    /// `PascalCase` step kind (`Given`, `When`, `Then`).
+    kind: String,
+    /// Raw attribute expression text.
+    expression: String,
+    /// NPAP v1 compile-time binding ID.
+    binding_id: String,
+    /// NPAP v1 compile-time function-body hash.
+    impl_hash: String,
+    /// Count of capture parameters.
+    captures_arity: u32,
+    /// True if the function takes an `Option<String>` docstring parameter.
+    accepts_docstring: bool,
+    /// True if the function takes an `Option<Vec<Vec<String>>>` datatable parameter.
+    accepts_datatable: bool,
 }
 
 /// Parsed state (ready for code generation) of the attribute and the function
@@ -123,19 +143,16 @@ impl Step {
             (!self.returns_unit()).then(|| quote! { .unwrap_or_else(|e| panic!("{}", e)) })
         };
 
-        // NPAP v1: Compute binding_id and impl_hash at compile time
-        let kind = inflections::case::to_pascal_case(self.attr_name);
-        let expression = match &self.attr_arg {
-            AttributeArgument::Expression(lit) => lit.value(),
-        };
-        let binding_id = crate::npap::generate_binding_id(&kind, &expression);
-        let impl_hash = crate::npap::generate_impl_hash(&func.block);
-
-        // NPAP v1: Extract signature information
-        let signature_info = self.extract_signature_info()?;
-        let captures_arity = signature_info.captures_arity;
-        let accepts_docstring = signature_info.accepts_docstring;
-        let accepts_datatable = signature_info.accepts_datatable;
+        // NPAP v1: Compute binding_id and impl_hash at compile time,
+        // plus signature information for the generated metadata.
+        let npap = self.npap_parts(func);
+        let kind = npap.kind;
+        let expression = npap.expression;
+        let binding_id = npap.binding_id;
+        let impl_hash = npap.impl_hash;
+        let captures_arity = npap.captures_arity;
+        let accepts_docstring = npap.accepts_docstring;
+        let accepts_datatable = npap.accepts_datatable;
 
         // Context-first ABI: construct ctx from world and pass to user fn
         // Given/When: use ctx_mut() for mutable context
@@ -151,126 +168,29 @@ impl Step {
 
         // Pass context as first arg to user function
         // Respects whether the user function asks for &mut Ctx, &Ctx, or Ctx (value)
-        let first_arg = func
-            .sig
-            .inputs
-            .first()
-            .expect("step function must have at least one argument");
-        let (is_reference, is_mutable) = if let syn::FnArg::Typed(pat_type) = first_arg {
-            if let syn::Type::Reference(r) = pat_type.ty.as_ref() {
-                (true, r.mutability.is_some())
-            } else {
-                (false, false)
-            }
-        } else {
-            (false, false)
-        };
-
-        let ctx_arg = if self.attr_name == "then" {
-            // For Then steps, the closure arg `__namako_ctx_arg` is ALREADY `&Ctx`.
-            if is_reference {
-                quote! { __namako_ctx_arg }
-            } else {
-                quote! { *__namako_ctx_arg }
-            }
-        } else {
-            // For Given/When, `__namako_ctx_arg` is `Ctx` (value).
-            if is_mutable {
-                quote! { &mut __namako_ctx_arg }
-            } else if is_reference {
-                quote! { &__namako_ctx_arg }
-            } else {
-                quote! { __namako_ctx_arg }
-            }
-        };
+        let ctx_arg = self.ctx_arg_for_first_input(func)?;
 
         // Generate different func body for Then vs Given/When
         let func_body = if self.attr_name == "then" {
-            // Then steps: delegate to World's assert_then() method
-            // The World controls execution semantics (single-shot vs polling)
-            if returns_assert_outcome {
-                // User function returns AssertOutcome directly - use it as-is
-                // Still wrap in catch_unwind to handle any panics gracefully
-                quote! {
-                    func: |__namako_world, __namako_ctx| {
-                        ::std::boxed::Box::pin(async move {
-                            #addon_parsing
-
-                            <WorldAlias as ::namako_engine::World>::assert_then(
-                                __namako_world,
-                                |__namako_ctx_arg| {
-                                    let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
-                                        #func_name(#ctx_arg, #polling_args)
-                                            #awaiting
-                                    }));
-
-                                    match result {
-                                        Ok(outcome) => outcome,
-                                        Err(payload) => {
-                                            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-                                                s.to_string()
-                                            } else if let Some(s) = payload.downcast_ref::<String>() {
-                                                s.clone()
-                                            } else {
-                                                "Unknown panic payload".to_string()
-                                            };
-                                            ::namako_engine::codegen::AssertOutcome::Failed(msg)
-                                        }
-                                    }
-                                }
-                            );
-                        })
-                    },
-                }
-            } else {
-                // User function returns () - wrap with panic catching
-                quote! {
-                    func: |__namako_world, __namako_ctx| {
-                        ::std::boxed::Box::pin(async move {
-                            #addon_parsing
-
-                            <WorldAlias as ::namako_engine::World>::assert_then(
-                                __namako_world,
-                                |__namako_ctx_arg| {
-                                    let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
-                                        let _ = #func_name(#ctx_arg, #polling_args)
-                                            #awaiting
-                                            #unwrapping;
-                                    }));
-
-                                    match result {
-                                        Ok(_) => ::namako_engine::codegen::AssertOutcome::Passed(()),
-                                        Err(payload) => {
-                                            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-                                                s.to_string()
-                                            } else if let Some(s) = payload.downcast_ref::<String>() {
-                                                s.clone()
-                                            } else {
-                                                "Unknown panic payload".to_string()
-                                            };
-                                            ::namako_engine::codegen::AssertOutcome::Failed(msg)
-                                        }
-                                    }
-                                }
-                            );
-                        })
-                    },
-                }
-            }
+            Self::then_func_body_token(
+                func_name,
+                &ctx_arg,
+                &polling_args,
+                addon_parsing.as_ref(),
+                awaiting.as_ref(),
+                unwrapping.as_ref(),
+                returns_assert_outcome,
+            )
         } else {
-            // Given/When steps: simple context construction and call
-            quote! {
-                func: |__namako_world, __namako_ctx| {
-                    let f = async move {
-                        #addon_parsing
-                        #ctx_construction
-                        let _ = #func_name(#ctx_arg, #call_args)
-                            #awaiting
-                            #unwrapping;
-                    };
-                    ::std::boxed::Box::pin(f)
-                },
-            }
+            Self::given_when_func_body_token(
+                func_name,
+                &ctx_arg,
+                &call_args,
+                addon_parsing.as_ref(),
+                &ctx_construction,
+                awaiting.as_ref(),
+                unwrapping.as_ref(),
+            )
         };
 
         Ok(quote! {
@@ -322,13 +242,179 @@ impl Step {
         })
     }
 
+    /// Computes NPAP v1 metadata plus signature information for the function.
+    fn npap_parts(&self, func: &syn::ItemFn) -> NpapParts {
+        // NPAP v1: Compute binding_id and impl_hash at compile time
+        let kind = to_pascal_case(self.attr_name);
+        let expression = match &self.attr_arg {
+            AttributeArgument::Expression(lit) => lit.value(),
+        };
+        let binding_id = generate_binding_id(&kind, &expression);
+        let impl_hash = generate_impl_hash(&func.block);
+
+        // NPAP v1: Extract signature information
+        let signature_info = self.extract_signature_info();
+        NpapParts {
+            kind,
+            expression,
+            binding_id,
+            impl_hash,
+            captures_arity: signature_info.captures_arity,
+            accepts_docstring: signature_info.accepts_docstring,
+            accepts_datatable: signature_info.accepts_datatable,
+        }
+    }
+
+    /// Resolves the context argument token from the user function's first input.
+    fn ctx_arg_for_first_input(&self, func: &syn::ItemFn) -> syn::Result<TokenStream> {
+        let Some(first_arg) = func.sig.inputs.first() else {
+            return Err(syn::Error::new_spanned(
+                &func.sig.ident,
+                "step function must have at least one argument",
+            ));
+        };
+        let (is_reference, is_mutable) = if let syn::FnArg::Typed(pat_type) = first_arg
+            && let syn::Type::Reference(r) = pat_type.ty.as_ref()
+        {
+            (true, r.mutability.is_some())
+        } else {
+            (false, false)
+        };
+        Ok(self.ctx_arg_token(is_reference, is_mutable))
+    }
+
+    /// Builds the context argument token for the generated step call.
+    ///
+    /// For `then` steps the closure arg is already `&Ctx`; for
+    /// given/when it is an owned value reborrowed per the user signature.
+    fn ctx_arg_token(&self, is_reference: bool, is_mutable: bool) -> TokenStream {
+        if self.attr_name == "then" && is_reference {
+            return quote! { __namako_ctx_arg };
+        }
+        if self.attr_name == "then" {
+            return quote! { *__namako_ctx_arg };
+        }
+        if is_mutable {
+            return quote! { &mut __namako_ctx_arg };
+        }
+        if is_reference {
+            return quote! { &__namako_ctx_arg };
+        }
+        quote! { __namako_ctx_arg }
+    }
+
+    /// Builds the generated `func` body for `then` steps (polled assert path).
+    fn then_func_body_token(
+        func_name: &syn::Ident,
+        ctx_arg: &TokenStream,
+        polling_args: &TokenStream,
+        addon_parsing: Option<&TokenStream>,
+        awaiting: Option<&TokenStream>,
+        unwrapping: Option<&TokenStream>,
+        returns_assert_outcome: bool,
+    ) -> TokenStream {
+        if returns_assert_outcome {
+            // User function returns AssertOutcome directly - use it as-is
+            // Still wrap in catch_unwind to handle any panics gracefully
+            quote! {
+                func: |__namako_world, __namako_ctx| {
+                    ::std::boxed::Box::pin(async move {
+                        #addon_parsing
+
+                        <WorldAlias as ::namako_engine::World>::assert_then(
+                            __namako_world,
+                            |__namako_ctx_arg| {
+                                let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                                    #func_name(#ctx_arg, #polling_args)
+                                        #awaiting
+                                }));
+
+                                match result {
+                                    Ok(outcome) => outcome,
+                                    Err(payload) => {
+                                        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                                            s.to_string()
+                                        } else if let Some(s) = payload.downcast_ref::<String>() {
+                                            s.clone()
+                                        } else {
+                                            "Unknown panic payload".to_string()
+                                        };
+                                        ::namako_engine::codegen::AssertOutcome::Failed(msg)
+                                    }
+                                }
+                            }
+                        );
+                    })
+                },
+            }
+        } else {
+            // User function returns () - wrap with panic catching
+            quote! {
+                func: |__namako_world, __namako_ctx| {
+                    ::std::boxed::Box::pin(async move {
+                        #addon_parsing
+
+                        <WorldAlias as ::namako_engine::World>::assert_then(
+                            __namako_world,
+                            |__namako_ctx_arg| {
+                                let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                                    let _ = #func_name(#ctx_arg, #polling_args)
+                                        #awaiting
+                                        #unwrapping;
+                                }));
+
+                                match result {
+                                    Ok(_) => ::namako_engine::codegen::AssertOutcome::Passed(()),
+                                    Err(payload) => {
+                                        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                                            s.to_string()
+                                        } else if let Some(s) = payload.downcast_ref::<String>() {
+                                            s.clone()
+                                        } else {
+                                            "Unknown panic payload".to_string()
+                                        };
+                                        ::namako_engine::codegen::AssertOutcome::Failed(msg)
+                                    }
+                                }
+                            }
+                        );
+                    })
+                },
+            }
+        }
+    }
+
+    /// Builds the generated `func` body for given/when steps (direct call path).
+    fn given_when_func_body_token(
+        func_name: &syn::Ident,
+        ctx_arg: &TokenStream,
+        call_args: &TokenStream,
+        addon_parsing: Option<&TokenStream>,
+        ctx_construction: &TokenStream,
+        awaiting: Option<&TokenStream>,
+        unwrapping: Option<&TokenStream>,
+    ) -> TokenStream {
+        quote! {
+            func: |__namako_world, __namako_ctx| {
+                let f = async move {
+                    #addon_parsing
+                    #ctx_construction
+                    let _ = #func_name(#ctx_arg, #call_args)
+                        #awaiting
+                        #unwrapping;
+                };
+                ::std::boxed::Box::pin(f)
+            },
+        }
+    }
+
     /// Extracts NPAP v1 signature information from the function.
     ///
-    /// Per GOLD_PLAN §4.4:
+    /// Per `GOLD_PLAN` §4.4:
     /// - `captures_arity`: count of capture parameters (after `&mut World`)
     /// - `accepts_docstring`: true if function has `Option<String>` parameter
     /// - `accepts_datatable`: true if function has `Option<Vec<Vec<String>>>` parameter
-    fn extract_signature_info(&self) -> syn::Result<SignatureInfo> {
+    fn extract_signature_info(&self) -> SignatureInfo {
         let mut captures_arity: u32 = 0;
         let mut accepts_docstring = false;
         let mut accepts_datatable = false;
@@ -336,12 +422,11 @@ impl Step {
         // Skip the first argument (&mut World)
         for arg in self.func.sig.inputs.iter().skip(1) {
             // Skip step context argument if present
-            if let Some(step_name) = &self.arg_name_of_step_context {
-                if let Ok((ident, _)) = parse_fn_arg(arg) {
-                    if ident == step_name {
-                        continue;
-                    }
-                }
+            if let Some(step_name) = &self.arg_name_of_step_context
+                && let Ok((ident, _)) = parse_fn_arg(arg)
+                && ident == step_name
+            {
+                continue;
             }
 
             if let Ok((_, ty)) = parse_fn_arg(arg) {
@@ -356,11 +441,11 @@ impl Step {
             }
         }
 
-        Ok(SignatureInfo {
+        SignatureInfo {
             captures_arity,
             accepts_docstring,
             accepts_datatable,
-        })
+        }
     }
 
     /// Indicates whether this [`Step::func`] return type is `()`.
@@ -383,10 +468,10 @@ impl Step {
             syn::ReturnType::Default => false,
             syn::ReturnType::Type(_, ty) => {
                 // Check if it's a path type ending in "AssertOutcome"
-                if let syn::Type::Path(type_path) = &**ty {
-                    if let Some(segment) = type_path.path.segments.last() {
-                        return segment.ident == "AssertOutcome";
-                    }
+                if let syn::Type::Path(type_path) = &**ty
+                    && let Some(segment) = type_path.path.segments.last()
+                {
+                    return segment.ident == "AssertOutcome";
                 }
                 false
             }
@@ -1020,6 +1105,128 @@ fn find_first_slice(sig: &syn::Signature) -> Option<&syn::TypePath> {
 ///    - Requires lifetime injection: `TestWorldMut` → `TestWorldMut<'__ctx>`
 ///    - (`needs_lifetime = true`)
 ///
+/// Resolves a reference context type (`&Ctx` / `&mut Ctx`) for lifetime injection.
+fn reference_ctx_type(attr_name: &str, r: &syn::TypeReference) -> syn::Result<(syn::Type, bool)> {
+    // Validate mutability based on step kind
+    if attr_name == "then" {
+        if r.mutability.is_some() {
+            return Err(syn::Error::new(
+                r.span(),
+                "Then steps should use `&ContextType`, not `&mut ContextType`",
+            ));
+        }
+    } else {
+        // Given/When
+        if r.mutability.is_none() {
+            return Err(syn::Error::new(
+                r.span(),
+                "Given/When steps should use `&mut ContextType`, not `&ContextType`",
+            ));
+        }
+    }
+
+    // Extract the inner type path
+    if let syn::Type::Path(inner_p) = r.elem.as_ref() {
+        // Check that the inner type has no explicit generics
+        // Check for existing generics - but allow '__ctx which means already processed
+        if let Some(last_segment) = inner_p.path.segments.last()
+            && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+        {
+            // Check if this is our injected '__ctx lifetime
+            let is_our_lifetime = args.args.iter().any(
+                |arg| matches!(arg, syn::GenericArgument::Lifetime(lt) if lt.ident == "__ctx"),
+            );
+            if !is_our_lifetime {
+                return Err(syn::Error::new(
+                    last_segment.arguments.span(),
+                    "context type must not have explicit lifetimes or generics",
+                ));
+            }
+        }
+
+        // Create the inner type with 'static lifetime for StepContext lookup
+        // Works for wrapper types: `<TestWorldMut<'static> as StepContext>::World`
+        let ctx_type_with_lifetime = {
+            let mut path = inner_p.path.clone();
+            if let Some(last_seg) = path.segments.last_mut() {
+                last_seg.arguments =
+                    syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+                        colon2_token: None,
+                        lt_token: Lt::default(),
+                        args: iter::once(syn::GenericArgument::Lifetime(syn::Lifetime::new(
+                            "'static",
+                            proc_macro2::Span::call_site(),
+                        )))
+                        .collect(),
+                        gt_token: Gt::default(),
+                    });
+            }
+            syn::Type::Path(syn::TypePath {
+                qself: inner_p.qself.clone(),
+                path,
+            })
+        };
+
+        // Needs lifetime injection to rewrite TestWorldMut -> TestWorldMut<'__ctx>
+        Ok((ctx_type_with_lifetime, true))
+    } else {
+        Err(syn::Error::new(
+            r.elem.span(),
+            "expected a type path inside the reference",
+        ))
+    }
+}
+
+/// Resolves a bare wrapper context type (`TestWorldMut`) for lifetime injection.
+fn path_ctx_type(p: &syn::TypePath) -> syn::Result<(syn::Type, bool)> {
+    // Check for existing generics - but allow '__ctx which means already processed
+    if let Some(last_segment) = p.path.segments.last()
+        && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+    {
+        // Check if this is our injected '__ctx lifetime
+        let is_our_lifetime = args
+            .args
+            .iter()
+            .any(|arg| matches!(arg, syn::GenericArgument::Lifetime(lt) if lt.ident == "__ctx"));
+        if !is_our_lifetime {
+            return Err(syn::Error::new(
+                last_segment.arguments.span(),
+                "context type must not have explicit lifetimes or generics; \
+                 the macro injects them automatically",
+            ));
+        }
+    }
+
+    // Create a version with 'static lifetime for StepContext lookup
+    // (The actual lifetime doesn't matter - we only use the associated World type)
+    let ctx_type_with_lifetime = {
+        let mut path = p.path.clone();
+        if let Some(last_seg) = path.segments.last_mut() {
+            last_seg.arguments =
+                syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+                    colon2_token: None,
+                    lt_token: Lt::default(),
+                    args: iter::once(syn::GenericArgument::Lifetime(syn::Lifetime::new(
+                        "'static",
+                        proc_macro2::Span::call_site(),
+                    )))
+                    .collect(),
+                    gt_token: Gt::default(),
+                });
+        }
+        syn::Type::Path(syn::TypePath {
+            qself: p.qself.clone(),
+            path,
+        })
+    };
+
+    Ok((ctx_type_with_lifetime, true))
+}
+
+/// Parses the step function's first argument into a lifetime-injectable context type.
+///
+/// Dispatches on reference vs bare wrapper form; all other shapes are errors.
+///
 /// Returns `(ctx_type, needs_lifetime)` where:
 /// - `ctx_type`: The type to use for `StepContext` trait lookup
 /// - `needs_lifetime`: Whether the macro should inject a lifetime parameter
@@ -1038,236 +1245,22 @@ fn parse_context_type_and_mode(sig: &Signature, attr_name: &str) -> syn::Result<
         }
     };
 
-    match typed_arg.ty.as_ref() {
-        // Reference type like `&mut World` or `&mut TestWorldMut`
-        syn::Type::Reference(r) => {
-            // Validate mutability based on step kind
-            if attr_name == "then" {
-                if r.mutability.is_some() {
-                    return Err(syn::Error::new(
-                        r.span(),
-                        "Then steps should use `&ContextType`, not `&mut ContextType`",
-                    ));
-                }
-            } else {
-                // Given/When
-                if r.mutability.is_none() {
-                    return Err(syn::Error::new(
-                        r.span(),
-                        "Given/When steps should use `&mut ContextType`, not `&ContextType`",
-                    ));
-                }
-            }
-
-            // Extract the inner type path
-            if let syn::Type::Path(inner_p) = r.elem.as_ref() {
-                // Check that the inner type has no explicit generics
-                // Check for existing generics - but allow '__ctx which means already processed
-                if let Some(last_segment) = inner_p.path.segments.last() {
-                    if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
-                        // Check if this is our injected '__ctx lifetime
-                        let is_our_lifetime = args.args.iter().any(|arg| {
-                            matches!(arg, syn::GenericArgument::Lifetime(lt) if lt.ident == "__ctx")
-                        });
-                        if !is_our_lifetime {
-                            return Err(syn::Error::new(
-                                last_segment.arguments.span(),
-                                "context type must not have explicit lifetimes or generics",
-                            ));
-                        }
-                    }
-                }
-
-                // Create the inner type with 'static lifetime for StepContext lookup
-                // Works for wrapper types: `<TestWorldMut<'static> as StepContext>::World`
-                let ctx_type_with_lifetime = {
-                    let mut path = inner_p.path.clone();
-                    if let Some(last_seg) = path.segments.last_mut() {
-                        last_seg.arguments = syn::PathArguments::AngleBracketed(
-                            syn::AngleBracketedGenericArguments {
-                                colon2_token: None,
-                                lt_token: Default::default(),
-                                args: std::iter::once(syn::GenericArgument::Lifetime(
-                                    syn::Lifetime::new("'static", proc_macro2::Span::call_site()),
-                                ))
-                                .collect(),
-                                gt_token: Default::default(),
-                            },
-                        );
-                    }
-                    syn::Type::Path(syn::TypePath {
-                        qself: inner_p.qself.clone(),
-                        path,
-                    })
-                };
-
-                // Needs lifetime injection to rewrite TestWorldMut -> TestWorldMut<'__ctx>
-                Ok((ctx_type_with_lifetime, true))
-            } else {
-                Err(syn::Error::new(
-                    r.elem.span(),
-                    "expected a type path inside the reference",
-                ))
-            }
-        }
-
-        // Pattern 1: Bare type like `TestWorldMut` (needs lifetime injection)
-        syn::Type::Path(p) => {
-            // Check for existing generics - but allow '__ctx which means already processed
-            if let Some(last_segment) = p.path.segments.last() {
-                if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
-                    // Check if this is our injected '__ctx lifetime
-                    let is_our_lifetime = args.args.iter().any(|arg| {
-                        matches!(arg, syn::GenericArgument::Lifetime(lt) if lt.ident == "__ctx")
-                    });
-                    if !is_our_lifetime {
-                        return Err(syn::Error::new(
-                            last_segment.arguments.span(),
-                            "context type must not have explicit lifetimes or generics; \
-                             the macro injects them automatically",
-                        ));
-                    }
-                }
-            }
-
-            // Create a version with 'static lifetime for StepContext lookup
-            // (The actual lifetime doesn't matter - we only use the associated World type)
-            let ctx_type_with_lifetime = {
-                let mut path = p.path.clone();
-                if let Some(last_seg) = path.segments.last_mut() {
-                    last_seg.arguments =
-                        syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
-                            colon2_token: None,
-                            lt_token: Default::default(),
-                            args: std::iter::once(syn::GenericArgument::Lifetime(
-                                syn::Lifetime::new("'static", proc_macro2::Span::call_site()),
-                            ))
-                            .collect(),
-                            gt_token: Default::default(),
-                        });
-                }
-                syn::Type::Path(syn::TypePath {
-                    qself: p.qself.clone(),
-                    path,
-                })
-            };
-
-            Ok((ctx_type_with_lifetime, true))
-        }
-
-        _ => {
-            let msg = if attr_name == "then" {
-                "first argument must be `&World` (reference) or `ContextType` (wrapper)"
-            } else {
-                "first argument must be `&mut World` (reference) or `ContextType` (wrapper)"
-            };
-            Err(syn::Error::new(typed_arg.span(), msg))
-        }
+    if let syn::Type::Reference(r) = typed_arg.ty.as_ref() {
+        // Reference type like `&mut World` or `&mut TestWorldMut`.
+        return reference_ctx_type(attr_name, r);
     }
-}
 
-// Keep the old function for backward compatibility with other code that may use it
-#[allow(dead_code)]
-fn parse_context_type_from_args<'a>(
-    sig: &'a Signature,
-    attr_name: &str,
-) -> syn::Result<&'a syn::TypePath> {
-    let first_arg = sig.inputs.first().ok_or_else(|| {
-        let msg = if attr_name == "then" {
-            "first function argument expected to be `TestWorldRef` (no generics) for `Then` steps"
-        } else {
-            "first function argument expected to be `mut TestWorldMut` (no generics) for `Given`/`When` steps"
-        };
-        syn::Error::new(sig.ident.span(), msg)
-    })?;
-
-    let typed_arg = match first_arg {
-        syn::FnArg::Typed(a) => a,
-        syn::FnArg::Receiver(r) => {
-            return Err(syn::Error::new(r.span(), "step function cannot use `self`"));
-        }
-    };
-
-    // Context-first ABI: accept a type path WITHOUT generics.
-    // Users must write `TestWorldMut`, not `TestWorldMut<'a>`.
+    // Pattern 1: Bare type like `TestWorldMut` (needs lifetime injection)
     if let syn::Type::Path(p) = typed_arg.ty.as_ref() {
-        // Check that the type has NO generics (the ergonomics rule)
-        if let Some(last_segment) = p.path.segments.last() {
-            if !last_segment.arguments.is_empty() {
-                return Err(syn::Error::new(
-                    last_segment.arguments.span(),
-                    "context type must not have explicit lifetimes or generics; \
-                     write `TestWorldMut` or `TestWorldRef`, not `TestWorldMut<'a>`",
-                ));
-            }
-        }
-        Ok(p)
-    } else if let syn::Type::Reference(r) = typed_arg.ty.as_ref() {
-        // For Then steps: allow `&TestWorldRef` (immutable reference to context)
-        // For Given/When steps: allow `&mut TestWorldMut` (mutable reference to context)
-        if attr_name == "then" {
-            // Then steps accept &TestWorldRef (immutable)
-            if r.mutability.is_some() {
-                return Err(syn::Error::new(
-                    r.span(),
-                    "Then steps should use `&TestWorldRef`, not `&mut TestWorldRef`",
-                ));
-            }
-            // Extract the inner type path
-            if let syn::Type::Path(inner_p) = r.elem.as_ref() {
-                // Check no generics on inner type
-                if let Some(last_segment) = inner_p.path.segments.last() {
-                    if !last_segment.arguments.is_empty() {
-                        return Err(syn::Error::new(
-                            last_segment.arguments.span(),
-                            "context type must not have explicit lifetimes or generics; \
-                             write `&TestWorldRef`, not `&TestWorldRef<'a>`",
-                        ));
-                    }
-                }
-                Ok(inner_p)
-            } else {
-                Err(syn::Error::new(
-                    r.elem.span(),
-                    "Then steps should use `&TestWorldRef`",
-                ))
-            }
-        } else {
-            // Given/When steps: allow `&mut TestWorldMut` (mutable reference)
-            if r.mutability.is_none() {
-                return Err(syn::Error::new(
-                    r.span(),
-                    "Given/When steps should use `&mut TestWorldMut`, not `&TestWorldMut`",
-                ));
-            }
-            // Extract the inner type path
-            if let syn::Type::Path(inner_p) = r.elem.as_ref() {
-                // Check no generics on inner type
-                if let Some(last_segment) = inner_p.path.segments.last() {
-                    if !last_segment.arguments.is_empty() {
-                        return Err(syn::Error::new(
-                            last_segment.arguments.span(),
-                            "context type must not have explicit lifetimes or generics; \
-                             write `&mut TestWorldMut`, not `&mut TestWorldMut<'a>`",
-                        ));
-                    }
-                }
-                Ok(inner_p)
-            } else {
-                Err(syn::Error::new(
-                    r.elem.span(),
-                    "Given/When steps should use `&mut TestWorldMut`",
-                ))
-            }
-        }
-    } else {
-        let msg = if attr_name == "then" {
-            "first function argument expected to be `&TestWorldRef` (no generics) for `Then` steps"
-        } else {
-            "first function argument expected to be `ctx: &mut TestWorldMut` (no generics) for `Given`/`When` steps"
-        };
-        Err(syn::Error::new(typed_arg.span(), msg))
+        return path_ctx_type(p);
     }
+
+    let msg = if attr_name == "then" {
+        "first argument must be `&World` (reference) or `ContextType` (wrapper)"
+    } else {
+        "first argument must be `&mut World` (reference) or `ContextType` (wrapper)"
+    };
+    Err(syn::Error::new(typed_arg.span(), msg))
 }
 
 /// Rewrites the function signature to inject a fresh lifetime for context-first ABI.
@@ -1306,37 +1299,31 @@ fn rewrite_signature_with_lifetime(
     };
 
     // Handle both Type::Path and Type::Reference
-    let type_path = match typed_arg.ty.as_mut() {
-        syn::Type::Path(p) => p,
-        syn::Type::Reference(r) => {
-            // For references like &TestWorldRef, we need to rewrite the inner type
-            if let syn::Type::Path(inner_p) = r.elem.as_mut() {
-                inner_p
-            } else {
-                // Not a path inside the reference
-                return Ok(());
-            }
-        }
-        _ => {
-            // Not a type we handle
-            return Ok(());
-        }
+    let type_path = if let syn::Type::Path(p) = typed_arg.ty.as_mut() {
+        p
+    } else if let syn::Type::Reference(r) = typed_arg.ty.as_mut()
+        && let syn::Type::Path(inner_p) = r.elem.as_mut()
+    {
+        // For references like &TestWorldRef, we need to rewrite the inner type
+        inner_p
+    } else {
+        // Not a path inside the reference, nor a type we handle
+        return Ok(());
     };
 
-    let last_segment = match type_path.path.segments.last_mut() {
-        Some(s) => s,
-        None => return Ok(()),
+    let Some(last_segment) = type_path.path.segments.last_mut() else {
+        return Ok(());
     };
 
     // Check if already processed by a previous attribute (e.g., #[given] + #[when] on same fn)
     // If we see `'__ctx` lifetime, skip injection - it's already been done
     if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
         for arg in &args.args {
-            if let syn::GenericArgument::Lifetime(lt) = arg {
-                if lt.ident == "__ctx" {
-                    // Already processed, skip
-                    return Ok(());
-                }
+            if let syn::GenericArgument::Lifetime(lt) = arg
+                && lt.ident == "__ctx"
+            {
+                // Already processed, skip
+                return Ok(());
             }
         }
         // Has generics but not our marker - user wrote them explicitly
@@ -1365,9 +1352,9 @@ fn rewrite_signature_with_lifetime(
     last_segment.arguments =
         syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
             colon2_token: None,
-            lt_token: syn::token::Lt::default(),
-            args: std::iter::once(syn::GenericArgument::Lifetime(ctx_lifetime)).collect(),
-            gt_token: syn::token::Gt::default(),
+            lt_token: Lt::default(),
+            args: iter::once(syn::GenericArgument::Lifetime(ctx_lifetime)).collect(),
+            gt_token: Gt::default(),
         });
 
     Ok(())
@@ -1379,70 +1366,62 @@ fn rewrite_signature_with_lifetime(
 
 /// NPAP v1 signature information extracted from a step function.
 struct SignatureInfo {
-    /// Number of capture parameters (excluding World, Step context, DocString, DataTable).
+    /// Number of capture parameters (excluding `World`, `Step` context, `DocString`, `DataTable`).
     captures_arity: u32,
-    /// Whether the function accepts a DocString parameter.
+    /// Whether the function accepts a `DocString` parameter.
     accepts_docstring: bool,
-    /// Whether the function accepts a DataTable parameter.
+    /// Whether the function accepts a `DataTable` parameter.
     accepts_datatable: bool,
 }
 
-/// Checks if a type represents a DocString parameter.
+/// Checks if a type represents a `DocString` parameter.
 ///
-/// Per GOLD_PLAN §4.4.3, DocString is typically `Option<String>` or a wrapper type.
+/// Per `GOLD_PLAN` §4.4.3, `DocString` is typically `Option<String>` or a wrapper type.
 fn is_docstring_type(ty: &syn::Type) -> bool {
     // Check for Option<String>
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Option" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if let Some(syn::GenericArgument::Type(syn::Type::Path(inner))) =
-                        args.args.first()
-                    {
-                        if let Some(inner_seg) = inner.path.segments.last() {
-                            // Option<String> or Option<DocString>
-                            return inner_seg.ident == "String" || inner_seg.ident == "DocString";
-                        }
-                    }
-                }
-            }
-            // Direct DocString type
-            if segment.ident == "DocString" {
-                return true;
-            }
-        }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Option"
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+        && let Some(syn::GenericArgument::Type(syn::Type::Path(inner))) = args.args.first()
+        && let Some(inner_seg) = inner.path.segments.last()
+    {
+        // Option<String> or Option<DocString>
+        return inner_seg.ident == "String" || inner_seg.ident == "DocString";
+    }
+    // Direct DocString type
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "DocString";
     }
     false
 }
 
-/// Checks if a type represents a DataTable parameter.
+/// Checks if a type represents a `DataTable` parameter.
 ///
-/// Per GOLD_PLAN §4.4.4, DataTable is typically `Option<Vec<Vec<String>>>` or a wrapper.
+/// Per `GOLD_PLAN` §4.4.4, `DataTable` is typically `Option<Vec<Vec<String>>>` or a wrapper.
 fn is_datatable_type(ty: &syn::Type) -> bool {
     // Check for Option<Vec<Vec<String>>> or DataTable wrapper
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Option" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if let Some(syn::GenericArgument::Type(syn::Type::Path(inner))) =
-                        args.args.first()
-                    {
-                        if let Some(inner_seg) = inner.path.segments.last() {
-                            // Check for Vec<Vec<String>> or DataTable
-                            if inner_seg.ident == "Vec" || inner_seg.ident == "DataTable" {
-                                // For simplicity, if it's Option<Vec<...>> after DocString detection,
-                                // assume it's a DataTable candidate
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            // Direct DataTable type
-            if segment.ident == "DataTable" {
-                return true;
-            }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Option"
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+        && let Some(syn::GenericArgument::Type(syn::Type::Path(inner))) = args.args.first()
+        && let Some(inner_seg) = inner.path.segments.last()
+    {
+        // Check for Vec<Vec<String>> or DataTable
+        if inner_seg.ident == "Vec" || inner_seg.ident == "DataTable" {
+            // For simplicity, if it's Option<Vec<...>> after DocString detection,
+            // assume it's a DataTable candidate
+            return true;
         }
+    }
+    // Direct DataTable type
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "DataTable";
     }
     false
 }

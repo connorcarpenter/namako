@@ -1,7 +1,7 @@
-//! NPAP v1 Canonical Encoding and Hashing Module
+//! NPAP v1 Canonical Encoding and Hashing Module.
 //!
 //! This module implements the **single source of truth** for all hashing and
-//! canonical encoding in Namako v1, per GOLD_PLAN.md §7.0.
+//! canonical encoding in Namako v1, per `GOLD_PLAN.md` §7.0.
 //!
 //! # Hash Contract Version
 //!
@@ -14,10 +14,12 @@
 //! 3. **BLAKE3-256**: Lowercase hex output (64 chars)
 
 use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt::{self, Display, Formatter};
 
 use serde::Serialize;
 use serde_json::Value;
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::UnicodeNormalization as _;
 
 /// The v1 hash contract version identifier.
 pub const HASH_CONTRACT_VERSION: &str = "namako-v1-json+blake3-256";
@@ -28,14 +30,14 @@ pub const NPAP_VERSION: u32 = 1;
 /// The v1 binding ID scheme identifier.
 pub const BINDING_ID_SCHEME: &str = "kind+expr_norm|namako-binding-id-v1|blake3-256-lowerhex";
 
-/// The v1 impl_hash scheme identifier.
+/// The v1 `impl_hash` scheme identifier.
 pub const IMPL_HASH_SCHEME: &str = "token-fingerprint-v1|blake3-256-lowerhex";
 
 // ============================================================================
 // String Normalization (§7.0.2)
 // ============================================================================
 
-/// Normalizes a string per GOLD_PLAN §7.0.2:
+/// Normalizes a string per `GOLD_PLAN` §7.0.2:
 /// 1. Unicode NFC normalization
 /// 2. Newline normalization (`\r\n` and `\r` → `\n`)
 ///
@@ -81,7 +83,7 @@ fn normalize_newlines(s: &str) -> String {
 // Canonical JSON Encoding (§7.0.3)
 // ============================================================================
 
-/// Encodes a serializable value to canonical JSON per GOLD_PLAN §7.0.3:
+/// Encodes a serializable value to canonical JSON per `GOLD_PLAN` §7.0.3:
 /// - Object keys sorted lexicographically
 /// - No trailing commas, no comments
 /// - Integers only (no floats)
@@ -123,8 +125,8 @@ pub enum CanonicalJsonError {
     SerializationFailed(String),
 }
 
-impl std::fmt::Display for CanonicalJsonError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for CanonicalJsonError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::FloatForbidden => {
                 write!(f, "floats are forbidden in hashed objects per NPAP v1")
@@ -136,7 +138,7 @@ impl std::fmt::Display for CanonicalJsonError {
     }
 }
 
-impl std::error::Error for CanonicalJsonError {}
+impl Error for CanonicalJsonError {}
 
 /// Recursively canonicalizes a JSON value:
 /// - Sorts object keys
@@ -166,7 +168,7 @@ fn canonicalize_value(value: Value) -> Result<Value, CanonicalJsonError> {
             Ok(Value::Number(n))
         }
         // Null, Bool, String pass through unchanged
-        other => Ok(other),
+        Value::Null | Value::Bool(_) | Value::String(_) => Ok(value),
     }
 }
 
@@ -206,7 +208,7 @@ pub fn blake3_256_lowerhex_normalized(s: &str) -> String {
 // Binding ID Generation (§4.2.1)
 // ============================================================================
 
-/// Generates a binding ID from kind and expression per GOLD_PLAN §4.2.1.
+/// Generates a binding ID from kind and expression per `GOLD_PLAN` §4.2.1.
 ///
 /// Formula: `blake3_256_lowerhex("namako-binding-id-v1|" + kind + "|" + expr_norm)`
 ///
@@ -236,14 +238,14 @@ pub fn generate_binding_id(kind: &str, expression: &str) -> String {
 
 /// Computes the feature fingerprint hash for a collection of feature files.
 ///
-/// Per GOLD_PLAN §7.3.1:
+/// Per `GOLD_PLAN` §7.3.1:
 /// - Files sorted by relative path (lexicographic)
 /// - Each file's content normalized (NFC, newlines)
 /// - Result hashed with BLAKE3-256
 ///
 /// # Arguments
 ///
-/// * `files` - Iterator of (relative_path, content) pairs
+/// * `files` - Iterator of (`relative_path`, `content`) pairs.
 ///
 /// # Examples
 ///
@@ -257,6 +259,12 @@ pub fn generate_binding_id(kind: &str, expression: &str) -> String {
 /// let hash = compute_feature_fingerprint(files.into_iter());
 /// assert_eq!(hash.len(), 64);
 /// ```
+///
+/// # Panics
+///
+/// Panics if the fingerprint cannot be serialized to canonical JSON.
+/// `FileFingerprint` is a closed derived-`Serialize` type with no failure
+/// mode, so this indicates a broken internal invariant.
 #[must_use]
 pub fn compute_feature_fingerprint<'a, I>(files: I) -> String
 where
@@ -273,22 +281,26 @@ where
             let normalized_content = normalize_string(content);
             let content_hash = blake3_256_lowerhex(normalized_content.as_bytes());
             FileFingerprint {
-                path: path.to_string(),
+                path: path.to_owned(),
                 content_hash,
             }
         })
         .collect();
 
     // Serialize to canonical JSON and hash
-    let json =
-        canonical_json_encode(&fingerprint).expect("file fingerprint should always serialize");
+    let json = match canonical_json_encode(&fingerprint) {
+        Ok(json) => json,
+        Err(e) => panic!("file fingerprint should always serialize: {e:?}"),
+    };
     blake3_256_lowerhex(json.as_bytes())
 }
 
 /// Internal structure for feature fingerprint computation.
 #[derive(Serialize)]
 struct FileFingerprint {
+    /// Repo-relative feature file path.
     path: String,
+    /// `BLAKE3-256` hex of the normalized file content.
     content_hash: String,
 }
 
@@ -296,7 +308,7 @@ struct FileFingerprint {
 // Scenario Key Derivation (§6.4.3)
 // ============================================================================
 
-/// Derives a scenario key per GOLD_PLAN §6.4.3.
+/// Derives a scenario key per `GOLD_PLAN` §6.4.3.
 ///
 /// Format: `normalized_relpath:L<line_number>`
 ///
@@ -319,7 +331,7 @@ struct FileFingerprint {
 /// Use `id_tags::derive_scenario_key_from_ids()` instead. Line-based keys are fragile under
 /// refactoring and don't survive scenario reordering or file reorganization.
 #[deprecated(
-    since = "1.5",
+    since = "1.5.0",
     note = "Use id_tags::derive_scenario_key_from_ids instead. Line-based keys are fragile under refactoring."
 )]
 #[must_use]
@@ -328,7 +340,7 @@ pub fn derive_scenario_key(relative_path: &str, line_number: u32) -> String {
     format!("{normalized_path}:L{line_number}")
 }
 
-/// Derives a scenario outline example key per GOLD_PLAN §6.4.3.
+/// Derives a scenario outline example key per `GOLD_PLAN` §6.4.3.
 ///
 /// Format: `normalized_relpath:L<scenario_line>:E<examples_idx>:R<row_idx>`
 ///
@@ -344,7 +356,7 @@ pub fn derive_scenario_key(relative_path: &str, line_number: u32) -> String {
 /// Use `id_tags::derive_scenario_outline_key_from_ids()` instead. Line-based keys are fragile
 /// under refactoring and don't survive scenario reordering or file reorganization.
 #[deprecated(
-    since = "1.5",
+    since = "1.5.0",
     note = "Use id_tags::derive_scenario_outline_key_from_ids instead. Line-based keys are fragile under refactoring."
 )]
 #[must_use]
@@ -358,7 +370,7 @@ pub fn derive_scenario_outline_key(
     format!("{normalized_path}:L{scenario_line}:E{examples_block_idx}:R{row_idx}")
 }
 
-/// Normalizes a file path per GOLD_PLAN §6.4.3:
+/// Normalizes a file path per `GOLD_PLAN` §6.4.3:
 /// - Forward slashes only
 /// - NFC Unicode normalization
 /// - No leading "./" or trailing "/"
@@ -369,10 +381,8 @@ fn normalize_path(path: &str) -> String {
     // Convert backslashes to forward slashes
     normalized = normalized.replace('\\', "/");
 
-    // Remove leading "./"
-    while normalized.starts_with("./") {
-        normalized = normalized[2..].to_string();
-    }
+    // Remove leading "./" segments
+    normalized = normalized.trim_start_matches("./").to_owned();
 
     // Remove trailing "/"
     while normalized.ends_with('/') {
@@ -406,7 +416,7 @@ pub struct CustomParameterDef {
 
 /// Semantic Step Registry returned by adapter manifest command.
 ///
-/// Per GOLD_PLAN §6.2.1, this is the authoritative list of bindings
+/// Per `GOLD_PLAN` §6.2.1, this is the authoritative list of bindings
 /// available in the adapter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SemanticStepRegistry {
@@ -420,7 +430,7 @@ pub struct SemanticStepRegistry {
     pub impl_hash_scheme: String,
     /// Hash of the registry (excluding this field)
     pub step_registry_hash: String,
-    /// All registered step bindings, sorted by binding_id
+    /// All registered step bindings, sorted by `binding_id`.
     pub bindings: Vec<SemanticBinding>,
     /// Custom parameter type definitions for expression resolution.
     ///
@@ -433,6 +443,7 @@ impl SemanticStepRegistry {
     /// Creates a new registry and computes its hash.
     ///
     /// The `bindings` will be sorted by `binding_id` before hashing.
+    #[must_use]
     pub fn new(bindings: Vec<SemanticBinding>) -> Self {
         Self::new_with_params(bindings, Vec::new())
     }
@@ -441,6 +452,13 @@ impl SemanticStepRegistry {
     ///
     /// `custom_parameters` are used by the resolution engine to expand
     /// adapter-specific `{param}` types; they are NOT included in the hash.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the registry cannot be serialized to canonical JSON.
+    /// `RegistryForHashing` is a closed derived-`Serialize` type with no
+    /// failure mode, so this indicates a broken internal invariant.
+    #[must_use]
     pub fn new_with_params(
         mut bindings: Vec<SemanticBinding>,
         custom_parameters: Vec<CustomParameterDef>,
@@ -451,20 +469,23 @@ impl SemanticStepRegistry {
         // Build a temporary struct for hashing (without step_registry_hash or custom_parameters)
         let for_hashing = RegistryForHashing {
             npap_version: NPAP_VERSION,
-            hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
-            binding_id_scheme: BINDING_ID_SCHEME.to_string(),
-            impl_hash_scheme: IMPL_HASH_SCHEME.to_string(),
+            hash_contract_version: HASH_CONTRACT_VERSION.to_owned(),
+            binding_id_scheme: BINDING_ID_SCHEME.to_owned(),
+            impl_hash_scheme: IMPL_HASH_SCHEME.to_owned(),
             bindings: &bindings,
         };
 
-        let json = canonical_json_encode(&for_hashing).expect("registry should serialize");
+        let json = match canonical_json_encode(&for_hashing) {
+            Ok(json) => json,
+            Err(e) => panic!("registry should serialize: {e:?}"),
+        };
         let step_registry_hash = blake3_256_lowerhex(json.as_bytes());
 
         Self {
             npap_version: NPAP_VERSION,
-            hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
-            binding_id_scheme: BINDING_ID_SCHEME.to_string(),
-            impl_hash_scheme: IMPL_HASH_SCHEME.to_string(),
+            hash_contract_version: HASH_CONTRACT_VERSION.to_owned(),
+            binding_id_scheme: BINDING_ID_SCHEME.to_owned(),
+            impl_hash_scheme: IMPL_HASH_SCHEME.to_owned(),
             step_registry_hash,
             bindings,
             custom_parameters,
@@ -472,13 +493,18 @@ impl SemanticStepRegistry {
     }
 }
 
-/// Helper struct for computing registry hash (excludes step_registry_hash and custom_parameters).
+/// Helper struct for computing registry hash (excludes `step_registry_hash` and `custom_parameters`).
 #[derive(Serialize)]
 struct RegistryForHashing<'a> {
+    /// Protocol version echoed from [`NPAP_VERSION`].
     npap_version: u32,
+    /// Hash contract echoed from [`HASH_CONTRACT_VERSION`].
     hash_contract_version: String,
+    /// Binding ID scheme echoed from [`BINDING_ID_SCHEME`].
     binding_id_scheme: String,
+    /// Impl hash scheme echoed from [`IMPL_HASH_SCHEME`].
     impl_hash_scheme: String,
+    /// Sorted bindings entering the hash.
     bindings: &'a [SemanticBinding],
 }
 
@@ -498,7 +524,7 @@ pub struct SemanticBinding {
     /// Source symbol: stable identifier for the binding implementation.
     ///
     /// Format: `crate::module::function_name` (uses `module_path!()` + function ident).
-    /// This is more stable than file:line:column for AI navigation and doesn't
+    /// This is more stable than `file:line:column` for AI navigation and doesn't
     /// introduce refactor-noise into certification identity.
     ///
     /// Per TODO.md §3: Truthful source location for explain output.
@@ -506,18 +532,18 @@ pub struct SemanticBinding {
     pub source_symbol: Option<String>,
 }
 
-/// Signature metadata for a binding per GOLD_PLAN §4.4.
+/// Signature metadata for a binding per `GOLD_PLAN` §4.4.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BindingSignature {
     /// Number of capture parameters expected
     pub captures_arity: u32,
-    /// Whether binding accepts a DocString
+    /// Whether binding accepts a `DocString`.
     pub accepts_docstring: bool,
-    /// Whether binding accepts a DataTable
+    /// Whether binding accepts a `DataTable`.
     pub accepts_datatable: bool,
 }
 
-/// Header section for resolved plan per GOLD_PLAN §6.4.1.
+/// Header section for resolved plan per `GOLD_PLAN` §6.4.1.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolvedPlanHeader {
     /// Protocol version
@@ -532,17 +558,24 @@ pub struct ResolvedPlanHeader {
     pub resolved_plan_hash: String,
 }
 
-/// Resolved Execution Plan produced by `namako lint` per GOLD_PLAN §6.4.1.
+/// Resolved Execution Plan produced by `namako lint` per `GOLD_PLAN` §6.4.1.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolvedPlan {
     /// Header containing version and hash fields
     pub header: ResolvedPlanHeader,
-    /// Resolved scenarios sorted by scenario_key
+    /// Resolved scenarios sorted by `scenario_key`.
     pub scenarios: Vec<ResolvedScenario>,
 }
 
 impl ResolvedPlan {
     /// Creates a new resolved plan and computes its hash.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the plan cannot be serialized to canonical JSON.
+    /// `PlanForHashing` is a closed derived-`Serialize` type with no
+    /// failure mode, so this indicates a broken internal invariant.
+    #[must_use]
     pub fn new(
         feature_fingerprint_hash: String,
         step_registry_hash: String,
@@ -555,19 +588,22 @@ impl ResolvedPlan {
         let for_hashing = PlanForHashing {
             header: PlanHeaderForHashing {
                 npap_version: NPAP_VERSION,
-                hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
+                hash_contract_version: HASH_CONTRACT_VERSION.to_owned(),
                 feature_fingerprint_hash: &feature_fingerprint_hash,
                 step_registry_hash: &step_registry_hash,
             },
             scenarios: &scenarios,
         };
 
-        let json = canonical_json_encode(&for_hashing).expect("plan should serialize");
+        let json = match canonical_json_encode(&for_hashing) {
+            Ok(json) => json,
+            Err(e) => panic!("plan should serialize: {e:?}"),
+        };
         let resolved_plan_hash = blake3_256_lowerhex(json.as_bytes());
 
         let header = ResolvedPlanHeader {
             npap_version: NPAP_VERSION,
-            hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
+            hash_contract_version: HASH_CONTRACT_VERSION.to_owned(),
             feature_fingerprint_hash,
             step_registry_hash,
             resolved_plan_hash,
@@ -577,19 +613,25 @@ impl ResolvedPlan {
     }
 }
 
-/// Helper struct for computing plan hash header (excludes resolved_plan_hash).
+/// Helper struct for computing plan hash header (excludes `resolved_plan_hash`).
 #[derive(Serialize)]
 struct PlanHeaderForHashing<'a> {
+    /// Protocol version echoed from [`NPAP_VERSION`].
     npap_version: u32,
+    /// Hash contract echoed from [`HASH_CONTRACT_VERSION`].
     hash_contract_version: String,
+    /// Fingerprint of the resolved feature files.
     feature_fingerprint_hash: &'a str,
+    /// Hash of the registry used for resolution.
     step_registry_hash: &'a str,
 }
 
 /// Helper struct for computing plan hash.
 #[derive(Serialize)]
 struct PlanForHashing<'a> {
+    /// Plan header entering the hash.
     header: PlanHeaderForHashing<'a>,
+    /// Sorted scenarios entering the hash.
     scenarios: &'a [ResolvedScenario],
 }
 
@@ -606,27 +648,34 @@ pub struct ResolvedScenario {
     pub steps: Vec<PlannedStep>,
 }
 
-/// A planned step with binding and captured values per GOLD_PLAN §6.4.1.
+/// A planned step with binding and captured values per `GOLD_PLAN` §6.4.1.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlannedStep {
-    /// Effective step kind: "Given", "When", "Then" (after And/But resolution)
+    /// Effective step kind: "Given", "When", "Then" (after And/But resolution).
     pub effective_kind: String,
-    /// Original step text from AST
+    /// Original step text from AST.
     pub step_text: String,
-    /// Binding ID to dispatch
+    /// Binding ID to dispatch.
     pub binding_id: String,
-    /// Captured values from expression matching
+    /// Captured values from expression matching.
     pub captures: Vec<String>,
-    /// DocString if present
+    /// `DocString` if present.
     pub docstring: Option<String>,
-    /// DataTable if present (rows of cells)
+    /// `DataTable` if present (rows of cells).
     pub datatable: Option<Vec<Vec<String>>>,
-    /// Hash of execution payload per GOLD_PLAN §6.5
+    /// Hash of execution payload per `GOLD_PLAN` §6.5.
     pub payload_hash: String,
 }
 
 impl PlannedStep {
-    /// Creates a new planned step and computes its payload hash per GOLD_PLAN §6.5.
+    /// Creates a new planned step and computes its payload hash per `GOLD_PLAN` §6.5.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the payload cannot be serialized to canonical JSON.
+    /// `ExecutionPayload` is a closed derived-`Serialize` type with no
+    /// failure mode, so this indicates a broken internal invariant.
+    #[must_use]
     pub fn new(
         effective_kind: String,
         step_text: String,
@@ -644,7 +693,10 @@ impl PlannedStep {
             datatable: datatable.as_ref(),
         };
 
-        let json = canonical_json_encode(&payload).expect("payload should serialize");
+        let json = match canonical_json_encode(&payload) {
+            Ok(json) => json,
+            Err(e) => panic!("payload should serialize: {e:?}"),
+        };
         let payload_hash = blake3_256_lowerhex(json.as_bytes());
 
         Self {
@@ -659,25 +711,25 @@ impl PlannedStep {
     }
 }
 
-/// Execution payload structure for hashing per GOLD_PLAN §6.5.
+/// Execution payload structure for hashing per `GOLD_PLAN` §6.5.
 /// All 6 fields are included in the hash for step identity.
 #[derive(Serialize)]
 struct ExecutionPayload<'a> {
-    /// Effective kind after And/But resolution
+    /// Effective kind after And/But resolution.
     effective_kind: &'a str,
-    /// Original step text from AST
+    /// Original step text from AST.
     step_text: &'a str,
-    /// Binding ID to dispatch
+    /// Binding ID to dispatch.
     binding_id: &'a str,
-    /// Captured parameter values
+    /// Captured parameter values.
     captures: &'a [String],
-    /// DocString (explicit null if absent)
+    /// `DocString` (explicit null if absent).
     docstring: Option<&'a str>,
-    /// DataTable (explicit null if absent)
+    /// `DataTable` (explicit null if absent).
     datatable: Option<&'a Vec<Vec<String>>>,
 }
 
-/// Header section for run report per GOLD_PLAN §6.4.2.
+/// Header section for run report per `GOLD_PLAN` §6.4.2.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunReportHeader {
     /// Protocol version
@@ -694,17 +746,24 @@ pub struct RunReportHeader {
     pub run_report_hash: String,
 }
 
-/// Run Report produced by adapter after execution per GOLD_PLAN §6.4.2.
+/// Run Report produced by adapter after execution per `GOLD_PLAN` §6.4.2.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunReport {
     /// Header containing version and hash fields
     pub header: RunReportHeader,
-    /// Scenario execution results sorted by scenario_key
+    /// Scenario execution results sorted by `scenario_key`.
     pub scenarios: Vec<ScenarioResult>,
 }
 
 impl RunReport {
     /// Creates a new run report and computes its hash.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the report cannot be serialized to canonical JSON.
+    /// `ReportForHashing` is a closed derived-`Serialize` type with no
+    /// failure mode, so this indicates a broken internal invariant.
+    #[must_use]
     pub fn new(
         feature_fingerprint_hash: String,
         step_registry_hash: String,
@@ -717,7 +776,7 @@ impl RunReport {
         let for_hashing = ReportForHashing {
             header: ReportHeaderForHashing {
                 npap_version: NPAP_VERSION,
-                hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
+                hash_contract_version: HASH_CONTRACT_VERSION.to_owned(),
                 feature_fingerprint_hash: &feature_fingerprint_hash,
                 step_registry_hash: &step_registry_hash,
                 resolved_plan_hash: &resolved_plan_hash,
@@ -725,12 +784,15 @@ impl RunReport {
             scenarios: &scenarios,
         };
 
-        let json = canonical_json_encode(&for_hashing).expect("report should serialize");
+        let json = match canonical_json_encode(&for_hashing) {
+            Ok(json) => json,
+            Err(e) => panic!("report should serialize: {e:?}"),
+        };
         let run_report_hash = blake3_256_lowerhex(json.as_bytes());
 
         let header = RunReportHeader {
             npap_version: NPAP_VERSION,
-            hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
+            hash_contract_version: HASH_CONTRACT_VERSION.to_owned(),
             feature_fingerprint_hash,
             step_registry_hash,
             resolved_plan_hash,
@@ -741,20 +803,27 @@ impl RunReport {
     }
 }
 
-/// Helper struct for computing report hash header (excludes run_report_hash).
+/// Helper struct for computing report hash header (excludes `run_report_hash`).
 #[derive(Serialize)]
 struct ReportHeaderForHashing<'a> {
+    /// Protocol version echoed from [`NPAP_VERSION`].
     npap_version: u32,
+    /// Hash contract echoed from [`HASH_CONTRACT_VERSION`].
     hash_contract_version: String,
+    /// Fingerprint of the executed feature files.
     feature_fingerprint_hash: &'a str,
+    /// Hash of the registry used for execution.
     step_registry_hash: &'a str,
+    /// Hash of the executed plan.
     resolved_plan_hash: &'a str,
 }
 
 /// Helper struct for computing report hash.
 #[derive(Serialize)]
 struct ReportForHashing<'a> {
+    /// Report header entering the hash.
     header: ReportHeaderForHashing<'a>,
+    /// Sorted scenario results entering the hash.
     scenarios: &'a [ScenarioResult],
 }
 
@@ -781,7 +850,7 @@ pub enum ScenarioStatus {
     Skipped,
 }
 
-/// Result of executing a single step per GOLD_PLAN §6.4.2.
+/// Result of executing a single step per `GOLD_PLAN` §6.4.2.
 /// Contains both planned and executed values for verify comparison per §7.4.2.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StepResult {
@@ -822,7 +891,7 @@ pub struct Certification {
     pub metadata: CertificationMetadata,
 }
 
-/// Identity fields that must match exactly for verification per GOLD_PLAN §7.3.
+/// Identity fields that must match exactly for verification per `GOLD_PLAN` §7.3.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CertificationIdentity {
     /// Hash contract version (encoding + hashing rules)
@@ -862,7 +931,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_normalize_string_nfc() {
+    fn normalize_string_nfc() {
         // é can be represented as single char (U+00E9) or e + combining acute (U+0065 U+0301)
         // NFC should normalize to single char form
         let decomposed = "e\u{0301}"; // e + combining acute
@@ -873,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_string_crlf() {
+    fn normalize_string_crlf() {
         assert_eq!(normalize_string("a\r\nb"), "a\nb");
         assert_eq!(normalize_string("a\rb"), "a\nb");
         assert_eq!(normalize_string("a\nb"), "a\nb");
@@ -881,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_string_mixed() {
+    fn normalize_string_mixed() {
         // Both NFC and newline normalization
         let input = "café\r\ntest\re\u{0301}";
         let expected = "café\ntest\né";
@@ -893,40 +962,50 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_canonical_json_key_ordering() {
+    fn canonical_json_key_ordering() {
         let value = json!({"z": 1, "a": 2, "m": 3});
-        let encoded = canonical_json_encode(&value).unwrap();
+        let Some(encoded) = canonical_json_encode(&value).ok() else {
+            panic!("canonical_json_encode should succeed");
+        };
         assert_eq!(encoded, r#"{"a":2,"m":3,"z":1}"#);
     }
 
     #[test]
-    fn test_canonical_json_nested_ordering() {
+    fn canonical_json_nested_ordering() {
         let value = json!({
             "z": {"b": 1, "a": 2},
             "a": {"d": 3, "c": 4}
         });
-        let encoded = canonical_json_encode(&value).unwrap();
+        let Some(encoded) = canonical_json_encode(&value).ok() else {
+            panic!("canonical_json_encode should succeed");
+        };
         assert_eq!(encoded, r#"{"a":{"c":4,"d":3},"z":{"a":2,"b":1}}"#);
     }
 
     #[test]
-    fn test_canonical_json_explicit_null() {
+    fn canonical_json_explicit_null() {
         let value = json!({"a": null, "b": 1});
-        let encoded = canonical_json_encode(&value).unwrap();
+        let Some(encoded) = canonical_json_encode(&value).ok() else {
+            panic!("canonical_json_encode should succeed");
+        };
         assert_eq!(encoded, r#"{"a":null,"b":1}"#);
     }
 
     #[test]
-    fn test_canonical_json_array_preserves_order() {
+    fn canonical_json_array_preserves_order() {
         let value = json!([3, 1, 2]);
-        let encoded = canonical_json_encode(&value).unwrap();
+        let Some(encoded) = canonical_json_encode(&value).ok() else {
+            panic!("canonical_json_encode should succeed");
+        };
         assert_eq!(encoded, "[3,1,2]");
     }
 
     #[test]
-    fn test_canonical_json_integers() {
+    fn canonical_json_integers() {
         let value = json!({"int": 42, "neg": -10, "zero": 0});
-        let encoded = canonical_json_encode(&value).unwrap();
+        let Some(encoded) = canonical_json_encode(&value).ok() else {
+            panic!("canonical_json_encode should succeed");
+        };
         // Keys sorted: "int", "neg", "zero"
         assert_eq!(encoded, r#"{"int":42,"neg":-10,"zero":0}"#);
     }
@@ -936,7 +1015,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_blake3_output_format() {
+    fn blake3_output_format() {
         let hash = blake3_256_lowerhex(b"test");
         assert_eq!(hash.len(), 64, "hash should be 64 hex chars");
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
@@ -944,14 +1023,14 @@ mod tests {
     }
 
     #[test]
-    fn test_blake3_deterministic() {
+    fn blake3_deterministic() {
         let h1 = blake3_256_lowerhex(b"hello world");
         let h2 = blake3_256_lowerhex(b"hello world");
         assert_eq!(h1, h2);
     }
 
     #[test]
-    fn test_blake3_different_inputs() {
+    fn blake3_different_inputs() {
         let h1 = blake3_256_lowerhex(b"hello");
         let h2 = blake3_256_lowerhex(b"world");
         assert_ne!(h1, h2);
@@ -962,28 +1041,28 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_generate_binding_id_format() {
+    fn generate_binding_id_format() {
         let id = generate_binding_id("Given", "a server is running");
         assert_eq!(id.len(), 64);
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
-    fn test_generate_binding_id_deterministic() {
+    fn generate_binding_id_deterministic() {
         let id1 = generate_binding_id("When", "a client connects");
         let id2 = generate_binding_id("When", "a client connects");
         assert_eq!(id1, id2);
     }
 
     #[test]
-    fn test_generate_binding_id_different_kinds() {
+    fn generate_binding_id_different_kinds() {
         let given = generate_binding_id("Given", "something happens");
         let when = generate_binding_id("When", "something happens");
         assert_ne!(given, when, "different kinds should produce different IDs");
     }
 
     #[test]
-    fn test_generate_binding_id_normalized() {
+    fn generate_binding_id_normalized() {
         // Same expression with different line endings should produce same ID
         let id1 = generate_binding_id("Given", "a\ntest");
         let id2 = generate_binding_id("Given", "a\r\ntest");
@@ -995,7 +1074,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_feature_fingerprint_deterministic() {
+    fn feature_fingerprint_deterministic() {
         let files = vec![("a.feature", "Feature: A"), ("b.feature", "Feature: B")];
         let h1 = compute_feature_fingerprint(files.clone().into_iter());
         let h2 = compute_feature_fingerprint(files.into_iter());
@@ -1003,7 +1082,7 @@ mod tests {
     }
 
     #[test]
-    fn test_feature_fingerprint_order_independent() {
+    fn feature_fingerprint_order_independent() {
         // Files should be sorted by path, so order of input shouldn't matter
         let files1 = vec![("b.feature", "Feature: B"), ("a.feature", "Feature: A")];
         let files2 = vec![("a.feature", "Feature: A"), ("b.feature", "Feature: B")];
@@ -1013,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn test_feature_fingerprint_content_sensitive() {
+    fn feature_fingerprint_content_sensitive() {
         let files1 = vec![("a.feature", "Feature: A")];
         let files2 = vec![("a.feature", "Feature: B")];
         let h1 = compute_feature_fingerprint(files1.into_iter());
@@ -1026,27 +1105,36 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    #[allow(deprecated)]
-    fn test_derive_scenario_key() {
+    #[expect(
+        deprecated,
+        reason = "tests cover the deprecated v1 line-key path still used without the npap feature"
+    )]
+    fn scenario_key_derives() {
         let key = derive_scenario_key("specs/features/smoke/test.feature", 42);
         assert_eq!(key, "specs/features/smoke/test.feature:L42");
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn test_derive_scenario_key_path_normalization() {
+    #[expect(
+        deprecated,
+        reason = "tests cover the deprecated v1 line-key path still used without the npap feature"
+    )]
+    fn derive_scenario_key_path_normalization() {
         // Backslashes should be converted
-        let key = derive_scenario_key("specs\\features\\test.feature", 10);
-        assert_eq!(key, "specs/features/test.feature:L10");
+        let key_backslashes = derive_scenario_key("specs\\features\\test.feature", 10);
+        assert_eq!(key_backslashes, "specs/features/test.feature:L10");
 
         // Leading ./ should be removed
-        let key = derive_scenario_key("./specs/test.feature", 5);
-        assert_eq!(key, "specs/test.feature:L5");
+        let key_dot_prefix = derive_scenario_key("./specs/test.feature", 5);
+        assert_eq!(key_dot_prefix, "specs/test.feature:L5");
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn test_derive_scenario_outline_key() {
+    #[expect(
+        deprecated,
+        reason = "tests cover the deprecated v1 line-key path still used without the npap feature"
+    )]
+    fn scenario_outline_key_derives() {
         let key = derive_scenario_outline_key("specs/auth/login.feature", 15, 0, 2);
         assert_eq!(key, "specs/auth/login.feature:L15:E0:R2");
     }
@@ -1056,7 +1144,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_golden_unicode_korean() {
+    fn golden_unicode_korean() {
         // Korean text should normalize consistently
         let input = "한글 테스트";
         let normalized = normalize_string(input);
@@ -1064,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn test_golden_unicode_emoji() {
+    fn golden_unicode_emoji() {
         // Emoji with variation selector
         let input = "test ❤️ emoji";
         let normalized = normalize_string(input);
@@ -1073,7 +1161,7 @@ mod tests {
     }
 
     #[test]
-    fn test_golden_complex_nfc() {
+    fn golden_complex_nfc() {
         // Ω can be Greek capital omega (U+03A9) or Ohm sign (U+2126)
         // NFC normalizes Ohm sign to Greek omega
         let ohm = "\u{2126}"; // Ohm sign
@@ -1082,22 +1170,24 @@ mod tests {
     }
 
     #[test]
-    fn test_golden_mixed_newlines() {
+    fn golden_mixed_newlines() {
         let input = "line1\r\nline2\rline3\nline4";
         let expected = "line1\nline2\nline3\nline4";
         assert_eq!(normalize_string(input), expected);
     }
 
     #[test]
-    fn test_golden_json_unicode_keys() {
+    fn golden_json_unicode_keys() {
         let value = json!({"日本語": 1, "abc": 2});
-        let encoded = canonical_json_encode(&value).unwrap();
+        let Some(encoded) = canonical_json_encode(&value).ok() else {
+            panic!("canonical_json_encode should succeed");
+        };
         // ASCII sorts before CJK in Unicode code point order
         assert_eq!(encoded, r#"{"abc":2,"日本語":1}"#);
     }
 
     #[test]
-    fn test_golden_binding_id_known_value() {
+    fn golden_binding_id_known_value() {
         // This is a golden fixture - the hash should never change
         let id = generate_binding_id("Given", "a server is running");
         // If this test fails, it means the hashing algorithm changed
@@ -1109,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn test_golden_empty_string() {
+    fn golden_empty_string() {
         let normalized = normalize_string("");
         assert_eq!(normalized, "");
 
@@ -1118,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn test_golden_whitespace_preserved() {
+    fn golden_whitespace_preserved() {
         // Whitespace should be preserved (v1 does not collapse)
         let input = "a   b\t\tc";
         let normalized = normalize_string(input);
@@ -1130,50 +1220,52 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_semantic_binding_serialization() {
+    fn semantic_binding_serialization() {
         let binding = SemanticBinding {
-            binding_id: "abc123".to_string(),
-            kind: "Given".to_string(),
-            expression: "a server is running".to_string(),
+            binding_id: "abc123".to_owned(),
+            kind: "Given".to_owned(),
+            expression: "a server is running".to_owned(),
             signature: BindingSignature {
                 captures_arity: 0,
                 accepts_docstring: false,
                 accepts_datatable: false,
             },
-            impl_hash: "def456".to_string(),
+            impl_hash: "def456".to_owned(),
             source_symbol: None,
         };
 
-        let json = canonical_json_encode(&binding).unwrap();
+        let Some(json) = canonical_json_encode(&binding).ok() else {
+            panic!("binding should serialize");
+        };
         assert!(json.contains("\"binding_id\":\"abc123\""));
         assert!(json.contains("\"kind\":\"Given\""));
     }
 
     #[test]
-    fn test_semantic_registry_hash_deterministic() {
+    fn semantic_registry_hash_deterministic() {
         let bindings = vec![
             SemanticBinding {
-                binding_id: "bbb".to_string(),
-                kind: "When".to_string(),
-                expression: "test".to_string(),
+                binding_id: "bbb".to_owned(),
+                kind: "When".to_owned(),
+                expression: "test".to_owned(),
                 signature: BindingSignature {
                     captures_arity: 0,
                     accepts_docstring: false,
                     accepts_datatable: false,
                 },
-                impl_hash: "hash1".to_string(),
+                impl_hash: "hash1".to_owned(),
                 source_symbol: None,
             },
             SemanticBinding {
-                binding_id: "aaa".to_string(),
-                kind: "Given".to_string(),
-                expression: "another".to_string(),
+                binding_id: "aaa".to_owned(),
+                kind: "Given".to_owned(),
+                expression: "another".to_owned(),
                 signature: BindingSignature {
                     captures_arity: 1,
                     accepts_docstring: true,
                     accepts_datatable: false,
                 },
-                impl_hash: "hash2".to_string(),
+                impl_hash: "hash2".to_owned(),
                 source_symbol: None,
             },
         ];
@@ -1190,21 +1282,21 @@ mod tests {
     }
 
     #[test]
-    fn test_planned_step_payload_hash() {
+    fn planned_step_payload_hash() {
         let step1 = PlannedStep::new(
-            "Given".to_string(),
-            "some step text".to_string(),
-            "binding123".to_string(),
-            vec!["capture1".to_string()],
+            "Given".to_owned(),
+            "some step text".to_owned(),
+            "binding123".to_owned(),
+            vec!["capture1".to_owned()],
             None,
             None,
         );
 
         let step2 = PlannedStep::new(
-            "Given".to_string(),
-            "some step text".to_string(),
-            "binding123".to_string(),
-            vec!["capture1".to_string()],
+            "Given".to_owned(),
+            "some step text".to_owned(),
+            "binding123".to_owned(),
+            vec!["capture1".to_owned()],
             None,
             None,
         );
@@ -1214,22 +1306,22 @@ mod tests {
     }
 
     #[test]
-    fn test_planned_step_payload_hash_with_docstring() {
+    fn planned_step_payload_hash_with_docstring() {
         let step_without = PlannedStep::new(
-            "Given".to_string(),
-            "text".to_string(),
-            "binding123".to_string(),
+            "Given".to_owned(),
+            "text".to_owned(),
+            "binding123".to_owned(),
             vec![],
             None,
             None,
         );
 
         let step_with = PlannedStep::new(
-            "Given".to_string(),
-            "text".to_string(),
-            "binding123".to_string(),
+            "Given".to_owned(),
+            "text".to_owned(),
+            "binding123".to_owned(),
             vec![],
-            Some("docstring content".to_string()),
+            Some("docstring content".to_owned()),
             None,
         );
 
@@ -1237,28 +1329,28 @@ mod tests {
     }
 
     #[test]
-    fn test_resolved_plan_hash_deterministic() {
+    fn resolved_plan_hash_deterministic() {
         let scenarios = vec![
             ResolvedScenario {
-                scenario_key: "z:L10".to_string(),
-                feature_path: "z.feature".to_string(),
-                scenario_name: "Z test".to_string(),
+                scenario_key: "z:L10".to_owned(),
+                feature_path: "z.feature".to_owned(),
+                scenario_name: "Z test".to_owned(),
                 steps: vec![],
             },
             ResolvedScenario {
-                scenario_key: "a:L5".to_string(),
-                feature_path: "a.feature".to_string(),
-                scenario_name: "A test".to_string(),
+                scenario_key: "a:L5".to_owned(),
+                feature_path: "a.feature".to_owned(),
+                scenario_name: "A test".to_owned(),
                 steps: vec![],
             },
         ];
 
         let plan1 = ResolvedPlan::new(
-            "ff_hash".to_string(),
-            "sr_hash".to_string(),
+            "ff_hash".to_owned(),
+            "sr_hash".to_owned(),
             scenarios.clone(),
         );
-        let plan2 = ResolvedPlan::new("ff_hash".to_string(), "sr_hash".to_string(), scenarios);
+        let plan2 = ResolvedPlan::new("ff_hash".to_owned(), "sr_hash".to_owned(), scenarios);
 
         assert_eq!(
             plan1.header.resolved_plan_hash,
@@ -1272,17 +1364,17 @@ mod tests {
     }
 
     #[test]
-    fn test_run_report_hash() {
+    fn run_report_hash() {
         let results = vec![ScenarioResult {
-            scenario_key: "test:L1".to_string(),
+            scenario_key: "test:L1".to_owned(),
             status: ScenarioStatus::Passed,
             steps: vec![],
         }];
 
         let report = RunReport::new(
-            "ff_hash".to_string(),
-            "sr_hash".to_string(),
-            "rp_hash".to_string(),
+            "ff_hash".to_owned(),
+            "sr_hash".to_owned(),
+            "rp_hash".to_owned(),
             results,
         );
 
@@ -1291,42 +1383,65 @@ mod tests {
     }
 
     #[test]
-    fn test_scenario_status_serialization() {
+    fn scenario_status_serialization() {
         use serde_json::to_string;
 
-        assert_eq!(to_string(&ScenarioStatus::Passed).unwrap(), "\"passed\"");
-        assert_eq!(to_string(&ScenarioStatus::Failed).unwrap(), "\"failed\"");
-        assert_eq!(to_string(&ScenarioStatus::Skipped).unwrap(), "\"skipped\"");
+        let Some(passed_json) = to_string(&ScenarioStatus::Passed).ok() else {
+            panic!("status should serialize");
+        };
+        assert_eq!(passed_json, "\"passed\"");
+        let Some(failed_json) = to_string(&ScenarioStatus::Failed).ok() else {
+            panic!("status should serialize");
+        };
+        assert_eq!(failed_json, "\"failed\"");
+        let Some(skipped_json) = to_string(&ScenarioStatus::Skipped).ok() else {
+            panic!("status should serialize");
+        };
+        assert_eq!(skipped_json, "\"skipped\"");
     }
 
     #[test]
-    fn test_step_status_serialization() {
+    fn step_status_serialization() {
         use serde_json::to_string;
 
-        assert_eq!(to_string(&StepStatus::Passed).unwrap(), "\"passed\"");
-        assert_eq!(to_string(&StepStatus::Failed).unwrap(), "\"failed\"");
-        assert_eq!(to_string(&StepStatus::Skipped).unwrap(), "\"skipped\"");
+        let Some(passed_json) = to_string(&StepStatus::Passed).ok() else {
+            panic!("status should serialize");
+        };
+        assert_eq!(passed_json, "\"passed\"");
+        let Some(failed_json) = to_string(&StepStatus::Failed).ok() else {
+            panic!("status should serialize");
+        };
+        assert_eq!(failed_json, "\"failed\"");
+        let Some(skipped_json) = to_string(&StepStatus::Skipped).ok() else {
+            panic!("status should serialize");
+        };
+        assert_eq!(skipped_json, "\"skipped\"");
     }
 
     #[test]
-    fn test_certification_roundtrip() {
+    fn certification_roundtrip() {
         let cert = Certification {
             identity: CertificationIdentity {
-                hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
-                feature_fingerprint_hash: "ff".to_string(),
-                step_registry_hash: "sr".to_string(),
-                resolved_plan_hash: "rp".to_string(),
+                hash_contract_version: HASH_CONTRACT_VERSION.to_owned(),
+                feature_fingerprint_hash: "ff".to_owned(),
+                step_registry_hash: "sr".to_owned(),
+                resolved_plan_hash: "rp".to_owned(),
             },
             metadata: CertificationMetadata {
-                timestamp: "2025-01-16T00:00:00Z".to_string(),
-                namako_version: "0.1.0".to_string(),
+                timestamp: "2025-01-16T00:00:00Z".to_owned(),
+                namako_version: "0.1.0".to_owned(),
                 npap_version: NPAP_VERSION,
-                run_report_hash: "rr".to_string(),
+                run_report_hash: "rr".to_owned(),
             },
         };
 
-        let json = serde_json::to_string(&cert).unwrap();
-        let parsed: Certification = serde_json::from_str(&json).unwrap();
+        let Some(json) = serde_json::to_string(&cert).ok() else {
+            panic!("certification should serialize");
+        };
+        let parsed: Certification = match serde_json::from_str(&json) {
+            Ok(parsed) => parsed,
+            Err(e) => panic!("certification should deserialize: {e}"),
+        };
 
         assert_eq!(cert, parsed);
     }

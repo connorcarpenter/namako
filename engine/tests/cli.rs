@@ -29,7 +29,7 @@ struct Smoke {
 #[given("an invalid step")]
 fn invalid_step(mut ctx: WorldMut) {
     let _ = ctx.world();
-    assert!(false);
+    panic!("invalid step");
 }
 
 #[then("cli verified")]

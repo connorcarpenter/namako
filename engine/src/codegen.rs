@@ -68,25 +68,27 @@ pub enum AssertOutcome<T = ()> {
 impl<T> AssertOutcome<T> {
     /// Returns `true` if the outcome is `Passed`.
     #[inline]
-    pub fn is_passed(&self) -> bool {
+    pub const fn is_passed(&self) -> bool {
         matches!(self, Self::Passed(_))
     }
 
     /// Returns `true` if the outcome is `Pending`.
     #[inline]
-    pub fn is_pending(&self) -> bool {
+    pub const fn is_pending(&self) -> bool {
         matches!(self, Self::Pending)
     }
 
     /// Convenience constructor for `Passed(())`.
     #[inline]
-    pub fn passed() -> AssertOutcome<()> {
+    #[must_use]
+    pub const fn passed() -> AssertOutcome<()> {
         AssertOutcome::Passed(())
     }
 
     /// Convenience constructor for `Pending`.
     #[inline]
-    pub fn pending() -> Self {
+    #[must_use]
+    pub const fn pending() -> Self {
         Self::Pending
     }
 
@@ -104,7 +106,7 @@ impl<T> AssertOutcome<T> {
 /// NPAP v1 binding metadata collected at compile time.
 ///
 /// This struct contains all the information needed for the semantic step
-/// registry per GOLD_PLAN.md §6.2.1.
+/// registry per `GOLD_PLAN.md` §6.2.1.
 #[derive(Debug, Clone, Copy)]
 pub struct NpapBindingMetadata {
     /// Binding ID computed from (kind + expression) per §4.2.1.
@@ -117,14 +119,14 @@ pub struct NpapBindingMetadata {
     pub impl_hash: &'static str,
     /// Number of capture parameters per §4.4.2.
     pub captures_arity: u32,
-    /// Whether binding accepts a DocString per §4.4.3.
+    /// Whether binding accepts a `DocString` per §4.4.3.
     pub accepts_docstring: bool,
-    /// Whether binding accepts a DataTable per §4.4.4.
+    /// Whether binding accepts a `DataTable` per §4.4.4.
     pub accepts_datatable: bool,
     /// Source symbol: stable identifier for the binding implementation.
     ///
     /// Format: `crate::module::function_name` (uses `module_path!()` + function ident).
-    /// This is more stable than file:line:column for AI navigation.
+    /// This is more stable than <file:line:column> for AI navigation.
     ///
     /// Per TODO.md §3: Truthful source location for explain output.
     pub source_symbol: &'static str,
