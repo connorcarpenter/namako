@@ -1489,6 +1489,27 @@ mod tests {
     }
 
     #[test]
+    fn valid_word_step_expands_with_provider() {
+        let attr = quote::quote! { "a {word} step" };
+        let body = quote::quote! {
+            fn takes_word(ctx: &mut Ctx, name: String) {}
+        };
+        let tokens = match step("given", attr, body) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("valid step must expand: {e}"),
+        };
+        let expanded = tokens.to_string();
+        assert!(
+            expanded.contains("struct Provider"),
+            "expansion must define the parameter Provider: {expanded}",
+        );
+        assert!(
+            expanded.contains("takes_word"),
+            "expansion must reference the step fn: {expanded}",
+        );
+    }
+
+    #[test]
     fn two_step_arguments_are_rejected() {
         let attr = quote::quote! { "a step" };
         let body = quote::quote! {
