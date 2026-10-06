@@ -1489,6 +1489,21 @@ mod tests {
     }
 
     #[test]
+    fn two_step_arguments_are_rejected() {
+        let attr = quote::quote! { "a step" };
+        let body = quote::quote! {
+            fn bad_step(ctx: &mut Ctx, #[step] a: String, #[step] b: String) {}
+        };
+        let Err(err) = step("given", attr, body) else {
+            panic!("two step-marked arguments must be rejected");
+        };
+        assert!(
+            err.to_string().contains("only 1 step argument is allowed"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
     fn custom_parameter_without_matching_argument_is_rejected() {
         let attr = quote::quote! { "a {custom} step" };
         let body = quote::quote! {
