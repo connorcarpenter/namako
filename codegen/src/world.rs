@@ -535,6 +535,48 @@ mod spec {
     }
 
     #[test]
+    fn same_ctx_type_emits_single_step_context_impl() {
+        let input = parse_quote! {
+            #[world(mut_ctx = Ctx, ref_ctx = Ctx)]
+            pub struct World;
+        };
+
+        let result = match super::derive(input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
+        let result_str = result.to_string();
+
+        assert_eq!(
+            result_str.matches("StepContext for Ctx").count(),
+            1,
+            "same ctx type must emit exactly one StepContext impl: {result_str}",
+        );
+
+        let other_input = parse_quote! {
+            #[world(mut_ctx = MutCtx, ref_ctx = RefCtx)]
+            pub struct World;
+        };
+
+        let other_result = match super::derive(other_input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
+        let other_result_str = other_result.to_string();
+
+        assert_eq!(
+            other_result_str.matches("StepContext for MutCtx").count(),
+            1,
+            "distinct mut ctx must emit its impl: {other_result_str}",
+        );
+        assert_eq!(
+            other_result_str.matches("StepContext for RefCtx").count(),
+            1,
+            "distinct ref ctx must emit its impl: {other_result_str}",
+        );
+    }
+
+    #[test]
     fn derives_impl_with_init_fn() {
         let input = parse_quote! {
             #[world(init = Self::custom)]
