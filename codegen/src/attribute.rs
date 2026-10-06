@@ -1472,4 +1472,53 @@ mod tests {
         assert!(!is_docstring_type(&plain), "bare String is not a DocString");
         assert!(!is_datatable_type(&plain), "bare String is not a DataTable");
     }
+
+    #[test]
+    fn lifetime_rewrite_injects_only_for_wrapper_ctx() {
+        let mut plain: syn::ItemFn = syn::parse_quote! {
+            fn step(ctx: Ctx) {}
+        };
+        match rewrite_signature_with_lifetime(&mut plain, false) {
+            Ok(()) => {}
+            Err(e) => panic!("skip must succeed: {e}"),
+        }
+        assert!(
+            !plain.sig.generics.params.iter().any(|p| matches!(
+                p,
+                syn::GenericParam::Lifetime(lt) if lt.lifetime.ident == "__ctx"
+            )),
+            "no lifetime may be injected when not needed"
+        );
+
+        let mut wrapper: syn::ItemFn = syn::parse_quote! {
+            fn step(ctx: Ctx) {}
+        };
+        match rewrite_signature_with_lifetime(&mut wrapper, true) {
+            Ok(()) => {}
+            Err(e) => panic!("rewrite must succeed: {e}"),
+        }
+        assert!(
+            wrapper.sig.generics.params.iter().any(|p| matches!(
+                p,
+                syn::GenericParam::Lifetime(lt) if lt.lifetime.ident == "__ctx"
+            )),
+            "wrapper fn must declare '__ctx"
+        );
+        let rewritten = quote::quote! { #wrapper }.to_string();
+        assert!(
+            rewritten.contains("Ctx < '__ctx >"),
+            "wrapper ctx type must use '__ctx: {rewritten}"
+        );
+
+        match rewrite_signature_with_lifetime(&mut wrapper, true) {
+            Ok(()) => {}
+            Err(e) => panic!("second rewrite must succeed: {e}"),
+        }
+        let twice = quote::quote! { #wrapper }.to_string();
+        assert_eq!(
+            twice.matches("__ctx").count(),
+            rewritten.matches("__ctx").count(),
+            "rewrite must be idempotent: {twice}"
+        );
+    }
 }
