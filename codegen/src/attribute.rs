@@ -1533,6 +1533,21 @@ mod tests {
     }
 
     #[test]
+    fn destructured_step_argument_is_rejected() {
+        let attr = quote::quote! { "a {word} step" };
+        let body = quote::quote! {
+            fn bad_step(ctx: &mut Ctx, (first, second): (u8, u8)) {}
+        };
+        let Err(err) = step("given", attr, body) else {
+            panic!("destructured step argument must be rejected");
+        };
+        assert!(
+            err.to_string().contains("expected ident"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn return_type_selects_unwrapping() {
         let fallible_attr = quote::quote! { "a step" };
         let fallible_body = quote::quote! {
