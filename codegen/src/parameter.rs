@@ -193,6 +193,24 @@ mod spec {
     }
 
     #[test]
+    fn derives_impl_with_where_clause() {
+        let input = parse_quote! {
+            #[param(regex = "cat|dog", name = "custom")]
+            struct Parameter<T>(T) where T: Clone;
+        };
+
+        let output = quote! {
+            #[automatically_derived]
+            impl<T> ::namako_engine::Parameter for Parameter<T> where T: Clone {
+                const REGEX: &'static str = "cat|dog";
+                const NAME: &'static str = "custom";
+            }
+        };
+
+        assert_eq!(must_derive(input), output.to_string(),);
+    }
+
+    #[test]
     fn regex_arg_is_required() {
         let input = parse_quote! {
             #[param(name = "custom")]
