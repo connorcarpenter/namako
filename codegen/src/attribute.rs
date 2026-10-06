@@ -1533,6 +1533,51 @@ mod tests {
     }
 
     #[test]
+    fn return_type_selects_unwrapping() {
+        let fallible_attr = quote::quote! { "a step" };
+        let fallible_body = quote::quote! {
+            fn fallible(ctx: &mut Ctx) -> Result<(), String> {}
+        };
+        let fallible_tokens = match step("given", fallible_attr, fallible_body) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("fallible step must expand: {e}"),
+        };
+        let fallible_expanded = fallible_tokens.to_string();
+        assert!(
+            fallible_expanded.contains("unwrap_or_else"),
+            "Result step must unwrap with panic: {fallible_expanded}"
+        );
+
+        let unit_attr = quote::quote! { "a step" };
+        let unit_body = quote::quote! {
+            fn plain(ctx: &mut Ctx) {}
+        };
+        let unit_tokens = match step("given", unit_attr, unit_body) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("unit step must expand: {e}"),
+        };
+        let unit_expanded = unit_tokens.to_string();
+        assert!(
+            !unit_expanded.contains("unwrap_or_else"),
+            "unit step must not unwrap: {unit_expanded}"
+        );
+
+        let outcome_attr = quote::quote! { "a step" };
+        let outcome_body = quote::quote! {
+            fn polling(ctx: &Ctx) -> AssertOutcome<()> {}
+        };
+        let outcome_tokens = match step("then", outcome_attr, outcome_body) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("assert-outcome step must expand: {e}"),
+        };
+        let outcome_expanded = outcome_tokens.to_string();
+        assert!(
+            !outcome_expanded.contains("unwrap_or_else"),
+            "AssertOutcome step must not unwrap: {outcome_expanded}"
+        );
+    }
+
+    #[test]
     fn const_assertions_guard_parameter_kinds() {
         let word_attr = quote::quote! { "a {word} step" };
         let word_body = quote::quote! {
