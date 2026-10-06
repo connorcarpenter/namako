@@ -1533,6 +1533,21 @@ mod tests {
     }
 
     #[test]
+    fn non_literal_attribute_argument_is_rejected() {
+        let attr = quote::quote! { 123 };
+        let body = quote::quote! {
+            fn bad_step(ctx: &mut Ctx) {}
+        };
+        let Err(err) = step("given", attr, body) else {
+            panic!("non-literal attribute argument must be rejected");
+        };
+        assert!(
+            err.to_string().contains("expected string literal"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn destructured_step_argument_is_rejected() {
         let attr = quote::quote! { "a {word} step" };
         let body = quote::quote! {
