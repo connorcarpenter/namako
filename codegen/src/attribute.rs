@@ -1474,6 +1474,21 @@ mod tests {
     }
 
     #[test]
+    fn invalid_expression_is_rejected_at_expansion() {
+        let attr = quote::quote! { "(unclosed" };
+        let body = quote::quote! {
+            fn bad_step(ctx: &mut Ctx) {}
+        };
+        let Err(err) = step("given", attr, body) else {
+            panic!("invalid expression must be rejected");
+        };
+        assert!(
+            err.to_string().contains("invalid Cucumber Expression"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
     fn lifetime_rewrite_injects_only_for_wrapper_ctx() {
         let mut plain: syn::ItemFn = syn::parse_quote! {
             fn step(ctx: Ctx) {}
