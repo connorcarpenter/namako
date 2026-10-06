@@ -1685,6 +1685,25 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_datatable_parameters_are_rejected() {
+        let attr = quote::quote! { "a {word} step" };
+        let body = quote::quote! {
+            fn bad_step(
+                ctx: &mut Ctx,
+                first: Option<Vec<Vec<String>>>,
+                second: Option<Vec<Vec<String>>>,
+            ) {}
+        };
+        let Err(err) = step("given", attr, body) else {
+            panic!("duplicate DataTable parameters must be rejected");
+        };
+        assert!(
+            err.to_string().contains("at most one DataTable"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn metadata_arity_excludes_docstring() {
         let attr = quote::quote! { "a {word} step" };
         let body = quote::quote! {
