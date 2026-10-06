@@ -22,6 +22,18 @@ fn takes_datatable(mut ctx: WorldMut, table: Option<Vec<Vec<String>>>) {
     );
 }
 
+#[given("a step without words")]
+fn takes_no_docstring(mut ctx: WorldMut, doc: Option<String>) {
+    let _ = ctx.world();
+    assert_eq!(doc, None);
+}
+
+#[given("a step without rows")]
+fn takes_no_datatable(mut ctx: WorldMut, table: Option<Vec<Vec<String>>>) {
+    let _ = ctx.world();
+    assert_eq!(table, None);
+}
+
 #[then("the words are seen")]
 #[then("the rows are seen")]
 fn seen(ctx: WorldRef) {
@@ -35,7 +47,7 @@ async fn passes() {
         .run("tests/features/docstring")
         .await;
 
-    assert_eq!(writer.passed_steps(), 4);
+    assert_eq!(writer.passed_steps(), 8);
     assert_eq!(writer.skipped_steps(), 0);
     assert_eq!(writer.failed_steps(), 0);
     assert_eq!(writer.parsing_errors(), 0);
