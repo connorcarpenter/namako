@@ -1489,6 +1489,21 @@ mod tests {
     }
 
     #[test]
+    fn custom_parameter_without_matching_argument_is_rejected() {
+        let attr = quote::quote! { "a {custom} step" };
+        let body = quote::quote! {
+            fn bad_step(ctx: &mut Ctx) {}
+        };
+        let Err(err) = step("given", attr, body) else {
+            panic!("custom parameter without a matching argument must be rejected");
+        };
+        assert!(
+            err.to_string().contains("isn't found"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
     fn lifetime_rewrite_injects_only_for_wrapper_ctx() {
         let mut plain: syn::ItemFn = syn::parse_quote! {
             fn step(ctx: Ctx) {}
