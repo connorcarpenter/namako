@@ -108,6 +108,9 @@ impl Step {
 
     /// Expands generated code of this [`Step`] definition.
     fn expand(mut self) -> syn::Result<TokenStream> {
+        // Reject ambiguous signatures before generating anything.
+        self.reject_ambiguous_signature()?;
+
         // Parse the context type and determine if it needs lifetime injection.
         // Two patterns are supported:
         // 1. Reference types: `&mut World` or `&World` - blanket impl handles these
@@ -263,6 +266,39 @@ impl Step {
             accepts_docstring: signature_info.accepts_docstring,
             accepts_datatable: signature_info.accepts_datatable,
         }
+    }
+
+    /// Rejects ambiguous signatures per `GOLD_PLAN` §4.4.6: at most one
+    /// `DocString` and at most one `DataTable` parameter per binding.
+    /// Without this, duplicate `Option<String>` parameters would silently
+    /// alias the same docstring and starve captures.
+    fn reject_ambiguous_signature(&self) -> syn::Result<()> {
+        let mut docstring_seen: Option<syn::Ident> = None;
+        let mut datatable_seen: Option<syn::Ident> = None;
+        for arg in self.func.sig.inputs.iter().skip(1) {
+            let Ok((ident, ty)) = parse_fn_arg(arg) else {
+                continue;
+            };
+            if is_docstring_type(ty) {
+                if docstring_seen.is_some() {
+                    return Err(syn::Error::new(
+                        ident.span(),
+                        "at most one DocString parameter is allowed per step",
+                    ));
+                }
+                docstring_seen = Some(ident.clone());
+            }
+            if is_datatable_type(ty) {
+                if datatable_seen.is_some() {
+                    return Err(syn::Error::new(
+                        ident.span(),
+                        "at most one DataTable parameter is allowed per step",
+                    ));
+                }
+                datatable_seen = Some(ident.clone());
+            }
+        }
+        Ok(())
     }
 
     /// Resolves the context argument token from the user function's first input.
@@ -1629,6 +1665,21 @@ mod tests {
         };
         assert!(
             err.to_string().contains("expected ident"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn duplicate_docstring_parameters_are_rejected() {
+        let attr = quote::quote! { "a {word} step" };
+        let body = quote::quote! {
+            fn bad_step(ctx: &mut Ctx, first: Option<String>, second: Option<String>) {}
+        };
+        let Err(err) = step("given", attr, body) else {
+            panic!("duplicate DocString parameters must be rejected");
+        };
+        assert!(
+            err.to_string().contains("at most one DocString"),
             "unexpected error: {err}"
         );
     }
