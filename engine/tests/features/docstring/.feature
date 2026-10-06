@@ -26,3 +26,10 @@ Feature: Docstring
       note
       """
     Then the words are seen
+
+  Scenario: Docstring on polling path
+    Given a step for the note
+    Then the recorded note is seen
+      """
+      hello docstring
+      """

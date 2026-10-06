@@ -47,6 +47,17 @@ fn seen(ctx: WorldRef) {
     let _ = ctx.world();
 }
 
+#[given("a step for the note")]
+fn noop(mut ctx: WorldMut) {
+    let _ = ctx.world();
+}
+
+#[then("the recorded note is seen")]
+fn note_seen(ctx: WorldRef, doc: Option<String>) {
+    let _ = ctx.world();
+    assert_eq!(doc.as_deref().map(str::trim), Some("hello docstring"));
+}
+
 #[tokio::test]
 async fn passes() {
     let writer = World::namako()
@@ -54,7 +65,7 @@ async fn passes() {
         .run("tests/features/docstring")
         .await;
 
-    assert_eq!(writer.passed_steps(), 10);
+    assert_eq!(writer.passed_steps(), 12);
     assert_eq!(writer.skipped_steps(), 0);
     assert_eq!(writer.failed_steps(), 0);
     assert_eq!(writer.parsing_errors(), 0);
