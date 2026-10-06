@@ -598,7 +598,9 @@ impl Step {
     /// Returns [`syn::Ident`] and parsing code of the given function's
     /// argument.
     ///
-    /// Function's argument type have to implement [`FromStr`].
+    /// Capture arguments read the next regex match and their type has to
+    /// implement [`FromStr`]. `DocString`/`DataTable` arguments are read
+    /// from the step instead (see [`owned_step_arg_expr`]).
     ///
     /// [`FromStr`]: std::str::FromStr
     /// [`syn::Ident`]: struct@syn::Ident
@@ -617,6 +619,10 @@ impl Step {
             quote! {
                 let #ident =
                     ::std::borrow::Borrow::borrow(&__namako_ctx.step);
+            }
+        } else if let Some(owned) = owned_step_arg_expr(ty) {
+            quote! {
+                let #ident = #owned;
             }
         } else {
             let syn::Type::Path(ty) = ty else {
@@ -694,6 +700,12 @@ impl Step {
                     ::std::borrow::Borrow::borrow(&__namako_ctx.step)
                 });
             }
+        }
+
+        if let Ok((_, ty)) = parse_fn_arg(arg)
+            && let Some(owned) = owned_step_arg_expr(ty)
+        {
+            return Ok(owned);
         }
 
         Ok(quote! {
@@ -1372,6 +1384,46 @@ struct SignatureInfo {
     accepts_docstring: bool,
     /// Whether the function accepts a `DataTable` parameter.
     accepts_datatable: bool,
+}
+
+/// Expression evaluating a `DocString`/`DataTable` argument from the step.
+///
+/// Covers the concrete documented shapes only: `Option<String>` reads
+/// `step.docstring`, `Option<Vec<Vec<String>>>` reads `step.table` rows.
+/// Wrapper types (`Option<DocString>`, `Option<DataTable>`, bare
+/// `DataTable`) return `None` and keep the existing capture path, since
+/// the macro cannot construct an arbitrary wrapper.
+fn owned_step_arg_expr(ty: &syn::Type) -> Option<TokenStream> {
+    let syn::Type::Path(type_path) = ty else {
+        return None;
+    };
+    let segment = type_path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    let syn::GenericArgument::Type(syn::Type::Path(inner)) = args.args.first()? else {
+        return None;
+    };
+    let inner_seg = inner.path.segments.last()?;
+    if inner_seg.ident == "String" {
+        return Some(quote! { __namako_ctx.step.docstring.clone() });
+    }
+    if inner_seg.ident == "Vec"
+        && let syn::PathArguments::AngleBracketed(inner_args) = &inner_seg.arguments
+        && let Some(syn::GenericArgument::Type(syn::Type::Path(mid))) = inner_args.args.first()
+        && let Some(mid_seg) = mid.path.segments.last()
+        && mid_seg.ident == "Vec"
+        && let syn::PathArguments::AngleBracketed(mid_args) = &mid_seg.arguments
+        && let Some(syn::GenericArgument::Type(syn::Type::Path(cell))) = mid_args.args.first()
+        && let Some(cell_seg) = cell.path.segments.last()
+        && cell_seg.ident == "String"
+    {
+        return Some(quote! { __namako_ctx.step.table.clone().map(|t| t.rows) });
+    }
+    None
 }
 
 /// Checks if a type represents a `DocString` parameter.
