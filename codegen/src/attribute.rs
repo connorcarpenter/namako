@@ -1489,6 +1489,21 @@ mod tests {
     }
 
     #[test]
+    fn non_path_step_argument_type_is_rejected() {
+        let attr = quote::quote! { "a {word} step" };
+        let body = quote::quote! {
+            fn bad_step(ctx: &mut Ctx, coords: (u8, u8)) {}
+        };
+        let Err(err) = step("given", attr, body) else {
+            panic!("tuple-typed step argument must be rejected");
+        };
+        assert!(
+            err.to_string().contains("type path expected"),
+            "unexpected error: {err}",
+        );
+    }
+
+    #[test]
     fn valid_word_step_expands_with_provider() {
         let attr = quote::quote! { "a {word} step" };
         let body = quote::quote! {
