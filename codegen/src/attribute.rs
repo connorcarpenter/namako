@@ -1533,6 +1533,25 @@ mod tests {
     }
 
     #[test]
+    fn find_first_slice_detects_slice_argument() {
+        let with_slice: syn::Signature = syn::parse_quote! {
+            fn step(ctx: Ctx, matches: &[String])
+        };
+        assert!(
+            find_first_slice(&with_slice).is_some(),
+            "&[String] argument must be detected"
+        );
+
+        let without_slice: syn::Signature = syn::parse_quote! {
+            fn step(ctx: Ctx, name: String)
+        };
+        assert!(
+            find_first_slice(&without_slice).is_none(),
+            "no slice argument must yield None"
+        );
+    }
+
+    #[test]
     fn non_literal_attribute_argument_is_rejected() {
         let attr = quote::quote! { 123 };
         let body = quote::quote! {
