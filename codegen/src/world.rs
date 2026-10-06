@@ -512,6 +512,29 @@ mod spec {
     }
 
     #[test]
+    fn derives_custom_ctx_constructors() {
+        let input = parse_quote! {
+            #[world(mut_ctx = Ctx, ref_ctx = Ctx, ctx_mut = make_ctx, ctx_ref = make_ref)]
+            pub struct World;
+        };
+
+        let result = match super::derive(input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
+        let result_str = result.to_string();
+
+        assert!(
+            result_str.contains("make_ctx (self)"),
+            "custom ctx_mut must expand to make_ctx(self): {result_str}",
+        );
+        assert!(
+            result_str.contains("make_ref (self)"),
+            "custom ctx_ref must expand to make_ref(self): {result_str}",
+        );
+    }
+
+    #[test]
     fn derives_impl_with_init_fn() {
         let input = parse_quote! {
             #[world(init = Self::custom)]
