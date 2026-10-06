@@ -489,6 +489,29 @@ mod spec {
     }
 
     #[test]
+    fn derives_default_ctx_constructor_when_mut_ctx_set() {
+        let input = parse_quote! {
+            #[world(mut_ctx = Ctx, ref_ctx = Ctx)]
+            pub struct World;
+        };
+
+        let result = match super::derive(input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
+        let result_str = result.to_string();
+
+        assert!(
+            result_str.contains("MutCtx < '_ >> :: new"),
+            "mut_ctx without ctx_mut should default to MutCtx::new(self): {result_str}",
+        );
+        assert!(
+            result_str.contains("RefCtx < '_ >> :: new"),
+            "ref_ctx without ctx_ref should default to RefCtx::new(self): {result_str}",
+        );
+    }
+
+    #[test]
     fn derives_impl_with_init_fn() {
         let input = parse_quote! {
             #[world(init = Self::custom)]
