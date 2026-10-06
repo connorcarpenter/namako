@@ -126,6 +126,44 @@ mod tests {
         assert_eq!(collapse_whitespace("  a  \n\n  b  "), "a b");
     }
 
+    fn parse_body(src: &str) -> syn::Block {
+        let Ok(body) = syn::parse_str(src) else {
+            panic!("test body parses")
+        };
+        body
+    }
+
+    #[test]
+    fn impl_hash_deterministic() {
+        let first = generate_impl_hash(&parse_body("{ let x = 1; }"));
+        let second = generate_impl_hash(&parse_body("{ let x = 1; }"));
+        assert_eq!(first.len(), 64);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn impl_hash_ignores_formatting() {
+        let compact = generate_impl_hash(&parse_body("{let x=1;}"));
+        let spaced = generate_impl_hash(&parse_body("{\n    let x   =   1;\n}"));
+        assert_eq!(compact, spaced);
+    }
+
+    #[test]
+    fn impl_hash_distinguishes_bodies() {
+        let first = generate_impl_hash(&parse_body("{ let x = 1; }"));
+        let second = generate_impl_hash(&parse_body("{ let x = 2; }"));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn normalize_nfc_equivalent() {
+        assert_eq!(
+            normalize_string("caf\u{e9}"),
+            normalize_string("cafe\u{301}")
+        );
+    }
+
     #[test]
     fn golden_binding_id() {
         // Must match the value in namako/src/npap.rs
