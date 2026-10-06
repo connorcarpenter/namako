@@ -1425,3 +1425,24 @@ fn is_datatable_type(ty: &syn::Type) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_context_first_argument_names_expected_shape() {
+        let attr = quote::quote! { "a step" };
+        let body = quote::quote! {
+            fn bad_step(ctx: (u8, u8)) {}
+        };
+        let Err(err) = step("given", attr, body) else {
+            panic!("tuple first argument must be rejected");
+        };
+        assert!(
+            err.to_string()
+                .contains("first argument must be `&mut World`"),
+            "unexpected error: {err}",
+        );
+    }
+}
