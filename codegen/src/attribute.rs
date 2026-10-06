@@ -1445,4 +1445,31 @@ mod tests {
             "unexpected error: {err}",
         );
     }
+
+    #[test]
+    fn docstring_and_datatable_classification() {
+        let docstring: syn::Type = syn::parse_quote! { Option<String> };
+        assert!(
+            is_docstring_type(&docstring),
+            "Option<String> is a DocString"
+        );
+        assert!(
+            !is_datatable_type(&docstring),
+            "Option<String> is not a DataTable"
+        );
+
+        let datatable: syn::Type = syn::parse_quote! { Option<Vec<Vec<String>>> };
+        assert!(
+            !is_docstring_type(&datatable),
+            "Option<Vec<Vec<String>>> is not a DocString"
+        );
+        assert!(
+            is_datatable_type(&datatable),
+            "Option<Vec<Vec<String>>> is a DataTable"
+        );
+
+        let plain: syn::Type = syn::parse_quote! { String };
+        assert!(!is_docstring_type(&plain), "bare String is not a DocString");
+        assert!(!is_datatable_type(&plain), "bare String is not a DataTable");
+    }
 }
