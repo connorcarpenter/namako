@@ -626,6 +626,32 @@ mod spec {
     }
 
     #[test]
+    fn world_inventory_binds_step_types() {
+        let input = parse_quote! {
+            pub struct World;
+        };
+
+        let result = match super::derive(input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
+        let result_str = result.to_string();
+
+        assert!(
+            result_str.contains("type Given = NamakoGivenWorld"),
+            "Given must bind the Given step struct: {result_str}",
+        );
+        assert!(
+            result_str.contains("type When = NamakoWhenWorld"),
+            "When must bind the When step struct: {result_str}",
+        );
+        assert!(
+            result_str.contains("type Then = NamakoThenWorld"),
+            "Then must bind the Then step struct: {result_str}",
+        );
+    }
+
+    #[test]
     fn derives_impl_with_init_fn() {
         let input = parse_quote! {
             #[world(init = Self::custom)]
