@@ -34,6 +34,13 @@ fn takes_no_datatable(mut ctx: WorldMut, table: Option<Vec<Vec<String>>>) {
     assert_eq!(table, None);
 }
 
+#[given("a {word} box")]
+fn takes_matches_and_doc(mut ctx: WorldMut, matches: &[String], doc: Option<String>) {
+    let _ = ctx.world();
+    assert_eq!(matches, &["red".to_owned()]);
+    assert_eq!(doc.as_deref().map(str::trim), Some("note"));
+}
+
 #[then("the words are seen")]
 #[then("the rows are seen")]
 fn seen(ctx: WorldRef) {
@@ -47,7 +54,7 @@ async fn passes() {
         .run("tests/features/docstring")
         .await;
 
-    assert_eq!(writer.passed_steps(), 8);
+    assert_eq!(writer.passed_steps(), 10);
     assert_eq!(writer.skipped_steps(), 0);
     assert_eq!(writer.failed_steps(), 0);
     assert_eq!(writer.parsing_errors(), 0);

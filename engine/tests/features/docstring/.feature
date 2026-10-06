@@ -19,3 +19,10 @@ Feature: Docstring
   Scenario: Missing datatable delivers None
     Given a step without rows
     Then the rows are seen
+
+  Scenario: Slice context with docstring
+    Given a red box
+      """
+      note
+      """
+    Then the words are seen
