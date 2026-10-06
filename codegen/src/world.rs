@@ -535,6 +535,42 @@ mod spec {
     }
 
     #[test]
+    fn default_world_emits_no_step_context_impl() {
+        let input = parse_quote! {
+            pub struct World;
+        };
+
+        let result = match super::derive(input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
+        let result_str = result.to_string();
+
+        assert_eq!(
+            result_str.matches("StepContext for").count(),
+            0,
+            "reference ctx types need no wrapper impl: {result_str}",
+        );
+
+        let explicit_input = parse_quote! {
+            #[world(mut_ctx = &'static mut Self, ref_ctx = &'static Self)]
+            pub struct World;
+        };
+
+        let explicit_result = match super::derive(explicit_input) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("derive should succeed: {e}"),
+        };
+        let explicit_result_str = explicit_result.to_string();
+
+        assert_eq!(
+            explicit_result_str.matches("StepContext for").count(),
+            0,
+            "explicit reference ctx types need no wrapper impl: {explicit_result_str}",
+        );
+    }
+
+    #[test]
     fn same_ctx_type_emits_single_step_context_impl() {
         let input = parse_quote! {
             #[world(mut_ctx = Ctx, ref_ctx = Ctx)]
