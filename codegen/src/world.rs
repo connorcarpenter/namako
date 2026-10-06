@@ -535,6 +535,19 @@ mod spec {
     }
 
     #[test]
+    fn unknown_world_attribute_is_rejected() {
+        let input = parse_quote! {
+            #[world(bogus = 1)]
+            pub struct World;
+        };
+
+        let Err(err) = super::derive(input) else {
+            panic!("unknown world attribute must be rejected");
+        };
+        assert!(err.to_string().contains("bogus"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn default_world_emits_no_step_context_impl() {
         let input = parse_quote! {
             pub struct World;
