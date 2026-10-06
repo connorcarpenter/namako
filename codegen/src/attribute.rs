@@ -1431,6 +1431,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn step_kind_mutability_mismatch_is_rejected() {
+        let then_attr = quote::quote! { "a step" };
+        let then_body = quote::quote! {
+            fn bad_step(ctx: &mut Ctx) {}
+        };
+        let Err(then_err) = step("then", then_attr, then_body) else {
+            panic!("then step with &mut ctx must be rejected");
+        };
+        assert!(
+            then_err.to_string().contains("Then steps should use"),
+            "unexpected error: {then_err}"
+        );
+
+        let given_attr = quote::quote! { "a step" };
+        let given_body = quote::quote! {
+            fn bad_step(ctx: &Ctx) {}
+        };
+        let Err(given_err) = step("given", given_attr, given_body) else {
+            panic!("given step with & ctx must be rejected");
+        };
+        assert!(
+            given_err
+                .to_string()
+                .contains("Given/When steps should use"),
+            "unexpected error: {given_err}"
+        );
+    }
+
+    #[test]
     fn non_context_first_argument_names_expected_shape() {
         let attr = quote::quote! { "a step" };
         let body = quote::quote! {
