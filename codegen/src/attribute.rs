@@ -1533,6 +1533,37 @@ mod tests {
     }
 
     #[test]
+    fn const_assertions_guard_parameter_kinds() {
+        let word_attr = quote::quote! { "a {word} step" };
+        let word_body = quote::quote! {
+            fn takes_word(ctx: &mut Ctx, name: String) {}
+        };
+        let word_tokens = match step("given", word_attr, word_body) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("valid step must expand: {e}"),
+        };
+        let word_expanded = word_tokens.to_string();
+        assert!(
+            word_expanded.contains("UseParameterNameInsteadOfWord"),
+            "default param must emit the misuse guard: {word_expanded}"
+        );
+
+        let custom_attr = quote::quote! { "a {color} step" };
+        let custom_body = quote::quote! {
+            fn takes_color(ctx: &mut Ctx, paint: Color) {}
+        };
+        let custom_tokens = match step("given", custom_attr, custom_body) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("custom-param step must expand: {e}"),
+        };
+        let custom_expanded = custom_tokens.to_string();
+        assert!(
+            custom_expanded.contains("doesn't implement a custom parameter"),
+            "custom param must emit the NAME static assert: {custom_expanded}"
+        );
+    }
+
+    #[test]
     fn valid_word_step_expands_with_provider() {
         let attr = quote::quote! { "a {word} step" };
         let body = quote::quote! {
