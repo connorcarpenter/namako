@@ -1582,6 +1582,37 @@ mod tests {
     }
 
     #[test]
+    fn metadata_counts_capture_arity() {
+        let one_attr = quote::quote! { "a {word} step" };
+        let one_body = quote::quote! {
+            fn takes_word(ctx: &mut Ctx, name: String) {}
+        };
+        let one_tokens = match step("given", one_attr, one_body) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("capture step must expand: {e}"),
+        };
+        let one_expanded = one_tokens.to_string();
+        assert!(
+            one_expanded.contains("captures_arity : 1"),
+            "one capture must emit arity 1: {one_expanded}"
+        );
+
+        let none_attr = quote::quote! { "a plain step" };
+        let none_body = quote::quote! {
+            fn takes_none(ctx: &mut Ctx) {}
+        };
+        let none_tokens = match step("given", none_attr, none_body) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("captureless step must expand: {e}"),
+        };
+        let none_expanded = none_tokens.to_string();
+        assert!(
+            none_expanded.contains("captures_arity : 0"),
+            "no captures must emit arity 0: {none_expanded}"
+        );
+    }
+
+    #[test]
     fn return_type_selects_unwrapping() {
         let fallible_attr = quote::quote! { "a step" };
         let fallible_body = quote::quote! {
