@@ -1685,6 +1685,23 @@ mod tests {
     }
 
     #[test]
+    fn metadata_arity_excludes_docstring() {
+        let attr = quote::quote! { "a {word} step" };
+        let body = quote::quote! {
+            fn mixed(ctx: &mut Ctx, name: String, doc: Option<String>) {}
+        };
+        let tokens = match step("given", attr, body) {
+            Ok(tokens) => tokens,
+            Err(e) => panic!("mixed step must expand: {e}"),
+        };
+        let expanded = tokens.to_string();
+        assert!(
+            expanded.contains("captures_arity : 1"),
+            "docstring must not inflate arity: {expanded}"
+        );
+    }
+
+    #[test]
     fn metadata_counts_capture_arity() {
         let one_attr = quote::quote! { "a {word} step" };
         let one_body = quote::quote! {
