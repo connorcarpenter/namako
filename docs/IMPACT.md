@@ -6,6 +6,11 @@ The canonical selector and runner is `clerc impact`, using
 content key and its result. A missing, changed or unreadable result remains
 UNKNOWN.
 
+Each package's check edges start at its declared owned path root, such as
+`engine/`. Clerc derives the typed package fan-out from those roots. A source
+change therefore selects both the package's tests and its reverse dependencies;
+the three static floors alone are not sufficient qualification for Rust changes.
+
 The policy declares 20 checks: 3 R0, 3 R1, 10 R2, 2 R3 and 2 off-path benchmark
 targets. Cargo metadata exposes 18 test-bearing targets. Four are explicitly
 unchecked because they contain no runtime tests: the `minimal_ctx` compile

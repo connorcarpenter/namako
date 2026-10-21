@@ -3,6 +3,8 @@
 # actual Git subprocess/remote-timeout and tracing timer contracts.
 # Optional NPAP, libtest and tracing code is explicit. Zero-test fixtures
 # remain compiled by strict Clippy and supply no independent test coverage.
+# Edges begin at the declared owned path roots. Clerc synthesizes pkg:<name>
+# fan-out from those roots, including when a dependency change reaches a package.
 [suite]
 id = "namako"
 checks = ["bench:namako-benches:namako", "bench:namako-benches:parsing", "host:namako_cli:update_git", "lint:clippy", "lint:clippy:engine_features", "lint:fmt", "test:namako_cli:namako", "test:namako_codegen:example", "test:namako_codegen:namako_codegen", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:namako_engine", "test:namako_engine:output", "test:namako_engine:result", "test:namako_engine:tracing"]
@@ -34,43 +36,43 @@ paths = ["engine/"]
 depends_on = ["namako_codegen"]
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:cli"
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:docstring"
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:fail_fast"
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:filter"
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:from_str_and_parameter"
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:libtest"
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:namako_engine"
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:output"
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:result"
 
 [[edge]]
-from = "namako_engine"
+from = "engine/"
 to = "test:namako_engine:tracing"
 
 [[package]]
@@ -79,15 +81,15 @@ paths = ["codegen/"]
 depends_on = ["namako_engine"]
 
 [[edge]]
-from = "namako_codegen"
+from = "codegen/"
 to = "test:namako_codegen:example"
 
 [[edge]]
-from = "namako_codegen"
+from = "codegen/"
 to = "test:namako_codegen:namako_codegen"
 
 [[edge]]
-from = "namako_codegen"
+from = "codegen/"
 to = "test:namako_codegen:two_worlds"
 
 [[package]]
@@ -96,11 +98,11 @@ paths = ["cli/"]
 depends_on = ["namako_engine"]
 
 [[edge]]
-from = "namako_cli"
+from = "cli/"
 to = "host:namako_cli:update_git"
 
 [[edge]]
-from = "namako_cli"
+from = "cli/"
 to = "test:namako_cli:namako"
 
 [[package]]
@@ -109,11 +111,11 @@ paths = ["benches/"]
 depends_on = ["namako_engine"]
 
 [[edge]]
-from = "namako-benches"
+from = "benches/"
 to = "bench:namako-benches:namako"
 
 [[edge]]
-from = "namako-benches"
+from = "benches/"
 to = "bench:namako-benches:parsing"
 
 [[package]]
