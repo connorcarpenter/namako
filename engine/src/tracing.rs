@@ -14,8 +14,9 @@ use tracing_subscriber::{
     field::RecordFields,
     filter::LevelFilter,
     fmt::{
-        FmtContext, FormatEvent, FormatFields, MakeWriter,
+        FmtContext, FormatEvent, FormatFields, Layer as FmtLayer, MakeWriter,
         format::{self, Format},
+        layer as fmt_layer,
     },
     layer::{self, Layer, Layered, SubscriberExt as _},
     registry::LookupSpan,
@@ -96,7 +97,7 @@ where
         //       https://github.com/rust-lang/rust/issues/63063
         Conf: FnOnce(
             Layered<
-                tracing_subscriber::fmt::Layer<
+                FmtLayer<
                     Sub,
                     SkipScenarioIdSpan<Fields>,
                     AppendScenarioMsg<Event>,
@@ -111,7 +112,7 @@ where
         let (span_close_sender, span_close_receiver) = mpsc::unbounded();
 
         let layer = RecordScenarioId::new(span_close_sender).and_then(
-            tracing_subscriber::fmt::layer()
+            fmt_layer()
                 .fmt_fields(SkipScenarioIdSpan(fmt_fields))
                 .event_format(AppendScenarioMsg(event_format))
                 .with_writer(CollectorWriter::new(logs_sender)),
@@ -241,34 +242,30 @@ impl Collector {
     pub(crate) fn emitted_logs<W>(&mut self) -> Option<Vec<event::Namako<W>>> {
         self.notify_about_closing_spans();
 
-        self.logs_receiver
-            .try_next()
-            .ok()
-            .flatten()
-            .map(|(id, msg)| {
-                id.and_then(|k| self.scenarios.get(&k))
-                    .map_or_else(
-                        || Either::Left(self.scenarios.values()),
-                        |p| Either::Right(iter::once(p)),
+        self.logs_receiver.try_recv().ok().map(|(id, msg)| {
+            id.and_then(|k| self.scenarios.get(&k))
+                .map_or_else(
+                    || Either::Left(self.scenarios.values()),
+                    |p| Either::Right(iter::once(p)),
+                )
+                .map(|(f, r, s)| {
+                    event::Namako::scenario(
+                        f.clone(),
+                        r.clone(),
+                        s.clone(),
+                        event::Scenario::Log(msg.clone()),
                     )
-                    .map(|(f, r, s)| {
-                        event::Namako::scenario(
-                            f.clone(),
-                            r.clone(),
-                            s.clone(),
-                            event::Scenario::Log(msg.clone()),
-                        )
-                    })
-                    .collect()
-            })
+                })
+                .collect()
+        })
     }
 
     /// Notifies all its subscribers about closing [`Span`]s via [`Callback`]s.
     fn notify_about_closing_spans(&mut self) {
-        if let Some(id) = self.span_close_receiver.try_next().ok().flatten() {
+        if let Ok(id) = self.span_close_receiver.try_recv() {
             self.span_events.entry(id).or_default().1 = true;
         }
-        while let Some((id, callback)) = self.wait_span_event_receiver.try_next().ok().flatten() {
+        while let Ok((id, callback)) = self.wait_span_event_receiver.try_recv() {
             self.span_events
                 .entry(id)
                 .or_default()
@@ -469,7 +466,7 @@ where
                 .from_root()
                 .find_map(|span| span.extensions().get::<ScenarioId>().copied())
         }) {
-            writer.write_fmt(format_args!("{}{scenario_id}", suffix::BEFORE_SCENARIO_ID,))?;
+            writer.write_fmt(format_args!("{}{scenario_id}", suffix::BEFORE_SCENARIO_ID))?;
         } else {
             writer.write_fmt(format_args!("{}", suffix::NO_SCENARIO_ID))?;
         }

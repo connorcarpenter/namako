@@ -383,10 +383,6 @@ async fn insert_features<W, S, F>(
 /// [`Scenario`]: gherkin::Scenario
 // TODO: Needs refactoring.
 #[expect(clippy::too_many_lines, reason = "needs refactoring")]
-#[cfg_attr(
-    feature = "tracing",
-    expect(clippy::too_many_arguments, reason = "needs refactoring")
-)]
 async fn execute<W>(
     features: Features,
     max_concurrent_scenarios: Option<usize>,
@@ -584,10 +580,6 @@ impl<W: World> Executor<W> {
     /// [`Scenario`]: gherkin::Scenario
     // TODO: Needs refactoring.
     #[expect(clippy::too_many_lines, reason = "needs refactoring")]
-    #[cfg_attr(
-        feature = "tracing",
-        expect(clippy::too_many_arguments, reason = "needs refactoring")
-    )]
     async fn run_scenario(
         &self,
         id: ScenarioId,
