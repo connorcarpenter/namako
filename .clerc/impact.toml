@@ -1,0 +1,244 @@
+# Namako's owned Cargo target and feature routes. Clerc selects and credits;
+# Fabro executes. R0-R2 are the ordinary implementer climb; R3 retains the
+# actual Git subprocess/remote-timeout and tracing timer contracts.
+# Optional NPAP, libtest and tracing code is explicit. Zero-test fixtures
+# remain compiled by strict Clippy and supply no independent test coverage.
+[suite]
+id = "namako"
+checks = ["bench:namako-benches:namako", "bench:namako-benches:parsing", "host:namako_cli:update_git", "lint:clippy", "lint:clippy:engine_features", "lint:fmt", "test:namako_cli:namako", "test:namako_codegen:example", "test:namako_codegen:namako_codegen", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:namako_engine", "test:namako_engine:output", "test:namako_engine:result", "test:namako_engine:tracing"]
+always_run = ["lint:fmt", "lint:clippy", "lint:clippy:engine_features"]
+floor = ["lint:fmt", "lint:clippy", "lint:clippy:engine_features"]
+
+[cargo_targets]
+prefix = "test"
+
+[[cargo_targets.unchecked]]
+check = "test:namako_engine:minimal_ctx"
+reason = "Macro-expansion compile fixture with no runtime tests; strict all-target Clippy compiles it. It supplies no independent test coverage."
+
+[[cargo_targets.unchecked]]
+check = "test:namako_engine:test_utils"
+reason = "Shared World/context helper with no tests; importing integration targets compile and exercise it. No independent coverage is claimed."
+
+[[cargo_targets.unchecked]]
+check = "test:namako-benches:namako_benches"
+reason = "Benchmark input constants have no tests; strict all-target Clippy compiles them and the benchmarks remain declared off-path."
+
+[[cargo_targets.unchecked]]
+check = "test:skill-tool:skill-tool"
+reason = "The skill management binary contains no unit tests; strict all-target Clippy compiles it. No runtime coverage is claimed."
+
+[[package]]
+name = "namako_engine"
+paths = ["engine/"]
+depends_on = ["namako_codegen"]
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:cli"
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:docstring"
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:fail_fast"
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:filter"
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:from_str_and_parameter"
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:libtest"
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:namako_engine"
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:output"
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:result"
+
+[[edge]]
+from = "namako_engine"
+to = "test:namako_engine:tracing"
+
+[[package]]
+name = "namako_codegen"
+paths = ["codegen/"]
+depends_on = ["namako_engine"]
+
+[[edge]]
+from = "namako_codegen"
+to = "test:namako_codegen:example"
+
+[[edge]]
+from = "namako_codegen"
+to = "test:namako_codegen:namako_codegen"
+
+[[edge]]
+from = "namako_codegen"
+to = "test:namako_codegen:two_worlds"
+
+[[package]]
+name = "namako_cli"
+paths = ["cli/"]
+depends_on = ["namako_engine"]
+
+[[edge]]
+from = "namako_cli"
+to = "host:namako_cli:update_git"
+
+[[edge]]
+from = "namako_cli"
+to = "test:namako_cli:namako"
+
+[[package]]
+name = "namako-benches"
+paths = ["benches/"]
+depends_on = ["namako_engine"]
+
+[[edge]]
+from = "namako-benches"
+to = "bench:namako-benches:namako"
+
+[[edge]]
+from = "namako-benches"
+to = "bench:namako-benches:parsing"
+
+[[package]]
+name = "skill-tool"
+paths = ["skill-tool/"]
+depends_on = []
+
+[[rung]]
+level = 0
+checks = ["lint:clippy", "lint:clippy:engine_features", "lint:fmt"]
+
+[[rung]]
+level = 1
+checks = ["test:namako_cli:namako", "test:namako_codegen:namako_codegen", "test:namako_engine:namako_engine"]
+
+[[rung]]
+level = 2
+checks = ["test:namako_codegen:example", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:output", "test:namako_engine:result"]
+
+[[rung]]
+level = 3
+checks = ["host:namako_cli:update_git", "test:namako_engine:tracing"]
+
+[[leg]]
+checks = ["lint:fmt"]
+argv = ["clerc", "plan-admin", "verify-fmt-fileset", "--root", "."]
+
+[[leg]]
+checks = ["lint:clippy"]
+argv = ["cargo", "clippy", "--locked", "--workspace", "--all-targets", "--keep-going", "--", "-D", "warnings"]
+
+[[leg]]
+checks = ["lint:clippy:engine_features"]
+argv = ["cargo", "clippy", "--locked", "-p", "namako_engine", "--all-targets", "--all-features", "--keep-going", "--", "-D", "warnings"]
+
+[[leg]]
+checks = ["test:namako_engine:namako_engine"]
+argv = ["cargo", "test", "--locked", "-p", "namako_engine", "--lib", "--features", "npap", "--no-fail-fast", "--", "--test-threads=2"]
+
+[[leg]]
+checks = ["test:namako_codegen:namako_codegen"]
+argv = ["cargo", "test", "--locked", "-p", "namako_codegen", "--lib", "--no-fail-fast", "--", "--test-threads=2"]
+
+[[leg]]
+checks = ["test:namako_cli:namako"]
+argv = ["cargo", "test", "--locked", "-p", "namako_cli", "--bin", "namako", "--no-fail-fast", "--", "--test-threads=2", "--skip", "update::tests::same_commit_is_current", "--skip", "update::tests::local_commit_ahead_of_remote_is_current", "--skip", "update::tests::remote_ahead_is_stale", "--skip", "update::tests::unstamped_build_is_unknown", "--skip", "update::tests::ls_remote_without_origin_fails_fast", "--skip", "update::tests::built_commit_gone_locally_is_unknown", "--skip", "update::tests::remote_commit_absent_locally_is_unknown", "--skip", "update::tests::hanging_remote_is_abandoned_by_timeout", "--skip", "update::tests::unreachable_remote_is_unknown"]
+
+[[leg]]
+checks = ["test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:output", "test:namako_engine:result"]
+argv = ["cargo", "test", "--locked", "-p", "namako_engine", "--test", "cli", "--test", "docstring", "--test", "fail_fast", "--test", "filter", "--test", "from_str_and_parameter", "--test", "libtest", "--test", "output", "--test", "result", "--features", "libtest,npap", "--no-fail-fast", "--", "--test-threads=2"]
+
+[[leg]]
+checks = ["test:namako_codegen:example", "test:namako_codegen:two_worlds"]
+argv = ["cargo", "test", "--locked", "-p", "namako_codegen", "--test", "example", "--test", "two_worlds", "--no-fail-fast"]
+
+[[leg]]
+checks = ["test:namako_engine:tracing"]
+argv = ["cargo", "test", "--locked", "-p", "namako_engine", "--test", "tracing", "--features", "tracing", "--no-fail-fast"]
+
+[[leg]]
+checks = ["host:namako_cli:update_git"]
+argv = ["cargo", "test", "--locked", "-p", "namako_cli", "--bin", "namako", "update::tests::", "--no-fail-fast", "--", "--test-threads=2", "--skip", "update::tests::dir_without_git_is_unknown", "--skip", "update::tests::warn_decision_fires_only_on_stale", "--skip", "update::tests::target_dir_binary_has_no_install_root", "--skip", "update::tests::installed_binary_derives_root"]
+
+[[off_path]]
+class = "benchmark"
+owner = "nash"
+checks = ["bench:namako-benches:namako", "bench:namako-benches:parsing"]
+
+[[root]]
+path = ".clerc/"
+mode = "fallback"
+reason = "Policy changes re-plan every declared check."
+
+[[root]]
+path = ".github/"
+mode = "scan-only"
+reason = "Editor assistant instructions only; no workflow or build input is present."
+
+[[root]]
+path = ".gitignore"
+mode = "fallback"
+reason = "Ignore rules affect tracked-file and working-tree observations."
+
+[[root]]
+path = "Cargo.toml"
+mode = "fallback"
+reason = "Workspace membership and resolver affect every Cargo command."
+
+[[root]]
+path = "Cargo.lock"
+mode = "fallback"
+reason = "Dependency resolution affects every Cargo command."
+
+[[root]]
+path = "README.md"
+mode = "fallback"
+reason = "Conservatively requalify for the root package/usage contract."
+
+[[root]]
+path = "_AGENTS/"
+mode = "scan-only"
+reason = "Project workflow prose; no build or test consumes it."
+
+[[root]]
+path = "_WORKSPACE/"
+mode = "scan-only"
+reason = "Historical planning and retained prose; no build or test consumes it."
+
+[[root]]
+path = "clippy.toml"
+mode = "fallback"
+reason = "Clippy lint configuration is an R0 input."
+
+[[root]]
+path = "rust-analyzer.toml"
+mode = "scan-only"
+reason = "Editor configuration; no build or test consumes it."
+
+[[root]]
+path = "tests/"
+mode = "fallback"
+reason = "Conservatively cover retained output fixtures alongside the engine-owned copies."
+
+[[root]]
+path = "docs/"
+mode = "scan-only"
+reason = "Impact adoption documentation; no build or test consumes it."
+
