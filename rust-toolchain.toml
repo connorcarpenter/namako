@@ -1,0 +1,9 @@
+# Pinned toolchain for the namako workspace (Usher 112130 ruling 1).
+#
+# Why: namako had no pin, so Fabro could not match a worker toolchain and
+# refused relay ("toolchain mismatch"). Channel read from the execution
+# input of naia's green clippy job f74d8828ee57c (RUSTC=.../1.98.0/...),
+# the fleet stable shared by naia's own pin.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
