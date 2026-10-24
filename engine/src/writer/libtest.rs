@@ -622,7 +622,7 @@ impl<W: Debug + World, Out: io::Write> Libtest<W, Out> {
     ///
     /// [`Step`]: gherkin::Step
     fn step_started_at(&mut self, meta: event::Metadata, cli: &Cli) {
-        self.step_started_at = Some(meta.at).filter(|_| cli.report_time.is_some());
+        self.step_started_at = cli.report_time.is_some().then_some(meta.at);
     }
 
     /// Retrieves [`Duration`] since the last [`Libtest::step_started_at()`]
