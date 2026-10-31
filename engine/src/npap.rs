@@ -684,20 +684,14 @@ impl PlannedStep {
         docstring: Option<String>,
         datatable: Option<Vec<Vec<String>>>,
     ) -> Self {
-        let payload = ExecutionPayload {
-            effective_kind: &effective_kind,
-            step_text: &step_text,
-            binding_id: &binding_id,
-            captures: &captures,
-            docstring: docstring.as_deref(),
-            datatable: datatable.as_ref(),
-        };
-
-        let json = match canonical_json_encode(&payload) {
-            Ok(json) => json,
-            Err(e) => panic!("payload should serialize: {e:?}"),
-        };
-        let payload_hash = blake3_256_lowerhex(json.as_bytes());
+        let payload_hash = execution_payload_hash(
+            &effective_kind,
+            &step_text,
+            &binding_id,
+            &captures,
+            docstring.as_deref(),
+            datatable.as_deref(),
+        );
 
         Self {
             effective_kind,
@@ -726,7 +720,41 @@ struct ExecutionPayload<'a> {
     /// `DocString` (explicit null if absent).
     docstring: Option<&'a str>,
     /// `DataTable` (explicit null if absent).
-    datatable: Option<&'a Vec<Vec<String>>>,
+    datatable: Option<&'a [Vec<String>]>,
+}
+
+/// Computes the execution payload hash per `GOLD_PLAN` §6.5.
+///
+/// The hash covers the exact values a step carries. The plan and the dispatch boundary
+/// ([`crate::evidence`]) both derive step identity through this one function.
+///
+/// # Panics
+///
+/// Panics if the payload cannot be serialized to canonical JSON.
+/// `ExecutionPayload` is a closed derived-`Serialize` type with no
+/// failure mode, so this indicates a broken internal invariant.
+#[must_use]
+pub fn execution_payload_hash(
+    effective_kind: &str,
+    step_text: &str,
+    binding_id: &str,
+    captures: &[String],
+    docstring: Option<&str>,
+    datatable: Option<&[Vec<String>]>,
+) -> String {
+    let payload = ExecutionPayload {
+        effective_kind,
+        step_text,
+        binding_id,
+        captures,
+        docstring,
+        datatable,
+    };
+    let json = match canonical_json_encode(&payload) {
+        Ok(json) => json,
+        Err(e) => panic!("payload should serialize: {e:?}"),
+    };
+    blake3_256_lowerhex(json.as_bytes())
 }
 
 /// Header section for run report per `GOLD_PLAN` §6.4.2.

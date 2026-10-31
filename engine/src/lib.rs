@@ -165,6 +165,8 @@ pub mod codegen;
 #[cfg(feature = "npap")]
 pub mod engine;
 #[cfg(feature = "npap")]
+pub mod evidence;
+#[cfg(feature = "npap")]
 pub mod id_tags;
 #[cfg(feature = "npap")]
 pub mod npap;

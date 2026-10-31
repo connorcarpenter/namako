@@ -20,8 +20,8 @@ use tempfile::TempDir;
 
 use namako_engine::engine::Resolver;
 use namako_engine::npap::{
-    Certification, CertificationIdentity, CertificationMetadata, RunReport, ScenarioStatus,
-    SemanticStepRegistry, HASH_CONTRACT_VERSION, NPAP_VERSION,
+    Certification, CertificationIdentity, CertificationMetadata, ResolvedPlan, RunReport,
+    ScenarioStatus, SemanticStepRegistry, HASH_CONTRACT_VERSION, NPAP_VERSION,
 };
 
 use crate::review::{self, ReviewArgs};
@@ -307,7 +307,9 @@ fn run_single(args: &GateArgs, artifact_root: Option<&PathBuf>) -> Result<()> {
                 } else {
                     eprintln!("  verify: FAIL - {}", e);
                     if is_drift {
-                        eprintln!("\nHint: Use --auto-cert to automatically update certification on drift.");
+                        eprintln!(
+                            "\nHint: Use --auto-cert to automatically update certification on drift."
+                        );
                     }
                 }
                 bail!("Gate failed at verify phase");
@@ -575,23 +577,10 @@ fn run_verify(args: &GateArgs, run_report_path: &PathBuf) -> Result<()> {
         serde_json::from_str(&cert_json).context("Failed to parse certification JSON")?;
 
     // Recompute identity from current sources
-    let recomputed = recompute_identity(args)?;
+    let (recomputed, plan, registry) = recompute_identity(args)?;
 
-    // Compare hash_contract_version
-    if run_report.header.hash_contract_version != HASH_CONTRACT_VERSION {
-        bail!("hash_contract_version mismatch");
-    }
-
-    // Compare against run report (freshness check)
-    if run_report.header.feature_fingerprint_hash != recomputed.feature_fingerprint_hash {
-        bail!("Stale artifact: feature_fingerprint_hash mismatch");
-    }
-    if run_report.header.step_registry_hash != recomputed.step_registry_hash {
-        bail!("Stale artifact: step_registry_hash mismatch");
-    }
-    if run_report.header.resolved_plan_hash != recomputed.resolved_plan_hash {
-        bail!("Stale artifact: resolved_plan_hash mismatch");
-    }
+    // The report must be complete, faithful, passing evidence for the current plan.
+    crate::evidence::require_complete("gate verify", &plan, &registry, &run_report)?;
 
     // Compare against certification baseline
     if certification.identity.feature_fingerprint_hash != recomputed.feature_fingerprint_hash {
@@ -621,18 +610,10 @@ fn auto_update_certification(
         serde_json::from_str(&run_report_json).context("Failed to parse run report JSON")?;
 
     // Recompute identity from current sources
-    let recomputed = recompute_identity(args)?;
+    let (recomputed, plan, registry) = recompute_identity(args)?;
 
-    // Verify run_report matches current sources (freshness check)
-    if run_report.header.feature_fingerprint_hash != recomputed.feature_fingerprint_hash {
-        bail!("Cannot auto-cert: run report is stale (feature_fingerprint mismatch)");
-    }
-    if run_report.header.step_registry_hash != recomputed.step_registry_hash {
-        bail!("Cannot auto-cert: run report is stale (step_registry mismatch)");
-    }
-    if run_report.header.resolved_plan_hash != recomputed.resolved_plan_hash {
-        bail!("Cannot auto-cert: run report is stale (resolved_plan mismatch)");
-    }
+    // Refuse unless the report is complete, faithful, passing evidence.
+    crate::evidence::require_complete("Cannot auto-cert", &plan, &registry, &run_report)?;
 
     // Create new certification
     let timestamp = chrono::Utc::now().to_rfc3339();
@@ -942,7 +923,9 @@ fn fetch_adapter_manifest(adapter_cmd: &str) -> Result<SemanticStepRegistry> {
     serde_json::from_str(&stdout).context("Failed to parse adapter manifest JSON")
 }
 
-fn recompute_identity(args: &GateArgs) -> Result<CertificationIdentity> {
+fn recompute_identity(
+    args: &GateArgs,
+) -> Result<(CertificationIdentity, ResolvedPlan, SemanticStepRegistry)> {
     let features_dir = args.specs_dir.join("features");
     let feature_paths = discover_features(&features_dir)?;
     let features = read_features(&args.specs_dir, &feature_paths)?;
@@ -963,12 +946,13 @@ fn recompute_identity(args: &GateArgs) -> Result<CertificationIdentity> {
 
     let plan = result.plan.expect("No errors but no plan");
 
-    Ok(CertificationIdentity {
+    let identity = CertificationIdentity {
         hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
         feature_fingerprint_hash: plan.header.feature_fingerprint_hash.clone(),
         step_registry_hash: plan.header.step_registry_hash.clone(),
         resolved_plan_hash: plan.header.resolved_plan_hash.clone(),
-    })
+    };
+    Ok((identity, plan, registry))
 }
 
 // ============================================================================

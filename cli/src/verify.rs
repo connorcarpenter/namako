@@ -15,7 +15,7 @@ use walkdir::WalkDir;
 
 use namako_engine::engine::Resolver;
 use namako_engine::npap::{
-    Certification, CertificationIdentity, RunReport, ScenarioStatus, SemanticStepRegistry,
+    Certification, CertificationIdentity, ResolvedPlan, RunReport, SemanticStepRegistry,
     HASH_CONTRACT_VERSION,
 };
 
@@ -58,23 +58,6 @@ pub fn run(args: VerifyArgs) -> Result<()> {
     let run_report: RunReport =
         serde_json::from_str(&run_report_json).context("Failed to parse run report JSON")?;
 
-    // Step 1.5: Check that all scenarios passed in the run report
-    for scenario in &run_report.scenarios {
-        if scenario.status != ScenarioStatus::Passed {
-            let mut failure_msg = format!("FAILED: {}", scenario.scenario_key);
-            for (i, step) in scenario.steps.iter().enumerate() {
-                if step.status != namako_engine::npap::StepStatus::Passed {
-                    if let Some(ref msg) = step.error_message {
-                        failure_msg.push_str(&format!("\n    Step {}: {}", i + 1, msg));
-                    } else {
-                        failure_msg.push_str(&format!("\n    Step {}: FAILED (no message)", i + 1));
-                    }
-                }
-            }
-            scenario_failures.push(failure_msg);
-        }
-    }
-
     // Step 2: Read the certification baseline
     let cert_json = std::fs::read_to_string(&args.certification).with_context(|| {
         format!(
@@ -86,7 +69,7 @@ pub fn run(args: VerifyArgs) -> Result<()> {
         serde_json::from_str(&cert_json).context("Failed to parse certification JSON")?;
 
     // Step 3: Recompute from current sources
-    let recomputed = recompute_identity(&args)?;
+    let (recomputed, plan, registry) = recompute_identity(&args)?;
     if args.verbose {
         eprintln!("Recomputed identity from current sources");
         eprintln!(
@@ -97,43 +80,23 @@ pub fn run(args: VerifyArgs) -> Result<()> {
         eprintln!("  resolved_plan_hash: {}", recomputed.resolved_plan_hash);
     }
 
-    // Step 4: Compare run_report headers against recomputed identity
-    // Check hash_contract_version
-    if run_report.header.hash_contract_version != HASH_CONTRACT_VERSION {
-        identity_mismatches.push(format!(
-            "hash_contract_version mismatch: run_report has '{}', expected '{}'",
-            run_report.header.hash_contract_version, HASH_CONTRACT_VERSION
-        ));
-    }
-
-    // Check feature_fingerprint_hash
-    if run_report.header.feature_fingerprint_hash != recomputed.feature_fingerprint_hash {
-        identity_mismatches.push(format!(
-            "STALE OR DRIFTED ARTIFACT: feature_fingerprint_hash mismatch\n\
-             Run report: {}\n\
-             Current:    {}",
-            run_report.header.feature_fingerprint_hash, recomputed.feature_fingerprint_hash
-        ));
-    }
-
-    // Check step_registry_hash
-    if run_report.header.step_registry_hash != recomputed.step_registry_hash {
-        identity_mismatches.push(format!(
-            "STALE OR DRIFTED ARTIFACT: step_registry_hash mismatch\n\
-             Run report: {}\n\
-             Current:    {}",
-            run_report.header.step_registry_hash, recomputed.step_registry_hash
-        ));
-    }
-
-    // Check resolved_plan_hash
-    if run_report.header.resolved_plan_hash != recomputed.resolved_plan_hash {
-        identity_mismatches.push(format!(
-            "STALE OR DRIFTED ARTIFACT: resolved_plan_hash mismatch\n\
-             Run report: {}\n\
-             Current:    {}",
-            run_report.header.resolved_plan_hash, recomputed.resolved_plan_hash
-        ));
+    // Step 4: The report must be complete, faithful, passing evidence for the
+    // recomputed plan (shared validator; covers headers, report hash,
+    // scenario coverage, step identity and status consistency).
+    if let Err(violations) = namako_engine::evidence::validate_run(
+        &plan,
+        &registry,
+        &run_report,
+        namako_engine::evidence::Scope::Full,
+    ) {
+        for v in violations {
+            match v {
+                namako_engine::evidence::Violation::NotPassed { .. } => {
+                    scenario_failures.push(v.to_string())
+                }
+                _ => identity_mismatches.push(v.to_string()),
+            }
+        }
     }
 
     // Step 5: Compare against certification baseline
@@ -198,7 +161,9 @@ pub fn run(args: VerifyArgs) -> Result<()> {
 }
 
 /// Recompute certification identity from current sources.
-fn recompute_identity(args: &VerifyArgs) -> Result<CertificationIdentity> {
+fn recompute_identity(
+    args: &VerifyArgs,
+) -> Result<(CertificationIdentity, ResolvedPlan, SemanticStepRegistry)> {
     // Step 1: Discover and read feature files
     let features_dir = args.specs_dir.join("features");
     if !features_dir.exists() {
@@ -228,12 +193,13 @@ fn recompute_identity(args: &VerifyArgs) -> Result<CertificationIdentity> {
     let plan = result.plan.expect("No errors but no plan");
 
     // Build identity from recomputed values
-    Ok(CertificationIdentity {
+    let identity = CertificationIdentity {
         hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
         feature_fingerprint_hash: plan.header.feature_fingerprint_hash.clone(),
         step_registry_hash: plan.header.step_registry_hash.clone(),
         resolved_plan_hash: plan.header.resolved_plan_hash.clone(),
-    })
+    };
+    Ok((identity, plan, registry))
 }
 
 /// Discover all `.feature` files under the given directory.

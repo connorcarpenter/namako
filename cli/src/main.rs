@@ -15,6 +15,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod evidence;
 mod explain;
 mod gate;
 mod lint;

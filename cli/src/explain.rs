@@ -141,9 +141,6 @@ pub fn run(args: ExplainArgs) -> Result<()> {
 }
 
 fn compute_explain(args: &ExplainArgs) -> Result<ExplainOutput> {
-    // Parse scenario_key to get feature path and line
-    let (feature_rel_path, target_line) = parse_scenario_key(&args.scenario_key)?;
-
     // Discover and read feature files
     let features_dir = args.specs_dir.join("features");
     if !features_dir.exists() {
@@ -167,11 +164,9 @@ fn compute_explain(args: &ExplainArgs) -> Result<ExplainOutput> {
         .collect();
     let result = engine.resolve(feature_refs.into_iter());
 
-    if result.plan.is_none() {
+    let Some(plan) = result.plan else {
         bail!("Resolution failed: {:?}", result.errors);
-    }
-
-    let plan = result.plan.unwrap();
+    };
 
     // Find the matching scenario
     let resolved_scenario = plan
@@ -189,6 +184,17 @@ fn compute_explain(args: &ExplainArgs) -> Result<ExplainOutput> {
                     .join(", ")
             )
         })?;
+
+    // The resolver's own source map locates the scenario; keys are never
+    // parsed back into paths or lines.
+    let source = result
+        .scenario_sources
+        .get(&args.scenario_key)
+        .ok_or_else(|| {
+            anyhow::anyhow!("No source location for scenario '{}'", args.scenario_key)
+        })?;
+    let feature_rel_path = source.feature_path.clone();
+    let target_line = source.line;
 
     // Find the feature file content
     let (_, feature_source) = features
@@ -231,24 +237,6 @@ fn compute_explain(args: &ExplainArgs) -> Result<ExplainOutput> {
             ],
         },
     })
-}
-
-fn parse_scenario_key(key: &str) -> Result<(String, u32)> {
-    // Format: "features/path.feature:L<line>"
-    let parts: Vec<&str> = key.rsplitn(2, ":L").collect();
-    if parts.len() != 2 {
-        bail!(
-            "Invalid scenario key format: '{}'. Expected 'path:L<line>'",
-            key
-        );
-    }
-
-    let line: u32 = parts[0]
-        .parse()
-        .with_context(|| format!("Invalid line number in scenario key: {}", parts[0]))?;
-    let path = parts[1].to_string();
-
-    Ok((path, line))
 }
 
 fn extract_scenario_info(
@@ -571,30 +559,4 @@ fn fetch_adapter_manifest(adapter_cmd: &str) -> Result<SemanticStepRegistry> {
     let stdout = String::from_utf8(output.stdout).context("Adapter output is not valid UTF-8")?;
 
     serde_json::from_str(&stdout).context("Failed to parse adapter manifest JSON")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_scenario_key() {
-        let (path, line) = parse_scenario_key("features/smoke.feature:L15").unwrap();
-        assert_eq!(path, "features/smoke.feature");
-        assert_eq!(line, 15);
-    }
-
-    #[test]
-    fn test_parse_scenario_key_with_subdirs() {
-        let (path, line) = parse_scenario_key("features/sub/dir/test.feature:L100").unwrap();
-        assert_eq!(path, "features/sub/dir/test.feature");
-        assert_eq!(line, 100);
-    }
-
-    #[test]
-    fn test_parse_scenario_key_invalid() {
-        assert!(parse_scenario_key("invalid").is_err());
-        assert!(parse_scenario_key("features/test.feature").is_err());
-        assert!(parse_scenario_key("features/test.feature:abc").is_err());
-    }
 }

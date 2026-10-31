@@ -15,7 +15,7 @@ use walkdir::WalkDir;
 
 use namako_engine::engine::Resolver;
 use namako_engine::npap::{
-    Certification, CertificationIdentity, CertificationMetadata, RunReport, ScenarioStatus,
+    Certification, CertificationIdentity, CertificationMetadata, ResolvedPlan, RunReport,
     SemanticStepRegistry, HASH_CONTRACT_VERSION, NPAP_VERSION,
 };
 
@@ -55,64 +55,15 @@ pub fn run(args: UpdateCertArgs) -> Result<()> {
     let run_report: RunReport =
         serde_json::from_str(&run_report_json).context("Failed to parse run report JSON")?;
 
-    // Step 2: Check that all scenarios passed
-    let failed_scenarios: Vec<_> = run_report
-        .scenarios
-        .iter()
-        .filter(|s| s.status != ScenarioStatus::Passed)
-        .map(|s| &s.scenario_key)
-        .collect();
-
-    if !failed_scenarios.is_empty() {
-        bail!(
-            "REFUSED: Cannot update certification with failing scenarios:\n  {}",
-            failed_scenarios
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join("\n  ")
-        );
-    }
-
     // Step 3: Recompute identity from current sources (verify it matches run_report)
-    let recomputed = recompute_identity(&args)?;
+    let (recomputed, plan, registry) = recompute_identity(&args)?;
     if args.verbose {
         eprintln!("Recomputed identity from current sources");
     }
 
-    // Step 4: Verify run_report matches current sources
-    if run_report.header.feature_fingerprint_hash != recomputed.feature_fingerprint_hash {
-        bail!(
-            "REFUSED: Run report feature_fingerprint_hash does not match current sources.\n\
-             Run report: {}\n\
-             Current:    {}\n\
-             Please re-run `namako lint` and `<adapter> run` with current sources.",
-            run_report.header.feature_fingerprint_hash,
-            recomputed.feature_fingerprint_hash
-        );
-    }
-
-    if run_report.header.step_registry_hash != recomputed.step_registry_hash {
-        bail!(
-            "REFUSED: Run report step_registry_hash does not match current adapter.\n\
-             Run report: {}\n\
-             Current:    {}\n\
-             Please re-run `namako lint` and `<adapter> run` with current adapter.",
-            run_report.header.step_registry_hash,
-            recomputed.step_registry_hash
-        );
-    }
-
-    if run_report.header.resolved_plan_hash != recomputed.resolved_plan_hash {
-        bail!(
-            "REFUSED: Run report resolved_plan_hash does not match current resolution.\n\
-             Run report: {}\n\
-             Current:    {}\n\
-             Please re-run `namako lint` and `<adapter> run` with current sources.",
-            run_report.header.resolved_plan_hash,
-            recomputed.resolved_plan_hash
-        );
-    }
+    // Step 4: REFUSE unless the report is complete, faithful, passing
+    // evidence for the current plan.
+    crate::evidence::require_complete("REFUSED update-cert", &plan, &registry, &run_report)?;
 
     // Step 5: Create certification
     let timestamp = chrono::Utc::now().to_rfc3339();
@@ -141,7 +92,9 @@ pub fn run(args: UpdateCertArgs) -> Result<()> {
 }
 
 /// Recompute certification identity from current sources.
-fn recompute_identity(args: &UpdateCertArgs) -> Result<CertificationIdentity> {
+fn recompute_identity(
+    args: &UpdateCertArgs,
+) -> Result<(CertificationIdentity, ResolvedPlan, SemanticStepRegistry)> {
     let features_dir = args.specs_dir.join("features");
     if !features_dir.exists() {
         bail!("Features directory not found: {}", features_dir.display());
@@ -166,12 +119,13 @@ fn recompute_identity(args: &UpdateCertArgs) -> Result<CertificationIdentity> {
 
     let plan = result.plan.expect("No errors but no plan");
 
-    Ok(CertificationIdentity {
+    let identity = CertificationIdentity {
         hash_contract_version: HASH_CONTRACT_VERSION.to_string(),
-        feature_fingerprint_hash: plan.header.feature_fingerprint_hash,
-        step_registry_hash: plan.header.step_registry_hash,
-        resolved_plan_hash: plan.header.resolved_plan_hash,
-    })
+        feature_fingerprint_hash: plan.header.feature_fingerprint_hash.clone(),
+        step_registry_hash: plan.header.step_registry_hash.clone(),
+        resolved_plan_hash: plan.header.resolved_plan_hash.clone(),
+    };
+    Ok((identity, plan, registry))
 }
 
 fn discover_features(dir: &std::path::Path) -> Result<Vec<PathBuf>> {

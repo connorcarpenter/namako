@@ -10,7 +10,7 @@
 //! - Validates signatures (captures arity, docstring/datatable expectations)
 //! - Generates `resolved_plan.json`
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 
@@ -311,6 +311,18 @@ pub struct ResolutionResult {
     pub orphan_bindings: Vec<OrphanBinding>,
     /// Binding IDs used by @Deferred scenarios (for orphan detection but not in executable plan)
     pub deferred_binding_ids: Vec<String>,
+    /// Source location of each planned scenario, keyed by its stable
+    /// `scenario_key`. Kept outside the plan so spans never enter plan identity.
+    pub scenario_sources: BTreeMap<String, ScenarioSource>,
+}
+
+/// Where a planned scenario is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScenarioSource {
+    /// Repo-relative feature path.
+    pub feature_path: String,
+    /// 1-based line of the `Scenario` keyword.
+    pub line: u32,
 }
 
 /// An orphan binding — a binding in the registry that is not used by any scenario.
@@ -351,6 +363,8 @@ struct ScenarioCtx<'a> {
     seen_scenario_keys: &'a mut HashSet<String>,
     /// Accumulator for resolved scenarios.
     resolved_scenarios: &'a mut Vec<ResolvedScenario>,
+    /// Accumulator for scenario source locations.
+    scenario_sources: &'a mut BTreeMap<String, ScenarioSource>,
     /// Accumulator for `@Deferred` binding IDs (orphan detection).
     deferred_binding_ids: &'a mut Vec<String>,
     /// Accumulator for resolution errors.
@@ -446,8 +460,9 @@ impl Resolver {
         I: Iterator<Item = (&'a str, &'a str)>,
     {
         let mut errors = Vec::new();
-        let mut warnings = Vec::new();
+        let warnings = Vec::new();
         let mut resolved_scenarios = Vec::new();
+        let mut scenario_sources = BTreeMap::new();
         let mut deferred_binding_ids: Vec<String> = Vec::new();
         let mut feature_files: Vec<(&str, &str)> = Vec::new();
 
@@ -462,9 +477,9 @@ impl Resolver {
                         path,
                         &feature,
                         &mut resolved_scenarios,
+                        &mut scenario_sources,
                         &mut deferred_binding_ids,
                         &mut errors,
-                        &mut warnings,
                     );
                 }
                 Err(e) => {
@@ -483,6 +498,7 @@ impl Resolver {
                 warnings,
                 orphan_bindings: Vec::new(),
                 deferred_binding_ids: Vec::new(),
+                scenario_sources: BTreeMap::new(),
             };
         }
 
@@ -506,6 +522,7 @@ impl Resolver {
             warnings,
             orphan_bindings,
             deferred_binding_ids,
+            scenario_sources,
         }
     }
 
@@ -549,9 +566,9 @@ impl Resolver {
         path: &str,
         feature: &Feature,
         resolved_scenarios: &mut Vec<ResolvedScenario>,
+        scenario_sources: &mut BTreeMap<String, ScenarioSource>,
         deferred_binding_ids: &mut Vec<String>,
         errors: &mut Vec<ResolutionError>,
-        _warnings: &mut Vec<String>,
     ) {
         // PHASE 2.2a: Extract and validate feature-level ID tags
         #[cfg(feature = "npap")]
@@ -623,6 +640,7 @@ impl Resolver {
                     rule_background_steps: &rule_background_steps,
                     seen_scenario_keys: &mut seen_scenario_keys,
                     resolved_scenarios,
+                    scenario_sources,
                     deferred_binding_ids,
                     errors,
                     #[cfg(feature = "npap")]
@@ -644,6 +662,7 @@ impl Resolver {
             rule_background_steps,
             seen_scenario_keys,
             resolved_scenarios,
+            scenario_sources,
             deferred_binding_ids,
             errors,
             #[cfg(feature = "npap")]
@@ -691,26 +710,50 @@ impl Resolver {
             return; // Skip this scenario
         }
 
-        // Feature background first, then rule background, then scenario steps
-        let mut resolved_steps = feature_background_steps.to_vec();
-        resolved_steps.extend(rule_background_steps.iter().cloned());
-        let mut last_keyword = "Given";
-
-        for step in &scenario.steps {
-            let effective_kind = resolve_effective_kind(&step.keyword, &mut last_keyword);
-
-            match self.resolve_step(step, path, &effective_kind) {
-                Ok(planned) => resolved_steps.push(planned),
-                Err(e) => errors.push(e),
+        // A Scenario Outline plans one scenario per Examples row; a plain
+        // scenario plans itself once.
+        let line = u32::try_from(scenario.position.line).unwrap_or(0);
+        for (key, row) in outline_rows(scenario, &scenario_key) {
+            if row.is_some() && !seen_scenario_keys.insert(key.clone()) {
+                errors.push(ResolutionError::DuplicateScenarioKey {
+                    scenario_key: key,
+                    feature_path: path.to_owned(),
+                    scenario_name: scenario.name.clone(),
+                });
+                continue;
             }
-        }
 
-        resolved_scenarios.push(ResolvedScenario {
-            scenario_key,
-            feature_path: path.to_owned(),
-            scenario_name: scenario.name.clone(),
-            steps: resolved_steps,
-        });
+            // Feature background first, then rule background, then scenario steps
+            let mut resolved_steps = feature_background_steps.to_vec();
+            resolved_steps.extend(rule_background_steps.iter().cloned());
+            let mut last_keyword = "Given";
+
+            for step in &scenario.steps {
+                let effective_kind = resolve_effective_kind(&step.keyword, &mut last_keyword);
+                let step = row
+                    .as_ref()
+                    .map_or_else(|| step.clone(), |values| substitute_step(step, values));
+
+                match self.resolve_step(&step, path, &effective_kind) {
+                    Ok(planned) => resolved_steps.push(planned),
+                    Err(e) => errors.push(e),
+                }
+            }
+
+            scenario_sources.insert(
+                key.clone(),
+                ScenarioSource {
+                    feature_path: path.to_owned(),
+                    line,
+                },
+            );
+            resolved_scenarios.push(ResolvedScenario {
+                scenario_key: key,
+                feature_path: path.to_owned(),
+                scenario_name: scenario.name.clone(),
+                steps: resolved_steps,
+            });
+        }
     }
 
     /// Collects binding IDs from @Deferred scenario steps for orphan detection.
@@ -868,6 +911,63 @@ impl Resolver {
 }
 
 /// Resolves And/But/Star keywords to their effective kind.
+/// Expand a scenario into its planned instances. A plain scenario yields its
+/// own key once with no row; a Scenario Outline yields one `{key}:E{eid}`
+/// per Examples data row, where `eid` is the row's `EID` column value when
+/// present and its 1-based position across all Examples tables otherwise.
+fn outline_rows(
+    scenario: &gherkin::Scenario,
+    scenario_key: &str,
+) -> Vec<(String, Option<BTreeMap<String, String>>)> {
+    if scenario.examples.is_empty() {
+        return vec![(scenario_key.to_owned(), None)];
+    }
+    let mut out = Vec::new();
+    let mut ordinal = 0usize;
+    for examples in &scenario.examples {
+        let Some(table) = &examples.table else {
+            continue;
+        };
+        let Some((header, rows)) = table.rows.split_first() else {
+            continue;
+        };
+        for row in rows {
+            ordinal += 1;
+            let values: BTreeMap<String, String> =
+                header.iter().cloned().zip(row.iter().cloned()).collect();
+            let eid = values
+                .get("EID")
+                .cloned()
+                .unwrap_or_else(|| format!("{ordinal:02}"));
+            out.push((format!("{scenario_key}:E{eid}"), Some(values)));
+        }
+    }
+    out
+}
+
+/// Substitute `<name>` placeholders in a step's text, docstring and table.
+fn substitute_step(step: &gherkin::Step, values: &BTreeMap<String, String>) -> gherkin::Step {
+    let sub = |s: &str| {
+        let mut s = s.to_owned();
+        for (k, v) in values {
+            s = s.replace(&format!("<{k}>"), v);
+        }
+        s
+    };
+    let mut step = step.clone();
+    step.value = sub(&step.value);
+    step.docstring = step.docstring.as_deref().map(sub);
+    if let Some(table) = &mut step.table {
+        for row in &mut table.rows {
+            for cell in row.iter_mut() {
+                *cell = sub(cell);
+            }
+        }
+    }
+    step
+}
+
+/// Resolves `And`/`But`/`*` to the effective step kind of the previous step.
 fn resolve_effective_kind(keyword: &str, last_keyword: &mut &str) -> String {
     let trimmed = keyword.trim();
     match trimmed {
