@@ -32,13 +32,12 @@ impl<'a> WorldRef<'a> {
 
 #[tokio::main]
 async fn main() {
+    // One out-of-span event, once. A repeating ticker raced the 1s steps:
+    // a step that started late under load caught a second tick and broke
+    // the expected output.
     spawn(async {
-        let mut id = 0;
-        loop {
-            time::sleep(Duration::from_millis(600)).await;
-            tracing::info!("not in span: {id}");
-            id += 1;
-        }
+        time::sleep(Duration::from_millis(600)).await;
+        tracing::info!("not in span: 0");
     });
 
     let mut out = Vec::<u8>::new();
