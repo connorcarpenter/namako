@@ -23,10 +23,25 @@ fn main() {
         .map(|p| p.to_path_buf())
         .unwrap();
     let head = git(&workspace_root, &["rev-parse", "HEAD"]).unwrap_or("unknown".into());
-    // No `rerun-if-changed`: watching `.git/HEAD` alone misses same-branch
-    // commits (the SHA lives in refs/heads/*), packed-refs, and worktree
-    // layouts. The default — rerun when any package file changes — costs one
-    // `git rev-parse` per real rebuild and keeps the stamp fresh everywhere.
+    // Rerun whenever HEAD moves. Cargo's default (rerun when a file of this
+    // package changes) misses commits that touch only other workspace
+    // members, which left the stamp on an older commit. Watch HEAD, the
+    // branch ref it names, and packed-refs; `--git-path` resolves each for
+    // worktrees too. A path that does not exist yet makes Cargo rerun every
+    // build, which keeps the stamp correct.
+    let mut watched = vec!["HEAD".to_string(), "packed-refs".to_string()];
+    if let Some(branch) = git(&workspace_root, &["symbolic-ref", "-q", "HEAD"]) {
+        watched.push(branch);
+    }
+    for name in &watched {
+        match git(
+            &workspace_root,
+            &["rev-parse", "--path-format=absolute", "--git-path", name],
+        ) {
+            Some(path) => println!("cargo:rerun-if-changed={path}"),
+            None => println!("cargo:rerun-if-changed=.git-unresolved-{name}"),
+        }
+    }
     println!("cargo:rustc-env=NAMAKO_BUILT_FROM={head}");
     println!(
         "cargo:rustc-env=NAMAKO_SOURCE_DIR={}",
