@@ -45,8 +45,10 @@ tesaki --loop 10
 
 ```
 namako/
-├── src/              # Namako core library
+├── engine/           # namako_engine core library
 ├── cli/              # namako_cli binary
+├── benches/          # Benchmarks
+├── skill-tool/       # Skill tooling
 ├── codegen/          # Step macros (#[given], #[when], #[then])
 ├── _AGENTS/          # AI agent documentation (START HERE)
 └── _WORKSPACE/       # Operational docs & archives
@@ -61,6 +63,10 @@ namako gate    # Full CI: lint → run → verify
 namako status  # JSON status packet
 namako review  # Work backlog packet
 namako update  # Reinstall binary when behind origin HEAD
+namako verify  # Check a run report against sources and baseline
+namako update-cert  # Refresh the certification baseline
+namako explain # Scenario fidelity packet
+namako stub    # Placeholder scenarios for orphan bindings
 ```
 
 ### Tesaki CLI
@@ -82,7 +88,8 @@ cargo test -p namako_cli
 | File | Purpose |
 |------|---------|
 | `_AGENTS/AGENT_GUIDE.md` | **Single entrypoint for AI agents** |
-| `_WORKSPACE/RUNBOOK.md` | Operational checklist for loop execution |
+| `AGENTS.md` | Seat entrypoint and spec line |
+| `docs/EVIDENCE.md`, `docs/IMPACT.md` | Behavior specs |
 
 Historical/archived docs are in `_WORKSPACE/ARCHIVE/`.
 
