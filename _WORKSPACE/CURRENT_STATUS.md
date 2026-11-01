@@ -1,3 +1,5 @@
+> **Historical (Tesaki retired Nov 1, 2026; see README "Removed / not wanted").**
+
 # CURRENT_STATUS.md — Namako/Tesaki Tooling Status
 
 **Last Updated:** 2026-02-04

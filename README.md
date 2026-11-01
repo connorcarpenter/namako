@@ -2,18 +2,11 @@
 
 **Spec-Driven Development testing framework for Rust projects**
 
-| Tool | Purpose |
-|------|---------|
-| **Namako** | BDD testing framework + CLI (measures truth) |
-| **Tesaki** | AI task orchestrator — see [standalone repo](https://github.com/connorcarpenter/tesaki) |
-
 ---
 
 ## AI Coding Agent? Start Here
 
-**Single entrypoint:** [`_AGENTS/AGENT_GUIDE.md`](./_AGENTS/AGENT_GUIDE.md)
-
-This file contains everything you need to understand and work on this codebase efficiently.
+Start at [`AGENTS.md`](./AGENTS.md), then [`_AGENTS/AGENT_GUIDE.md`](./_AGENTS/AGENT_GUIDE.md).
 
 ---
 
@@ -21,25 +14,16 @@ This file contains everything you need to understand and work on this codebase e
 
 ```bash
 # Install namako CLI (from namako/)
-cargo install --path cli --force
+cargo install --locked --path cli
 
-# Install Tesaki (from standalone tesaki repo)
-cargo install --git https://github.com/connorcarpenter/tesaki.git --force
-
-# Configure a target repo
-cd <target-repo>
-mkdir -p .tesaki
-cat > .tesaki/config.toml << 'EOF'
-specs_dir = "test/specs"
-adapter_cmd = "cargo run --manifest-path test/npa/Cargo.toml --"
-agent = "copilot"
-max_retries = 0
-max_cert_updates = 3
-EOF
-
-# Run autonomous loop
-tesaki --loop 10
+# Gate a target repo's specs
+cd <target-repo>/test/specs
+namako gate -a "<adapter command>"
 ```
+
+## Removed / not wanted
+
+- **Tesaki**: a second orchestrator; retired Nov 1, 2026 by Usher (King) on fleet doctrine; it was dormant since May. Its instructions, install steps and CLI section were removed from this repo. Fleet dispatch is Nydus, execution is Fabro, selection is Clerc. Restore from git history only if Connor says Tesaki is wanted.
 
 ## Repository Structure
 
@@ -69,13 +53,6 @@ namako explain # Scenario fidelity packet
 namako stub    # Placeholder scenarios for orphan bindings
 ```
 
-### Tesaki CLI
-```bash
-tesaki              # Interactive REPL
-tesaki --loop N     # Run N missions autonomously
-tesaki diagnose ID  # Debug a specific mission
-```
-
 ## Testing
 
 ```bash
@@ -87,7 +64,7 @@ cargo test -p namako_cli
 
 | File | Purpose |
 |------|---------|
-| `_AGENTS/AGENT_GUIDE.md` | **Single entrypoint for AI agents** |
+| `_AGENTS/AGENT_GUIDE.md` | Toolchain internals guide |
 | `AGENTS.md` | Seat entrypoint and spec line |
 | `docs/EVIDENCE.md`, `docs/IMPACT.md` | Behavior specs |
 

@@ -1,1 +1,1 @@
-Read _AGENTS/AGENT_GUIDE.md for your system prompt instructions.
+Read AGENTS.md first, then _AGENTS/AGENT_GUIDE.md.

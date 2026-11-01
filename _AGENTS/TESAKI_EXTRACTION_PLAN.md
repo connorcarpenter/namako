@@ -1,3 +1,5 @@
+> **Historical (Tesaki retired Nov 1, 2026; see README "Removed / not wanted").**
+
 # Tesaki Extraction Plan
 
 Last updated: 2026-05-07
