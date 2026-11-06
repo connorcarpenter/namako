@@ -1345,7 +1345,7 @@ Feature: All used
         let result = engine.resolve(features.into_iter());
 
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        assert!(result.orphan_bindings.is_empty());
+        assert_eq!(result.orphan_bindings, Vec::new());
     }
 
     #[test]
