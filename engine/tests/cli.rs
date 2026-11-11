@@ -114,6 +114,9 @@ async fn tags_option_filters_scenario1_no_subcommand() {
 // that the error output contains 1 failing step.
 #[tokio::test]
 #[serial]
+// SAFETY: the only unsafe here is the edition-2024 `env::set_var`/`remove_var`; this test is
+// `#[serial]`, so no other thread reads or writes the process environment while it runs.
+#[expect(unsafe_code, reason = "process env mutation under #[serial]")]
 async fn tags_option_filters_scenario1_via_env() {
     unsafe {
         env::set_var("NAMAKO_FILTER_TAGS", "@scenario-1");
