@@ -1,3 +1,10 @@
 [workspace]
 members = ["engine", "codegen", "cli", "benches", "skill-tool"]
 resolver = "3"
+
+# Kingdom shared Rust lint set, first rung (ambry standards/RUST_LINTS.md).
+# Copied, never inherited across repos; every member says `[lints] workspace = true`.
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

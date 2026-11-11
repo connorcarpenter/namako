@@ -37,3 +37,6 @@ harness = false
 name = "two_worlds"
 path = "tests/two_worlds.rs"
 harness = false
+
+[lints]
+workspace = true

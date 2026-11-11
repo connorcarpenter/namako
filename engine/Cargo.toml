@@ -88,3 +88,6 @@ required-features = ["libtest"]
 name = "tracing"
 required-features = ["tracing"]
 harness = false
+
+[lints]
+workspace = true

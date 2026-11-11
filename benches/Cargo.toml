@@ -20,3 +20,6 @@ namako_engine = { path = "../engine" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+
+[lints]
+workspace = true

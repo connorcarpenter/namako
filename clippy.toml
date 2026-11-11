@@ -8,3 +8,8 @@
 # the bottom of engine/src/step.rs, which exercises the cache pool via a real
 # match and then asserts `Eq` + hash equality against a fresh instance.
 ignore-interior-mutability = ["namako_engine::step::HashableRegex"]
+
+# Kingdom shared lint set (ambry standards/RUST_LINTS.md): unwrap/expect are
+# allowed inside tests ahead of the unwrap_used/expect_used rung.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
