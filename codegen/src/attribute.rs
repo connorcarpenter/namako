@@ -931,7 +931,10 @@ impl<'p> Parameters<'p> {
                             // Used for the specialized impl when `Parameter` is
                             // implemented.
                             #[automatically_derived]
-                            #[allow(dead_code)]
+                            #[expect(
+                                dead_code,
+                                reason = "`Invalid` is a marker named only in the impl header below and is never constructed"
+                            )]
                             struct Invalid;
 
                             #[automatically_derived]
