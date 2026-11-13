@@ -117,9 +117,10 @@ fn resolve_all(reg: &SemanticStepRegistry, files: &[(&str, &str)]) -> Resolution
 }
 
 fn plan_of(reg: &SemanticStepRegistry) -> ResolvedPlan {
-    resolve_all(reg, &[("features/evidence.feature", FEATURE)])
-        .plan
-        .expect("plan")
+    match resolve_all(reg, &[("features/evidence.feature", FEATURE)]).plan {
+        Some(plan) => plan,
+        None => panic!("resolution of features/evidence.feature produced no plan"),
+    }
 }
 
 fn bind<'a>(reg: &'a SemanticStepRegistry, id: &str) -> Option<&'a SemanticBinding> {
@@ -141,7 +142,10 @@ fn faithful_report(
                 .iter()
                 .map(|p| {
                     dispatch_step(p, bind(reg, &p.binding_id), &p.captures, |pl| {
-                        observed.lock().unwrap().push(render(pl));
+                        observed
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(render(pl));
                         Ok(())
                     })
                 })

@@ -78,12 +78,14 @@ impl<World: 'static + Debug> Writer<World> for DebugWriter {
 // TODO: Switch back to `lazy-regex::regex!()` once it migrates to `std`:
 //       https://github.com/Canop/lazy-regex/issues/10
 static SPAN_OR_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+    match Regex::new(
         "( span: Span \\{ start: (\\d+), end: (\\d+) },\
          |, col: (\\d+)\
          | path: (None|(Some\\()?\"[^\"]*\")\\)?,?)",
-    )
-    .unwrap()
+    ) {
+        Ok(re) => re,
+        Err(e) => panic!("SPAN_OR_PATH_RE is a valid pattern: {e}"),
+    }
 });
 
 #[cfg(test)]
