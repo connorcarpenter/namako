@@ -468,7 +468,9 @@ fn cmd_package(skill_path: &str, output_dir: Option<&str>) -> Result<()> {
     let options = zip::write::FileOptions::<()>::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    let parent = skill_path.parent().unwrap();
+    let parent = skill_path
+        .parent()
+        .context("skill directory has no parent to archive relative to")?;
     for entry in WalkDir::new(&skill_path).min_depth(1).sort_by_file_name() {
         let entry = entry?;
         let file_path = entry.path();
@@ -705,10 +707,11 @@ fn download_repo_zip(owner: &str, repo: &str, ref_: &str, dest_dir: &Path) -> Re
             }
         }
     }
-    if top_levels.len() != 1 {
+    let mut top_levels = top_levels.into_iter();
+    let (Some(top), None) = (top_levels.next(), top_levels.next()) else {
         bail!("Unexpected archive layout.");
-    }
-    Ok(dest_dir.join(top_levels.into_iter().next().unwrap()))
+    };
+    Ok(dest_dir.join(top))
 }
 
 fn git_sparse_checkout(
