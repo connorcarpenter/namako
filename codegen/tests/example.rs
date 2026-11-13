@@ -68,7 +68,7 @@ async fn test_regex_async(w: MyWorldMut, step: String, #[step] ctx: &Step, num: 
 #[given("{word} is sync {int}")]
 fn test_regex_sync_slice(w: MyWorldMut, step: &Step, matches: &[String]) {
     assert_eq!(matches[0], "foo");
-    assert_eq!(matches[1].parse::<usize>().unwrap(), 0);
+    assert_eq!(matches[1].parse::<usize>(), Ok(0));
     assert_eq!(step.value, "foo is sync 0");
 
     w.0.foo += 1;
@@ -82,21 +82,23 @@ fn test_return_result_write(w: MyWorldMut, what: String, filename: String) -> io
 }
 
 #[then("the file {string} should contain {string}")]
-fn test_return_result_read(w: MyWorldRef, inputs: &[String]) {
+fn test_return_result_read(w: MyWorldRef, inputs: &[String]) -> io::Result<()> {
     let mut path = w.0.dir.path().to_path_buf();
     path.push(inputs[0].clone());
 
-    let content = fs::read_to_string(path).expect("Failed to read file");
+    let content = fs::read_to_string(path)?;
     assert_eq!(content, inputs[1]);
+    Ok(())
 }
 
 #[then("{string} contains {string}")]
-fn test_return_result_read_slice(w: MyWorldRef, inputs: &[String]) {
+fn test_return_result_read_slice(w: MyWorldRef, inputs: &[String]) -> io::Result<()> {
     let mut path = w.0.dir.path().to_path_buf();
     path.push(inputs[0].clone());
 
-    let content = fs::read_to_string(path).expect("Failed to read file");
+    let content = fs::read_to_string(path)?;
     assert_eq!(content, inputs[1]);
+    Ok(())
 }
 
 #[then("the word {word} is seen")]

@@ -57,7 +57,7 @@ impl<'a> SecondWorldRef<'a> {
 #[given("{word} is sync {int}")]
 fn test_regex_sync_slice_first(w: FirstWorldMut, step: &Step, matches: &[String]) {
     assert_eq!(matches[0], "foo");
-    assert_eq!(matches[1].parse::<usize>().unwrap(), 0);
+    assert_eq!(matches[1].parse::<usize>(), Ok(0));
     assert_eq!(step.value, "foo is sync 0");
 
     w.0.foo += 1;
@@ -101,7 +101,7 @@ async fn test_regex_async_second(w: SecondWorldMut, step: String, #[step] _ctx: 
 #[given("{word} is sync {int}")]
 fn test_regex_sync_slice_second(w: SecondWorldMut, step: &Step, matches: &[String]) {
     assert_eq!(matches[0], "foo");
-    assert_eq!(matches[1].parse::<usize>().unwrap(), 0);
+    assert_eq!(matches[1].parse::<usize>(), Ok(0));
     assert_eq!(step.value, "foo is sync 0");
 
     w.0.foo += 1;
