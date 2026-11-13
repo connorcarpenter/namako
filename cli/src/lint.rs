@@ -103,7 +103,9 @@ pub fn run(args: LintArgs) -> Result<()> {
         bail!("Resolution failed");
     }
 
-    let plan = result.plan.expect("No errors but no plan - this is a bug");
+    let plan = result
+        .plan
+        .context("No errors but no plan - this is a bug")?;
 
     // Step 6.5: Check for orphan bindings (v1.5 hard error per GOLD_PLAN §10.5.2)
     if !result.orphan_bindings.is_empty() {

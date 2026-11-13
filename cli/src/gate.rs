@@ -499,7 +499,9 @@ fn run_lint(args: &GateArgs, output_path: &PathBuf) -> Result<()> {
         );
     }
 
-    let plan = result.plan.expect("No errors but no plan - this is a bug");
+    let plan = result
+        .plan
+        .context("No errors but no plan - this is a bug")?;
 
     // Write resolved_plan.json
     let json = serde_json::to_string_pretty(&plan).context("Failed to serialize resolved plan")?;
@@ -944,7 +946,7 @@ fn recompute_identity(
         bail!("Resolution failed during verify: {:?}", result.errors);
     }
 
-    let plan = result.plan.expect("No errors but no plan");
+    let plan = result.plan.context("No errors but no plan")?;
 
     let identity = CertificationIdentity {
         hash_contract_version: HASH_CONTRACT_VERSION.to_string(),

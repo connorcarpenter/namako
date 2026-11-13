@@ -16,12 +16,12 @@ fn git(dir: &std::path::Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn main() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")?;
     let workspace_root = std::path::Path::new(&manifest_dir)
         .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap();
+        .ok_or("CARGO_MANIFEST_DIR has no parent directory")?
+        .to_path_buf();
     let head = git(&workspace_root, &["rev-parse", "HEAD"]).unwrap_or("unknown".into());
     // Rerun whenever HEAD moves. Cargo's default (rerun when a file of this
     // package changes) misses commits that touch only other workspace
@@ -48,4 +48,5 @@ fn main() {
         workspace_root.display()
     );
     println!("cargo:rustc-env=NAMAKO_INSTALL_DIR={manifest_dir}");
+    Ok(())
 }

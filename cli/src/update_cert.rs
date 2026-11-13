@@ -117,7 +117,7 @@ fn recompute_identity(
         bail!("REFUSED: Lint failed with errors: {:?}", result.errors);
     }
 
-    let plan = result.plan.expect("No errors but no plan");
+    let plan = result.plan.context("No errors but no plan")?;
 
     let identity = CertificationIdentity {
         hash_contract_version: HASH_CONTRACT_VERSION.to_string(),

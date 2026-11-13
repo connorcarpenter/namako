@@ -190,7 +190,7 @@ fn recompute_identity(
         bail!("Resolution failed during verify: {:?}", result.errors);
     }
 
-    let plan = result.plan.expect("No errors but no plan");
+    let plan = result.plan.context("No errors but no plan")?;
 
     // Build identity from recomputed values
     let identity = CertificationIdentity {

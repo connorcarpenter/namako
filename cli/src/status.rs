@@ -459,7 +459,7 @@ fn recompute_identity(args: &StatusArgs) -> Result<IdentityFields> {
         bail!("Resolution errors: {:?}", result.errors);
     }
 
-    let plan = result.plan.expect("No errors but no plan");
+    let plan = result.plan.context("No errors but no plan")?;
 
     Ok(IdentityFields {
         hash_contract_version: HASH_CONTRACT_VERSION.to_string(),

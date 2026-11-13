@@ -141,7 +141,10 @@ fn generate_single_stub(
             )
         })?;
 
-    let feature_path = args.feature.as_ref().unwrap();
+    let feature_path = args
+        .feature
+        .as_ref()
+        .context("--binding requires --feature")?;
 
     // Read existing feature file
     let existing = std::fs::read_to_string(feature_path)

@@ -676,12 +676,10 @@ fn normalize_step_kind<'a>(keyword: &str, last_keyword: &mut &'a str) -> &'a str
 }
 
 fn estimate_scenario_end(scenario: &Scenario, _lines: &[&str]) -> u32 {
-    if scenario.steps.is_empty() {
-        return scenario.position.line as u32;
+    match scenario.steps.last() {
+        Some(last_step) => last_step.position.line as u32,
+        None => scenario.position.line as u32,
     }
-
-    let last_step = scenario.steps.last().unwrap();
-    last_step.position.line as u32
 }
 
 fn estimate_rule_end(rule: &Rule, lines: &[&str]) -> u32 {
