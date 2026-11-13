@@ -2,11 +2,6 @@ mod test_utils;
 
 use namako_engine::{given, then};
 
-#[expect(
-    unused_imports,
-    reason = "the step macro expansion needs `World` in scope; the source never names it"
-)]
-use test_utils::World; // Required for step macro expansion
 use test_utils::{WorldMut, WorldRef};
 
 #[given("test")]
