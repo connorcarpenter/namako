@@ -1,0 +1,3 @@
+[workspace]
+members = ["engine", "codegen", "cli", "benches", "skill-tool"]
+resolver = "3"
