@@ -1,0 +1,35 @@
+Feature: Docstring
+  Scenario: Docstring delivery
+    Given a step with words
+      """
+      hello docstring
+      """
+    Then the words are seen
+
+  Scenario: Datatable delivery
+    Given a step with rows
+      | alpha | beta |
+      | gamma | delta  |
+    Then the rows are seen
+
+  Scenario: Missing docstring delivers None
+    Given a step without words
+    Then the words are seen
+
+  Scenario: Missing datatable delivers None
+    Given a step without rows
+    Then the rows are seen
+
+  Scenario: Slice context with docstring
+    Given a red box
+      """
+      note
+      """
+    Then the words are seen
+
+  Scenario: Docstring on polling path
+    Given a step for the note
+    Then the recorded note is seen
+      """
+      hello docstring
+      """

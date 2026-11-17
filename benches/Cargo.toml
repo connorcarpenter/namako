@@ -1,0 +1,22 @@
+[package]
+name = "namako-benches"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Criterion benchmarks for namako engine internals — parsing throughput, tag extraction"
+
+[lib]
+name = "namako_benches"
+path = "src/lib.rs"
+
+[[bench]]
+name = "namako"
+path = "benches/main.rs"
+harness = false
+
+[dependencies]
+# Use default-features = false: we only need gherkin parsing, not macros/inventory
+namako_engine = { path = "../engine" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
