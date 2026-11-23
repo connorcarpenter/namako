@@ -51,3 +51,7 @@ policy verification alone are not test passes.
 rung membership and unique runners. No alternate selector or gate wrapper
 is added. The nine R3 exclusions are explicit test symbols; their separate
 R3 route exercises those same tests rather than discarding them.
+
+The in-process evidence leg runs `namako_engine`'s `evidence` integration
+target with `--features npap`. The target's file-wide feature guard would
+otherwise let Cargo exit successfully without running any evidence tests.
