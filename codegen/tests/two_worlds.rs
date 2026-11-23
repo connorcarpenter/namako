@@ -123,8 +123,8 @@ fn test_read_slice_second(w: SecondWorldRef, _inputs: &[String]) {
     let _ = w.world();
 }
 
-#[tokio::main]
-async fn main() {
+#[tokio::test]
+async fn both_worlds_run_expected_steps() {
     let writer = FirstWorld::namako()
         .max_concurrent_scenarios(None)
         .with_writer(writer::Libtest::or_basic())

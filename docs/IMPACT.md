@@ -55,3 +55,7 @@ R3 route exercises those same tests rather than discarding them.
 The in-process evidence leg runs `namako_engine`'s `evidence` integration
 target with `--features npap`. The target's file-wide feature guard would
 otherwise let Cargo exit successfully without running any evidence tests.
+
+The codegen `example` and `two_worlds` integration targets run their BDD
+scenario assertions under the Rust test harness so the queue receives a native
+test count for each target.
