@@ -1,13 +1,14 @@
 # Namako's owned Cargo target and feature routes. Clerc selects and credits;
-# Fabro executes. R0-R2 are the ordinary implementer climb; R3 retains the
-# actual Git subprocess/remote-timeout and tracing timer contracts.
+# Fabro executes. R0-R2 are the ordinary implementer climb; R3 retains only the
+# live Git subprocess/remote-timeout contract. The tracing timer test is
+# in-process (tokio timers, no host, network or provider) and runs at R2.
 # Optional NPAP, libtest and tracing code is explicit. Zero-test fixtures
 # remain compiled by strict Clippy and supply no independent test coverage.
 # Edges begin at the declared owned path roots. Clerc synthesizes pkg:<name>
 # fan-out from those roots, including when a dependency change reaches a package.
 [suite]
 id = "namako"
-checks = ["bench:namako-benches:namako", "bench:namako-benches:parsing", "host:namako_cli:update_git", "lint:clippy", "lint:clippy:engine_features", "lint:fmt", "test:namako_cli:namako", "test:namako_codegen:example", "test:namako_codegen:namako_codegen", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:evidence", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:namako_engine", "test:namako_engine:output", "test:namako_engine:result", "test:namako_engine:tracing"]
+checks = ["bench:namako-benches:namako", "bench:namako-benches:parsing", "live:host:namako_cli:update_git", "lint:clippy", "lint:clippy:engine_features", "lint:fmt", "test:namako_cli:namako", "test:namako_codegen:example", "test:namako_codegen:namako_codegen", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:evidence", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:namako_engine", "test:namako_engine:output", "test:namako_engine:result", "test:namako_engine:tracing"]
 always_run = ["lint:fmt", "lint:clippy", "lint:clippy:engine_features"]
 floor = ["lint:fmt", "lint:clippy", "lint:clippy:engine_features"]
 
@@ -103,7 +104,7 @@ depends_on = ["namako_engine"]
 
 [[edge]]
 from = "cli/"
-to = "host:namako_cli:update_git"
+to = "live:host:namako_cli:update_git"
 
 [[edge]]
 from = "cli/"
@@ -137,11 +138,11 @@ checks = ["test:namako_cli:namako", "test:namako_codegen:namako_codegen", "test:
 
 [[rung]]
 level = 2
-checks = ["test:namako_codegen:example", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:evidence", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:output", "test:namako_engine:result"]
+checks = ["test:namako_codegen:example", "test:namako_codegen:two_worlds", "test:namako_engine:cli", "test:namako_engine:docstring", "test:namako_engine:evidence", "test:namako_engine:fail_fast", "test:namako_engine:filter", "test:namako_engine:from_str_and_parameter", "test:namako_engine:libtest", "test:namako_engine:output", "test:namako_engine:result", "test:namako_engine:tracing"]
 
 [[rung]]
 level = 3
-checks = ["host:namako_cli:update_git", "test:namako_engine:tracing"]
+checks = ["live:host:namako_cli:update_git"]
 
 [[leg]]
 checks = ["lint:fmt"]
@@ -180,7 +181,7 @@ checks = ["test:namako_engine:tracing"]
 argv = ["cargo", "test", "--locked", "-p", "namako_engine", "--test", "tracing", "--features", "tracing", "--no-fail-fast"]
 
 [[leg]]
-checks = ["host:namako_cli:update_git"]
+checks = ["live:host:namako_cli:update_git"]
 argv = ["cargo", "test", "--locked", "-p", "namako_cli", "--bin", "namako", "update::tests::", "--no-fail-fast", "--", "--test-threads=2", "--skip", "update::tests::dir_without_git_is_unknown", "--skip", "update::tests::warn_decision_fires_only_on_stale", "--skip", "update::tests::target_dir_binary_has_no_install_root", "--skip", "update::tests::installed_binary_derives_root"]
 
 [[leg]]
@@ -251,4 +252,14 @@ reason = "Conservatively cover retained output fixtures alongside the engine-own
 path = "docs/"
 mode = "scan-only"
 reason = "Impact adoption documentation; no build or test consumes it."
+
+[[root]]
+path = "AGENTS.md"
+mode = "scan-only"
+reason = "Agent doctrine prose; no build or test consumes it."
+
+[[root]]
+path = "rust-toolchain.toml"
+mode = "fallback"
+reason = "Pinned toolchain; every Cargo command depends on it."
 
